@@ -35,11 +35,20 @@ Datalog: triples(A, "calls", "fmt.Printf"), regex(A, "main.go")
 User: "Who imports 'fmt' but is not 'main.go'?" (Inequality)
 Datalog: triples(A, "imports", "fmt"), A != "main.go"
 
-User: "Find interfaces defined in pkg/ingest" (New)
+User: "Find interfaces defined in pkg/ingest" (Interface)
 Datalog: triples(A, "defines_interface", B), regex(A, "pkg/ingest")
 
-User: "Show me fields of the 'Prompt' struct" (New)
+User: "Show me fields of the 'Prompt' struct" (Struct Fields)
 Datalog: triples(A, "defines_struct", "Prompt"), triples(A, "has_field", B)
+
+User: "What does function 'Run' return?" (Return Type)
+Datalog: triples(A, "returns", B), regex(A, ":Run$")
+
+User: "Find functions with a 'ctx' parameter" (Parameters)
+Datalog: triples(A, "parameter", "ctx")
+
+User: "What does struct 'MEBStore' embed?" (Embedding)
+Datalog: triples(A, "defines_struct", "MEBStore"), triples(A, "embeds", B)
 
 User: "Find cycles of length 3" (Complex Join)
 Datalog: triples(A, "calls", B), triples(B, "calls", C), triples(C, "calls", A)

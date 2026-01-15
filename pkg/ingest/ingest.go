@@ -276,20 +276,21 @@ func processFile(s *meb.MEBStore, parser *sitter.Parser, path string, sourceRoot
 										fieldTypeNode := fieldDecl.ChildByFieldName("type")
 										if fieldNameNode != nil {
 											fieldName := clean(fieldNameNode.Utf8Text(content))
-											fieldType := "unknown"
-											if fieldTypeNode != nil {
-												fieldType = clean(fieldTypeNode.Utf8Text(content))
-											}
 											facts = append(facts, meb.Fact{
 												Subject:   namespacedType,
 												Predicate: "has_field",
-												Object:    fieldName + " " + fieldType, // Store "Name Type" as object or just Name? Let's do Name for now to keep it simple, or "Name" and maybe another fact for type.
-												// The plan said has_field(StructName, FieldName, FieldType). Datalog is triples.
-												// Let's use Object=FieldName for 'has_field' and MAYBE 'field_type' later.
-												// Or construct a composite object string?
-												// Let's stick to triple: namespacedType "has_field" fieldName.
-												// The type info is lost here unless we add another fact.
-												Graph: "default",
+												Object:    fieldName,
+												Graph:     "default",
+											})
+										} else if fieldTypeNode != nil {
+											// Anonymous field (embedding)
+											embeddedType := clean(fieldTypeNode.Utf8Text(content))
+											embeddedType = strings.TrimPrefix(embeddedType, "*") // Strip pointer
+											facts = append(facts, meb.Fact{
+												Subject:   namespacedType,
+												Predicate: "embeds",
+												Object:    embeddedType,
+												Graph:     "default",
 											})
 										}
 									}
@@ -337,6 +338,38 @@ func processFile(s *meb.MEBStore, parser *sitter.Parser, path string, sourceRoot
 				// Namespace the function: path/to/file.go:FuncName
 				nextScope = fmt.Sprintf("%s:%s", relPath, funcName)
 				s.SetContent(strHash(nextScope), []byte(n.Utf8Text(content)))
+
+				// Extract parameters
+				paramsNode := n.ChildByFieldName("parameters")
+				if paramsNode != nil {
+					for i := uint(0); i < uint(paramsNode.ChildCount()); i++ {
+						paramDecl := paramsNode.Child(i)
+						if paramDecl.Kind() == "parameter_declaration" {
+							paramNameNode := paramDecl.ChildByFieldName("name")
+							if paramNameNode != nil {
+								paramName := clean(paramNameNode.Utf8Text(content))
+								facts = append(facts, meb.Fact{
+									Subject:   nextScope,
+									Predicate: "parameter",
+									Object:    paramName,
+									Graph:     "default",
+								})
+							}
+						}
+					}
+				}
+
+				// Extract return type
+				resultNode := n.ChildByFieldName("result")
+				if resultNode != nil {
+					returnType := clean(resultNode.Utf8Text(content))
+					facts = append(facts, meb.Fact{
+						Subject:   nextScope,
+						Predicate: "returns",
+						Object:    returnType,
+						Graph:     "default",
+					})
+				}
 			}
 		case "method_declaration":
 			nameNode := n.ChildByFieldName("name")
@@ -352,6 +385,38 @@ func processFile(s *meb.MEBStore, parser *sitter.Parser, path string, sourceRoot
 					nextScope = fmt.Sprintf("%s:.%s", relPath, methodName) // Fallback
 				}
 				s.SetContent(strHash(nextScope), []byte(n.Utf8Text(content)))
+
+				// Extract parameters
+				paramsNode := n.ChildByFieldName("parameters")
+				if paramsNode != nil {
+					for i := uint(0); i < uint(paramsNode.ChildCount()); i++ {
+						paramDecl := paramsNode.Child(i)
+						if paramDecl.Kind() == "parameter_declaration" {
+							paramNameNode := paramDecl.ChildByFieldName("name")
+							if paramNameNode != nil {
+								paramName := clean(paramNameNode.Utf8Text(content))
+								facts = append(facts, meb.Fact{
+									Subject:   nextScope,
+									Predicate: "parameter",
+									Object:    paramName,
+									Graph:     "default",
+								})
+							}
+						}
+					}
+				}
+
+				// Extract return type
+				resultNode := n.ChildByFieldName("result")
+				if resultNode != nil {
+					returnType := clean(resultNode.Utf8Text(content))
+					facts = append(facts, meb.Fact{
+						Subject:   nextScope,
+						Predicate: "returns",
+						Object:    returnType,
+						Graph:     "default",
+					})
+				}
 			}
 
 		case "call_expression":
