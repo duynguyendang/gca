@@ -31,6 +31,57 @@ func Run(s *meb.MEBStore, readOnly bool) {
 		fmt.Printf(" - %s\n", p)
 	}
 
+	// Generate and display project context
+	fmt.Println("\n=== Project Context ===")
+	projectContext, err := GenerateProjectSummary(s)
+	if err != nil {
+		log.Printf("Warning: Failed to generate project context: %v", err)
+	} else {
+		// Display packages
+		if len(projectContext.Packages) > 0 {
+			fmt.Printf("\n📦 Packages (%d):\n", len(projectContext.Packages))
+			displayLimit := 10
+			for i, pkg := range projectContext.Packages {
+				if i >= displayLimit {
+					fmt.Printf("   ... and %d more\n", len(projectContext.Packages)-displayLimit)
+					break
+				}
+				fmt.Printf("   - %s\n", pkg)
+			}
+		}
+
+		// Display top symbols
+		if len(projectContext.TopSymbols) > 0 {
+			fmt.Printf("\n🎯 Top Symbols (%d):\n", len(projectContext.TopSymbols))
+			displayLimit := 15
+			for i, symbol := range projectContext.TopSymbols {
+				if i >= displayLimit {
+					fmt.Printf("   ... and %d more\n", len(projectContext.TopSymbols)-displayLimit)
+					break
+				}
+				fmt.Printf("   - %s\n", symbol)
+			}
+		}
+
+		// Display stats
+		if len(projectContext.Stats) > 0 {
+			fmt.Printf("\n📊 Statistics:\n")
+			if count, ok := projectContext.Stats["total_facts"]; ok {
+				fmt.Printf("   - Total Facts: %d\n", count)
+			}
+			if count, ok := projectContext.Stats["unique_predicates"]; ok {
+				fmt.Printf("   - Unique Predicates: %d\n", count)
+			}
+			if count, ok := projectContext.Stats["unique_packages"]; ok {
+				fmt.Printf("   - Unique Packages: %d\n", count)
+			}
+			if count, ok := projectContext.Stats["facts_per_package"]; ok {
+				fmt.Printf("   - Facts per Package: %d\n", count)
+			}
+		}
+		fmt.Println()
+	}
+
 	fmt.Println("Enter datalog queries (e.g. triples(S, \"calls\", O)). Type 'exit' or 'quit' to stop.")
 	scanner := bufio.NewScanner(os.Stdin)
 
@@ -45,6 +96,12 @@ func Run(s *meb.MEBStore, readOnly bool) {
 	explainPrompt, err := LoadPrompt(explainPromptPath)
 	if err != nil {
 		log.Printf("Warning: Failed to load explain prompt from %s: %v. Explanation features may not work.", explainPromptPath, err)
+	}
+
+	plannerPromptPath := "prompts/planner.prompt"
+	plannerPrompt, err := LoadPrompt(plannerPromptPath)
+	if err != nil {
+		log.Printf("Warning: Failed to load planner prompt from %s: %v. Plan features may not work.", plannerPromptPath, err)
 	}
 
 	// Initialize session context
@@ -66,6 +123,19 @@ func Run(s *meb.MEBStore, readOnly bool) {
 			break
 		}
 		if line == "" {
+			continue
+		}
+
+		// Handle plan command
+		if strings.HasPrefix(line, "plan ") {
+			goal := strings.TrimPrefix(line, "plan ")
+			if plannerPrompt == nil {
+				fmt.Println("Error: Planner prompt not loaded.")
+				continue
+			}
+			if err := executePlanCommand(context.Background(), s, goal, projectContext, plannerPrompt); err != nil {
+				fmt.Printf("❌ Plan execution failed: %v\n", err)
+			}
 			continue
 		}
 
@@ -316,4 +386,91 @@ func askGeminiWithContext(ctx context.Context, p *Prompt, question string, facts
 		}
 	}
 	return "", fmt.Errorf("unexpected response format")
+}
+
+// executePlanCommand handles the "plan <goal>" command by generating and executing a multi-step plan.
+func executePlanCommand(ctx context.Context, s *meb.MEBStore, goal string, projectContext *ProjectSummary, plannerPrompt *Prompt) error {
+	fmt.Println("\n🧠 Analyzing codebase and generating execution plan...")
+
+	// Prepare template data with project context
+	data := map[string]interface{}{
+		"Query":      goal,
+		"Packages":   projectContext.Packages,
+		"Predicates": projectContext.Predicates,
+		"TopSymbols": projectContext.TopSymbols,
+	}
+
+	// Execute template to generate prompt
+	promptStr, err := plannerPrompt.Execute(data)
+	if err != nil {
+		return fmt.Errorf("failed to execute planner template: %w", err)
+	}
+
+	// Call Gemini to generate plan
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		return fmt.Errorf("GEMINI_API_KEY not set")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
+	if err != nil {
+		return fmt.Errorf("failed to create Gemini client: %w", err)
+	}
+	defer client.Close()
+
+	model := client.GenerativeModel(plannerPrompt.Config.Model)
+	if plannerPrompt.Config.Model == "" {
+		model = client.GenerativeModel("gemini-3-flash-preview")
+	}
+	model.SetTemperature(plannerPrompt.Config.Temperature)
+
+	resp, err := model.GenerateContent(ctx, genai.Text(promptStr))
+	if err != nil {
+		return fmt.Errorf("Gemini API error: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
+		return fmt.Errorf("no response from Gemini")
+	}
+
+	var planJSON string
+	for _, part := range resp.Candidates[0].Content.Parts {
+		if txt, ok := part.(genai.Text); ok {
+			planJSON = string(txt)
+			break
+		}
+	}
+
+	if planJSON == "" {
+		return fmt.Errorf("empty response from Gemini")
+	}
+
+	// Parse JSON plan
+	steps, err := parseJSONPlan(planJSON)
+	if err != nil {
+		return fmt.Errorf("failed to parse plan: %w", err)
+	}
+
+	// Create execution session
+	session := NewExecutionSession(goal, steps)
+
+	// Display plan to user
+	DisplayPlan(session)
+
+	// Get user confirmation
+	confirmed, err := ConfirmExecution()
+	if err != nil {
+		return fmt.Errorf("failed to get user confirmation: %w", err)
+	}
+
+	if !confirmed {
+		fmt.Println("\n❌ Plan execution cancelled by user.")
+		return nil
+	}
+
+	// Execute the plan
+	return ExecutePlan(ctx, s, session, plannerPrompt)
 }

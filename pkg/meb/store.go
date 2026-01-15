@@ -347,3 +347,15 @@ func (m *MEBStore) Vectors() *vector.VectorRegistry {
 func (m *MEBStore) Find() *Builder {
 	return NewBuilder(m)
 }
+
+// DB returns the underlying BadgerDB instance for direct access.
+// Use this carefully, as direct DB access bypasses the MEB abstraction layer.
+func (m *MEBStore) DB() *badger.DB {
+	return m.db
+}
+
+// Dict returns the dictionary encoder for ID/string resolution.
+// This is useful for advanced operations that need direct dictionary access.
+func (m *MEBStore) Dict() dict.Dictionary {
+	return m.dict
+}
