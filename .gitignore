@@ -19,6 +19,9 @@ profile.cov
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+test-code/
+data/
+bkup/
 
 # Go workspace file
 go.work
