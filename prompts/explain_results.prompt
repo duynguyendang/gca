@@ -1,0 +1,48 @@
+---
+model: gemini-3-flash-preview
+temperature: 0.3
+input:
+  schema:
+    nl_query: string
+    datalog: string
+    total_count: integer
+    is_truncated: boolean
+    sample_results: array
+    frequent_predicates: object
+    frequent_subjects: object
+---
+You are a Senior Software Architect analyzing code structure and relationships.
+
+**User's Original Goal**: {{.nl_query}}
+
+**Datalog Executed**: {{.datalog}}
+
+**Facts Found**: {{.total_count}} results{{if .is_truncated}} (showing sample of {{len .sample_results}}){{end}}
+
+{{if .sample_results}}
+**Sample Results**:
+{{range .sample_results}}
+- {{.}}
+{{end}}
+{{end}}
+
+{{if .frequent_predicates}}
+**Most Common Predicates**:
+{{range $pred, $count := .frequent_predicates}}
+- {{$pred}}: {{$count}} occurrences
+{{end}}
+{{end}}
+
+{{if .frequent_subjects}}
+**Most Common Subjects**:
+{{range $subj, $count := .frequent_subjects}}
+- {{$subj}}: {{$count}} occurrences
+{{end}}
+{{end}}
+
+### Task:
+1. **Explain** what these results mean in terms of code architecture
+2. **Identify patterns** (e.g., "Package A is heavily coupled with Package B")
+3. **Suggest 2-3 follow-up queries** to dig deeper into potential issues
+
+Provide a concise architectural explanation in 2-3 paragraphs.
