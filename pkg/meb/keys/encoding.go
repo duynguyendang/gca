@@ -10,7 +10,7 @@ const (
 	SPOPrefix   byte = 0x01 // Subject-Predicate-Object index
 	OPSPrefix   byte = 0x02 // Object-Predicate-Subject index
 	PSOPrefix   byte = 0x03 // Predicate-Subject-Object index
-	ChunkPrefix byte = 0x10 // Content blob storage
+	ChunkPrefix byte = 0x11 // Content blob storage
 
 	// Quad indices (new for multi-tenancy/RAG contexts)
 	QuadSPOGPrefix byte = 0x20 // Subject-Predicate-Object-Graph index

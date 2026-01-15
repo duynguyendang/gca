@@ -9,17 +9,24 @@ import (
 	"path/filepath"
 	"strings"
 
+	"context"
+
 	"github.com/duynguyendang/gca/pkg/meb"
-	sitter "github.com/tree-sitter/go-tree-sitter"
-	golang "github.com/tree-sitter/tree-sitter-go/bindings/go"
 )
 
 var symbolTable = make(map[string]string)
 
 // Run executes the ingestion process.
 func Run(s *meb.MEBStore, sourceDir string) error {
-	parser := sitter.NewParser()
-	parser.SetLanguage(sitter.NewLanguage(golang.Language()))
+	// Initialize Embedding Service
+	ctx := context.Background()
+	embedService, initErr := NewEmbeddingService(ctx)
+	if initErr != nil {
+		return fmt.Errorf("failed to initialize embedding service: %w", initErr)
+	}
+	defer embedService.Close()
+
+	ext := NewExtractor()
 
 	testDir := sourceDir
 
@@ -30,8 +37,21 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 			return err
 		}
 		if !d.IsDir() && strings.HasSuffix(path, ".go") {
-			if err := collectSymbols(parser, path, testDir); err != nil {
-				log.Printf("Error collecting symbols from %s: %v", path, err)
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			relPath, _ := filepath.Rel(testDir, path)
+			symbols, err := ext.ExtractSymbols(path, content, relPath)
+			if err != nil {
+				log.Printf("Error extracting symbols from %s: %v", path, err)
+			}
+			for _, sym := range symbols {
+				symbolTable[sym.Name] = sym.ID
+				// Also map package.SymName? The extractor doesn't return pkg name yet in Symbol directly, wait it does.
+				if sym.Package != "" {
+					symbolTable[sym.Package+"."+sym.Name] = sym.ID
+				}
 			}
 		}
 		return nil
@@ -49,8 +69,11 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 		}
 		if !d.IsDir() && strings.HasSuffix(path, ".go") {
 			fmt.Printf("Processing file: %s\n", path)
-			if err := processFile(s, parser, path, testDir); err != nil {
-				log.Printf("Error processing file %s: %v", path, err)
+			if !d.IsDir() && strings.HasSuffix(path, ".go") {
+				fmt.Printf("Processing file: %s\n", path)
+				if err := processFile(ctx, s, embedService, ext, path, testDir); err != nil {
+					log.Printf("Error processing file %s: %v", path, err)
+				}
 			}
 		}
 		return nil
@@ -63,397 +86,75 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 	return nil
 }
 
-func collectSymbols(parser *sitter.Parser, path string, sourceRoot string) error {
+// collectSymbols removed (logic moved to Run)
+
+func processFile(ctx context.Context, s *meb.MEBStore, embedder *EmbeddingService, ext *Extractor, path string, sourceRoot string) error {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
+	relPath, _ := filepath.Rel(sourceRoot, path)
 
-	relPath, err := filepath.Rel(sourceRoot, path)
-	if err != nil {
-		relPath = path
-	}
+	// fileId := strHash(path)
+	// s.SetContent(fileId, content) // Optional: Store full file content too? Or rely on documents?
+	// Storing full file content is good for "file retrieval".
+	// Let's keep it but skip AddDocument for file itself for now? Or maybe add it?
+	// User req: "Each code entity (Function, Struct, Interface) must be stored as a Document"
 
-	tree := parser.Parse(content, nil)
-	if tree == nil {
-		return fmt.Errorf("failed to parse tree")
-	}
-	root := tree.RootNode()
-
-	// Get package name
-	pkgName := ""
-	for i := uint(0); i < uint(root.ChildCount()); i++ {
-		child := root.Child(i)
-		if child.Kind() == "package_clause" {
-			nameNode := child.ChildByFieldName("name")
-			if nameNode != nil {
-				pkgName = clean(nameNode.Utf8Text(content))
-			}
-			break
-		}
-	}
-
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
-		switch n.Kind() {
-		case "function_declaration":
-			nameNode := n.ChildByFieldName("name")
-			if nameNode != nil {
-				funcName := clean(nameNode.Utf8Text(content))
-				namespaced := fmt.Sprintf("%s:%s", relPath, funcName)
-				symbolTable[funcName] = namespaced
-				if pkgName != "" {
-					symbolTable[pkgName+"."+funcName] = namespaced
-				}
-			}
-		case "method_declaration":
-			nameNode := n.ChildByFieldName("name")
-			receiverNode := n.ChildByFieldName("receiver")
-			if nameNode != nil && receiverNode != nil {
-				methodName := clean(nameNode.Utf8Text(content))
-				// Extracting receiver type (simplified)
-				var receiverType string
-				for i := uint(0); i < uint(receiverNode.ChildCount()); i++ {
-					c := receiverNode.Child(i)
-					if c.Kind() == "parameter_declaration" {
-						tn := c.ChildByFieldName("type")
-						if tn != nil {
-							receiverType = clean(tn.Utf8Text(content))
-							// strip * if pointer
-							receiverType = strings.TrimPrefix(receiverType, "*")
-						}
-					}
-				}
-
-				if receiverType != "" {
-					namespaced := fmt.Sprintf("%s:%s.%s", relPath, receiverType, methodName)
-					symbolTable[receiverType+"."+methodName] = namespaced
-					if pkgName != "" {
-						symbolTable[pkgName+"."+receiverType+"."+methodName] = namespaced
-					}
-				}
-			}
-		case "type_declaration":
-			for i := uint(0); i < uint(n.ChildCount()); i++ {
-				child := n.Child(i)
-				if child.Kind() == "type_spec" {
-					nameNode := child.ChildByFieldName("name")
-					if nameNode != nil {
-						structName := clean(nameNode.Utf8Text(content))
-						namespaced := fmt.Sprintf("%s:%s", relPath, structName)
-						symbolTable[structName] = namespaced
-						if pkgName != "" {
-							symbolTable[pkgName+"."+structName] = namespaced
-						}
-					}
-				}
-			}
-		}
-
-		for i := uint(0); i < uint(n.ChildCount()); i++ {
-			walk(n.Child(i))
-		}
-	}
-
-	walk(root)
-	return nil
-}
-
-func processFile(s *meb.MEBStore, parser *sitter.Parser, path string, sourceRoot string) error {
-	content, err := os.ReadFile(path)
+	symbols, err := ext.ExtractSymbols(path, content, relPath)
 	if err != nil {
 		return err
 	}
 
-	// Use relative path for namespacing (e.g. mangle/file.go)
-	relPath, err := filepath.Rel(sourceRoot, path)
+	for _, sym := range symbols {
+		// Embed string: DocComment + Signature
+		embedText := fmt.Sprintf("%s\n%s", sym.Signature, sym.DocComment)
+		// Fallback if empty doc
+		if sym.DocComment == "" {
+			embedText = sym.Signature
+		}
+
+		vec, err := embedder.GetEmbedding(ctx, embedText)
+		if err != nil {
+			log.Printf("Warning: embedding failed for %s: %v", sym.ID, err)
+			continue
+		}
+
+		meta := map[string]any{
+			"type":       sym.Type,
+			"file":       relPath,
+			"start_line": sym.StartLine,
+			"end_line":   sym.EndLine,
+			"package":    sym.Package,
+		}
+
+		if err := s.AddDocument(sym.ID, []byte(sym.Content), vec, meta); err != nil {
+			log.Printf("Error adding document %s: %v", sym.ID, err)
+		}
+
+		// Add structural facts
+		s.AddFact(meb.Fact{Subject: sym.ID, Predicate: "type", Object: sym.Type, Graph: "default"})
+		s.AddFact(meb.Fact{Subject: sym.ID, Predicate: "defines", Object: sym.Name, Graph: "default"})
+		s.AddFact(meb.Fact{Subject: relPath, Predicate: "defines_symbol", Object: sym.ID, Graph: "default"})
+	}
+
+	// Extract References (Calls, Imports)
+	refs, err := ext.ExtractReferences(path, content, relPath)
 	if err != nil {
-		relPath = path // Fallback
-	}
-
-	tree := parser.Parse(content, nil)
-	if tree == nil {
-		return fmt.Errorf("failed to parse tree")
-	}
-	root := tree.RootNode()
-
-	var facts []meb.Fact
-
-	fileId := strHash(path)
-	s.SetContent(fileId, content)
-
-	// Helper to extract receiver type name (simplistic)
-	getReceiverType := func(n *sitter.Node) string {
-		// Receiver node is a parameter_list (e.g. "(d Decl)" or "(s *Server)")
-		// It contains punctuation "(" and ")" and a "parameter_declaration"
-		for i := uint(0); i < uint(n.ChildCount()); i++ {
-			child := n.Child(i)
-			if child.Kind() == "parameter_declaration" {
-				// Found the declaration
-				// Try to get 'type' field
-				typeNode := child.ChildByFieldName("type")
-				if typeNode != nil {
-					return clean(typeNode.Utf8Text(content))
-				}
-
-				// Fallback: search within parameter_declaration
-				for j := uint(0); j < uint(child.ChildCount()); j++ {
-					grandChild := child.Child(j)
-					if grandChild.Kind() == "type_identifier" || grandChild.Kind() == "pointer_type" {
-						return clean(grandChild.Utf8Text(content))
-					}
+		log.Printf("Warning: failed to extract references from %s: %v", path, err)
+	} else {
+		for _, ref := range refs {
+			// Resolve callee if possible
+			object := ref.Object
+			if ref.Predicate == "calls" {
+				if resolved, ok := symbolTable[object]; ok {
+					object = resolved
 				}
 			}
-		}
-		return ""
-	}
-
-	var walk func(n *sitter.Node, currentScope string)
-	walk = func(n *sitter.Node, currentScope string) {
-		nextScope := currentScope
-
-		switch n.Kind() {
-		case "import_declaration":
-			for i := uint(0); i < uint(n.ChildCount()); i++ {
-				child := n.Child(i)
-				if child.Kind() == "import_spec" {
-					pathNode := child.ChildByFieldName("path")
-					if pathNode != nil {
-						// Clean import path
-						impPath := clean(pathNode.Utf8Text(content))
-						facts = append(facts, meb.Fact{
-							Subject:   relPath,
-							Predicate: "imports",
-							Object:    impPath,
-							Graph:     "default",
-						})
-					}
-				} else if child.Kind() == "import_spec_list" {
-					for j := uint(0); j < uint(child.ChildCount()); j++ {
-						grandChild := child.Child(j)
-						if grandChild.Kind() == "import_spec" {
-							pathNode := grandChild.ChildByFieldName("path")
-							if pathNode != nil {
-								impPath := clean(pathNode.Utf8Text(content))
-								facts = append(facts, meb.Fact{
-									Subject:   relPath,
-									Predicate: "imports",
-									Object:    impPath,
-									Graph:     "default",
-								})
-							}
-						}
-					}
-				}
-			}
-		case "type_declaration":
-			for i := uint(0); i < uint(n.ChildCount()); i++ {
-				child := n.Child(i)
-				if child.Kind() == "type_spec" {
-					nameNode := child.ChildByFieldName("name")
-					typeNode := child.ChildByFieldName("type")
-
-					if nameNode != nil && typeNode != nil {
-						typeName := clean(nameNode.Utf8Text(content))
-						namespacedType := fmt.Sprintf("%s:%s", relPath, typeName)
-
-						// Check if it's a struct or interface
-						if typeNode.Kind() == "struct_type" {
-							facts = append(facts, meb.Fact{
-								Subject:   namespacedType,
-								Predicate: "defines_struct",
-								Object:    typeName,
-								Graph:     "default",
-							})
-
-							// Extract fields
-							fieldList := typeNode.ChildByFieldName("fields")
-							if fieldList != nil {
-								for k := uint(0); k < uint(fieldList.ChildCount()); k++ {
-									fieldDecl := fieldList.Child(k)
-									if fieldDecl.Kind() == "field_declaration" {
-										fieldNameNode := fieldDecl.ChildByFieldName("name")
-										fieldTypeNode := fieldDecl.ChildByFieldName("type")
-										if fieldNameNode != nil {
-											fieldName := clean(fieldNameNode.Utf8Text(content))
-											facts = append(facts, meb.Fact{
-												Subject:   namespacedType,
-												Predicate: "has_field",
-												Object:    fieldName,
-												Graph:     "default",
-											})
-										} else if fieldTypeNode != nil {
-											// Anonymous field (embedding)
-											embeddedType := clean(fieldTypeNode.Utf8Text(content))
-											embeddedType = strings.TrimPrefix(embeddedType, "*") // Strip pointer
-											facts = append(facts, meb.Fact{
-												Subject:   namespacedType,
-												Predicate: "embeds",
-												Object:    embeddedType,
-												Graph:     "default",
-											})
-										}
-									}
-								}
-							}
-
-						} else if typeNode.Kind() == "interface_type" {
-							facts = append(facts, meb.Fact{
-								Subject:   namespacedType,
-								Predicate: "defines_interface",
-								Object:    typeName,
-								Graph:     "default",
-							})
-
-							// Extract methods
-							// Interface methods are direct children of interface_type (method_spec nodes)
-							// checking grammar: interface_type -> "interface" "{" (method_spec | type_name)* "}"
-							// The children are directly inside interface_type usually, strictly speaking inside the block.
-							// Let's iterate children of typeNode.
-							for k := uint(0); k < uint(typeNode.ChildCount()); k++ {
-								spec := typeNode.Child(k)
-								if spec.Kind() == "method_spec" {
-									mNameNode := spec.ChildByFieldName("name")
-									if mNameNode != nil {
-										mName := clean(mNameNode.Utf8Text(content))
-										facts = append(facts, meb.Fact{
-											Subject:   namespacedType,
-											Predicate: "has_method",
-											Object:    mName,
-											Graph:     "default",
-										})
-									}
-								}
-							}
-						}
-
-						s.SetContent(strHash(namespacedType), []byte(child.Utf8Text(content)))
-					}
-				}
-			}
-		case "function_declaration":
-			nameNode := n.ChildByFieldName("name")
-			if nameNode != nil {
-				funcName := clean(nameNode.Utf8Text(content))
-				// Namespace the function: path/to/file.go:FuncName
-				nextScope = fmt.Sprintf("%s:%s", relPath, funcName)
-				s.SetContent(strHash(nextScope), []byte(n.Utf8Text(content)))
-
-				// Extract parameters
-				paramsNode := n.ChildByFieldName("parameters")
-				if paramsNode != nil {
-					for i := uint(0); i < uint(paramsNode.ChildCount()); i++ {
-						paramDecl := paramsNode.Child(i)
-						if paramDecl.Kind() == "parameter_declaration" {
-							paramNameNode := paramDecl.ChildByFieldName("name")
-							if paramNameNode != nil {
-								paramName := clean(paramNameNode.Utf8Text(content))
-								facts = append(facts, meb.Fact{
-									Subject:   nextScope,
-									Predicate: "parameter",
-									Object:    paramName,
-									Graph:     "default",
-								})
-							}
-						}
-					}
-				}
-
-				// Extract return type
-				resultNode := n.ChildByFieldName("result")
-				if resultNode != nil {
-					returnType := clean(resultNode.Utf8Text(content))
-					facts = append(facts, meb.Fact{
-						Subject:   nextScope,
-						Predicate: "returns",
-						Object:    returnType,
-						Graph:     "default",
-					})
-				}
-			}
-		case "method_declaration":
-			nameNode := n.ChildByFieldName("name")
-			receiverNode := n.ChildByFieldName("receiver")
-			if nameNode != nil && receiverNode != nil {
-				methodName := clean(nameNode.Utf8Text(content))
-				receiverType := getReceiverType(receiverNode)
-
-				// Namespace: path/to/file.go:Receiver.Method
-				if receiverType != "" {
-					nextScope = fmt.Sprintf("%s:%s.%s", relPath, receiverType, methodName)
-				} else {
-					nextScope = fmt.Sprintf("%s:.%s", relPath, methodName) // Fallback
-				}
-				s.SetContent(strHash(nextScope), []byte(n.Utf8Text(content)))
-
-				// Extract parameters
-				paramsNode := n.ChildByFieldName("parameters")
-				if paramsNode != nil {
-					for i := uint(0); i < uint(paramsNode.ChildCount()); i++ {
-						paramDecl := paramsNode.Child(i)
-						if paramDecl.Kind() == "parameter_declaration" {
-							paramNameNode := paramDecl.ChildByFieldName("name")
-							if paramNameNode != nil {
-								paramName := clean(paramNameNode.Utf8Text(content))
-								facts = append(facts, meb.Fact{
-									Subject:   nextScope,
-									Predicate: "parameter",
-									Object:    paramName,
-									Graph:     "default",
-								})
-							}
-						}
-					}
-				}
-
-				// Extract return type
-				resultNode := n.ChildByFieldName("result")
-				if resultNode != nil {
-					returnType := clean(resultNode.Utf8Text(content))
-					facts = append(facts, meb.Fact{
-						Subject:   nextScope,
-						Predicate: "returns",
-						Object:    returnType,
-						Graph:     "default",
-					})
-				}
-			}
-
-		case "call_expression":
-			if currentScope != "" {
-				funcNode := n.ChildByFieldName("function")
-				if funcNode != nil {
-					callee := clean(funcNode.Utf8Text(content))
-
-					// Resolve callee if possible
-					if resolved, ok := symbolTable[callee]; ok {
-						callee = resolved
-					}
-
-					facts = append(facts, meb.Fact{
-						Subject:   currentScope,
-						Predicate: "calls",
-						Object:    callee,
-						Graph:     "default",
-					})
-				}
-			}
-		}
-
-		for i := uint(0); i < uint(n.ChildCount()); i++ {
-			walk(n.Child(i), nextScope)
+			s.AddFact(meb.Fact{Subject: ref.Subject, Predicate: ref.Predicate, Object: object, Graph: "default"})
 		}
 	}
 
-	walk(root, "")
-
-	if len(facts) > 0 {
-		for _, f := range facts {
-			if err := s.AddFact(f); err != nil {
-				return err
-			}
-		}
-	}
 	return nil
 }
 
