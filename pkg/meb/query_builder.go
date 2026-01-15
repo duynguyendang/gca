@@ -3,6 +3,7 @@ package meb
 import (
 	"fmt"
 	"iter"
+	"strconv"
 
 	"github.com/duynguyendang/gca/pkg/meb/utils"
 	"github.com/duynguyendang/gca/pkg/meb/vector"
@@ -53,17 +54,12 @@ func NewBuilder(store Store) *Builder {
 
 // SimilarTo sets the vector similarity query.
 // The vector must be 1536-dimensional (OpenAI embedding standard).
-func (b *Builder) SimilarTo(vec []float32) *Builder {
+// Optionally accepts a threshold (0-1) as the second argument.
+func (b *Builder) SimilarTo(vec []float32, threshold ...float32) *Builder {
 	b.vectorQuery = vec
-	return b
-}
-
-// SimilarToWithThreshold sets the vector similarity query with a minimum threshold.
-// Only vectors with similarity >= threshold will be considered.
-// Threshold should be between 0 and 1.
-func (b *Builder) SimilarToWithThreshold(vec []float32, threshold float32) *Builder {
-	b.vectorQuery = vec
-	b.threshold = threshold
+	if len(threshold) > 0 {
+		b.threshold = threshold[0]
+	}
 	return b
 }
 
@@ -134,6 +130,16 @@ func (b *Builder) Execute() ([]Result, error) {
 	// Step 2: Filter candidates through graph constraints using Scan
 	results := make([]Result, 0, b.limit)
 
+	// Pre-compile filters to avoid repeated fmt.Sprintf in the loop
+	compiledFilters := make([]compiledFilter, len(b.filters))
+	for i, f := range b.filters {
+		compiledFilters[i] = compiledFilter{
+			Predicate: f.Predicate,
+			Object:    fmt.Sprintf("%v", f.Object),
+			Graph:     f.Graph,
+		}
+	}
+
 	for _, vecResult := range vectorResults {
 		// Apply threshold filter
 		if b.threshold > 0 && vecResult.Score < b.threshold {
@@ -141,10 +147,14 @@ func (b *Builder) Execute() ([]Result, error) {
 		}
 
 		// Convert ID to string for Scan
-		candidateKey := fmt.Sprintf("id:%d", vecResult.ID)
+		// Optimization: Use buffer to avoid allocations in hot path
+		var buf [32]byte
+		keyBuf := append(buf[:0], "id:"...)
+		keyBuf = strconv.AppendUint(keyBuf, vecResult.ID, 10)
+		candidateKey := string(keyBuf)
 
 		// Apply graph filters using Scan for each filter
-		if b.matchesFilters(candidateKey) {
+		if b.matchesFilters(candidateKey, compiledFilters) {
 			// Hydrate result
 			contentBytes, err := b.store.GetContent(vecResult.ID)
 			contentStr := ""
@@ -171,15 +181,22 @@ func (b *Builder) Execute() ([]Result, error) {
 	return results, nil
 }
 
+// compiledFilter is an optimized internal representation of GraphFilter
+type compiledFilter struct {
+	Predicate string
+	Object    string
+	Graph     string
+}
+
 // matchesFilters checks if a candidate (by key) matches all graph filters.
 // Uses the Scan API to check for facts matching the filter constraints.
-func (b *Builder) matchesFilters(candidateKey string) bool {
-	for _, filter := range b.filters {
+func (b *Builder) matchesFilters(candidateKey string, filters []compiledFilter) bool {
+	for _, filter := range filters {
 		// Use Scan to check if fact exists: Scan(candidateKey, filter.Predicate, filter.Object, filter.Graph)
 		matched := false
 
 		// We just need to find ONE matching fact to satisfy the filter
-		for _, err := range b.store.Scan(candidateKey, filter.Predicate, fmt.Sprintf("%v", filter.Object), filter.Graph) {
+		for _, err := range b.store.Scan(candidateKey, filter.Predicate, filter.Object, filter.Graph) {
 			if err != nil {
 				return false
 			}

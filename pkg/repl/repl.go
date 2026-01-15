@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/duynguyendang/gca/pkg/meb"
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
@@ -136,6 +137,65 @@ func Run(s *meb.MEBStore, readOnly bool) {
 			if err := executePlanCommand(context.Background(), s, goal, projectContext, plannerPrompt); err != nil {
 				fmt.Printf("❌ Plan execution failed: %v\n", err)
 			}
+			continue
+		}
+
+		// Handle export command
+		if strings.HasPrefix(line, "export ") {
+			argsStr := strings.TrimPrefix(line, "export ")
+			var filterTests bool
+
+			// Parse flags (Naive parser: assumes flags come first)
+			for strings.HasPrefix(strings.TrimSpace(argsStr), "--") {
+				argsStr = strings.TrimSpace(argsStr)
+				idx := strings.Index(argsStr, " ")
+				if idx == -1 {
+					break
+				}
+				flag := argsStr[:idx]
+				if flag == "--filter-tests" {
+					filterTests = true
+				}
+				argsStr = strings.TrimSpace(argsStr[idx+1:])
+			}
+
+			lastSpace := strings.LastIndex(argsStr, " ")
+			if lastSpace == -1 {
+				fmt.Println("Usage: export [--filter-tests] <query> <filename>")
+				continue
+			}
+
+			datalogQuery := strings.TrimSpace(argsStr[:lastSpace])
+			filename := strings.TrimSpace(argsStr[lastSpace+1:])
+
+			// Execute query
+			results, err := s.Query(context.Background(), datalogQuery)
+			if err != nil {
+				fmt.Printf("Query error: %v\n", err)
+				continue
+			}
+
+			if len(results) == 0 {
+				fmt.Println("No results to export.")
+				continue
+			}
+
+			// Export using D3Transformer with options
+			transformer := export.NewD3Transformer(s)
+			transformer.ExcludeTestFiles = filterTests
+
+			graph, err := transformer.Transform(context.Background(), datalogQuery, results)
+			if err != nil {
+				fmt.Printf("Export error: %v\n", err)
+				continue
+			}
+
+			if err := export.SaveD3Graph(graph, filename); err != nil {
+				fmt.Printf("Save error: %v\n", err)
+				continue
+			}
+
+			fmt.Printf("✅ Exported %d nodes and %d links to %s\n", len(graph.Nodes), len(graph.Links), filename)
 			continue
 		}
 

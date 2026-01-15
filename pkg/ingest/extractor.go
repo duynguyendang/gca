@@ -2,10 +2,14 @@ package ingest
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	sitter "github.com/tree-sitter/go-tree-sitter"
 	golang "github.com/tree-sitter/tree-sitter-go/bindings/go"
+	javascript "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
+	python "github.com/tree-sitter/tree-sitter-python/bindings/go"
+	typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
 
 // SymbolType constants
@@ -14,6 +18,8 @@ const (
 	TypeMethod    = "method"
 	TypeStruct    = "struct"
 	TypeInterface = "interface"
+	TypeClass     = "class"
+	TypeVariable  = "variable"
 )
 
 // Reference represents a dependency or call.
@@ -55,12 +61,31 @@ type Extractor struct {
 // NewExtractor creates a new extractor instance.
 func NewExtractor() *Extractor {
 	parser := sitter.NewParser()
-	parser.SetLanguage(sitter.NewLanguage(golang.Language()))
 	return &Extractor{parser: parser}
+}
+
+// GetParser returns the appropriate language parser for the given extension.
+func (e *Extractor) GetParser(ext string) *sitter.Language {
+	switch ext {
+	case ".py":
+		return sitter.NewLanguage(python.Language())
+	case ".js", ".jsx":
+		return sitter.NewLanguage(javascript.Language())
+	case ".ts":
+		return sitter.NewLanguage(typescript.LanguageTypescript())
+	case ".tsx":
+		return sitter.NewLanguage(typescript.LanguageTSX())
+	default:
+		return sitter.NewLanguage(golang.Language())
+	}
 }
 
 // ExtractSymbols parses the content and returns a list of symbols.
 func (e *Extractor) ExtractSymbols(filename string, content []byte, relPath string) ([]Symbol, error) {
+	ext := filepath.Ext(filename)
+	lang := e.GetParser(ext)
+	e.parser.SetLanguage(lang)
+
 	tree := e.parser.Parse(content, nil)
 	if tree == nil {
 		return nil, fmt.Errorf("failed to parse tree")
@@ -72,45 +97,31 @@ func (e *Extractor) ExtractSymbols(filename string, content []byte, relPath stri
 
 	var symbols []Symbol
 
-	// Get package name
+	// Generic package name detection (Go mostly)
 	pkgName := ""
-	for i := uint(0); i < uint(root.ChildCount()); i++ {
-		child := root.Child(i)
-		if child.Kind() == "package_clause" {
-			nameNode := child.ChildByFieldName("name")
-			if nameNode != nil {
-				pkgName = clean(nameNode.Utf8Text(content))
+	if ext == ".go" {
+		for i := uint(0); i < uint(root.ChildCount()); i++ {
+			child := root.Child(i)
+			if child.Kind() == "package_clause" {
+				nameNode := child.ChildByFieldName("name")
+				if nameNode != nil {
+					pkgName = clean(nameNode.Utf8Text(content))
+				}
+				break
 			}
-			break
 		}
 	}
 
 	// Walk the tree
 	var walk func(n *sitter.Node)
 	walk = func(n *sitter.Node) {
-		switch n.Kind() {
-		case "function_declaration":
-			sym := e.extractFunction(n, content, relPath, pkgName)
-			symbols = append(symbols, sym)
-
-		case "method_declaration":
-			sym := e.extractMethod(n, content, relPath, pkgName)
-			if sym.Name != "" {
-				symbols = append(symbols, sym)
-			}
-
-		case "type_declaration":
-			// A type declaration can contain multiple type specs
-			// e.g. type ( ... ) or type A struct ...
-			for i := uint(0); i < uint(n.ChildCount()); i++ {
-				child := n.Child(i)
-				if child.Kind() == "type_spec" {
-					sym := e.extractType(child, n, content, relPath, pkgName)
-					if sym.Name != "" {
-						symbols = append(symbols, sym)
-					}
-				}
-			}
+		switch ext {
+		case ".go":
+			e.extractGoNode(n, content, relPath, pkgName, &symbols)
+		case ".py":
+			e.extractPythonNode(n, content, relPath, &symbols)
+		case ".js", ".jsx", ".ts", ".tsx":
+			e.extractJSNode(n, content, relPath, &symbols)
 		}
 
 		// Recurse
@@ -125,6 +136,10 @@ func (e *Extractor) ExtractSymbols(filename string, content []byte, relPath stri
 
 // ExtractReferences parses the content and returns a list of references (calls, imports, etc).
 func (e *Extractor) ExtractReferences(filename string, content []byte, relPath string) ([]Reference, error) {
+	ext := filepath.Ext(filename)
+	lang := e.GetParser(ext)
+	e.parser.SetLanguage(lang)
+
 	tree := e.parser.Parse(content, nil)
 	if tree == nil {
 		return nil, fmt.Errorf("failed to parse tree")
@@ -133,100 +148,17 @@ func (e *Extractor) ExtractReferences(filename string, content []byte, relPath s
 
 	var refs []Reference
 
-	// Helper to extract receiver type
-	getReceiverType := func(n *sitter.Node) string {
-		for i := uint(0); i < uint(n.ChildCount()); i++ {
-			child := n.Child(i)
-			if child.Kind() == "parameter_declaration" {
-				typeNode := child.ChildByFieldName("type")
-				if typeNode != nil {
-					t := clean(typeNode.Utf8Text(content))
-					return strings.TrimPrefix(t, "*")
-				}
-				for j := uint(0); j < uint(child.ChildCount()); j++ {
-					gc := child.Child(j)
-					if gc.Kind() == "type_identifier" || gc.Kind() == "pointer_type" {
-						t := clean(gc.Utf8Text(content))
-						return strings.TrimPrefix(t, "*")
-					}
-				}
-			}
-		}
-		return ""
-	}
-
 	var walk func(n *sitter.Node, currentScope string)
 	walk = func(n *sitter.Node, currentScope string) {
 		nextScope := currentScope
 
-		switch n.Kind() {
-		case "import_declaration":
-			// Imports are file-level usually. Subject is file.
-			for i := uint(0); i < uint(n.ChildCount()); i++ {
-				child := n.Child(i)
-				if child.Kind() == "import_spec" {
-					pathNode := child.ChildByFieldName("path")
-					if pathNode != nil {
-						impPath := clean(pathNode.Utf8Text(content))
-						refs = append(refs, Reference{
-							Subject:   relPath,
-							Predicate: "imports",
-							Object:    impPath,
-							Line:      lineFromOffset(content, child.StartByte()),
-						})
-					}
-				} else if child.Kind() == "import_spec_list" {
-					for j := uint(0); j < uint(child.ChildCount()); j++ {
-						grandChild := child.Child(j)
-						if grandChild.Kind() == "import_spec" {
-							pathNode := grandChild.ChildByFieldName("path")
-							if pathNode != nil {
-								impPath := clean(pathNode.Utf8Text(content))
-								refs = append(refs, Reference{
-									Subject:   relPath,
-									Predicate: "imports",
-									Object:    impPath,
-									Line:      lineFromOffset(content, grandChild.StartByte()),
-								})
-							}
-						}
-					}
-				}
-			}
-
-		case "function_declaration":
-			nameNode := n.ChildByFieldName("name")
-			if nameNode != nil {
-				funcName := clean(nameNode.Utf8Text(content))
-				nextScope = fmt.Sprintf("%s:%s", relPath, funcName)
-			}
-
-		case "method_declaration":
-			nameNode := n.ChildByFieldName("name")
-			receiverNode := n.ChildByFieldName("receiver")
-			if nameNode != nil && receiverNode != nil {
-				methodName := clean(nameNode.Utf8Text(content))
-				receiverType := getReceiverType(receiverNode)
-				if receiverType != "" {
-					nextScope = fmt.Sprintf("%s:%s.%s", relPath, receiverType, methodName)
-				} else {
-					nextScope = fmt.Sprintf("%s:.%s", relPath, methodName)
-				}
-			}
-
-		case "call_expression":
-			if currentScope != "" {
-				funcNode := n.ChildByFieldName("function")
-				if funcNode != nil {
-					callee := clean(funcNode.Utf8Text(content))
-					refs = append(refs, Reference{
-						Subject:   currentScope,
-						Predicate: "calls",
-						Object:    callee,
-						Line:      lineFromOffset(content, n.StartByte()),
-					})
-				}
-			}
+		switch ext {
+		case ".go":
+			nextScope = e.extractGoRefs(n, content, relPath, currentScope, &refs)
+		case ".py":
+			nextScope = e.extractPythonRefs(n, content, relPath, currentScope, &refs)
+		case ".js", ".jsx", ".ts", ".tsx":
+			nextScope = e.extractJSRefs(n, content, relPath, currentScope, &refs)
 		}
 
 		for i := uint(0); i < uint(n.ChildCount()); i++ {
@@ -238,6 +170,397 @@ func (e *Extractor) ExtractReferences(filename string, content []byte, relPath s
 	return refs, nil
 }
 
+// --- Go Extraction ---
+
+func (e *Extractor) extractGoNode(n *sitter.Node, content []byte, relPath, pkgName string, symbols *[]Symbol) {
+	switch n.Kind() {
+	case "function_declaration":
+		*symbols = append(*symbols, e.extractFunction(n, content, relPath, pkgName))
+	case "method_declaration":
+		sym := e.extractMethod(n, content, relPath, pkgName)
+		if sym.Name != "" {
+			*symbols = append(*symbols, sym)
+		}
+	case "type_declaration":
+		for i := uint(0); i < uint(n.ChildCount()); i++ {
+			child := n.Child(i)
+			if child.Kind() == "type_spec" {
+				sym := e.extractType(child, n, content, relPath, pkgName)
+				if sym.Name != "" {
+					*symbols = append(*symbols, sym)
+				}
+			}
+		}
+	}
+}
+
+func (e *Extractor) extractGoRefs(n *sitter.Node, content []byte, relPath, currentScope string, refs *[]Reference) string {
+	nextScope := currentScope
+	switch n.Kind() {
+	case "import_declaration":
+		for i := uint(0); i < uint(n.ChildCount()); i++ {
+			child := n.Child(i)
+			if child.Kind() == "import_spec" {
+				e.addImportRef(content, child, relPath, refs)
+			} else if child.Kind() == "import_spec_list" {
+				for j := uint(0); j < uint(child.ChildCount()); j++ {
+					grandChild := child.Child(j)
+					if grandChild.Kind() == "import_spec" {
+						e.addImportRef(content, grandChild, relPath, refs)
+					}
+				}
+			}
+		}
+	case "function_declaration":
+		nameNode := n.ChildByFieldName("name")
+		if nameNode != nil {
+			funcName := clean(nameNode.Utf8Text(content))
+			nextScope = fmt.Sprintf("%s:%s", relPath, funcName)
+		}
+	case "method_declaration":
+		nameNode := n.ChildByFieldName("name")
+		receiverNode := n.ChildByFieldName("receiver")
+		if nameNode != nil && receiverNode != nil {
+			methodName := clean(nameNode.Utf8Text(content))
+			receiverType := e.getReceiverType(receiverNode, content)
+			if receiverType != "" {
+				nextScope = fmt.Sprintf("%s:%s.%s", relPath, receiverType, methodName)
+			} else {
+				nextScope = fmt.Sprintf("%s:.%s", relPath, methodName)
+			}
+		}
+	case "call_expression":
+		if currentScope != "" {
+			funcNode := n.ChildByFieldName("function")
+			if funcNode != nil {
+				callee := clean(funcNode.Utf8Text(content))
+				*refs = append(*refs, Reference{
+					Subject:   currentScope,
+					Predicate: "calls",
+					Object:    callee,
+					Line:      lineFromOffset(content, n.StartByte()),
+				})
+			}
+		}
+	}
+	return nextScope
+}
+
+// --- Python Extraction ---
+
+func (e *Extractor) extractPythonNode(n *sitter.Node, content []byte, relPath string, symbols *[]Symbol) {
+	switch n.Kind() {
+	case "expression_statement":
+		child := n.Child(0)
+		if child != nil && child.Kind() == "assignment" {
+			left := child.ChildByFieldName("left")
+			if left != nil {
+				if left.Kind() == "identifier" {
+					name := clean(left.Utf8Text(content))
+					id := fmt.Sprintf("%s:%s", relPath, name)
+					doc := e.getDocComment(n, content)
+					sig := fmt.Sprintf("%s = ...", name)
+
+					*symbols = append(*symbols, Symbol{
+						ID:         id,
+						Name:       name,
+						Type:       TypeVariable,
+						Signature:  sig,
+						DocComment: doc,
+						Content:    n.Utf8Text(content),
+						StartLine:  lineFromOffset(content, n.StartByte()),
+						EndLine:    lineFromOffset(content, n.EndByte()),
+					})
+				}
+			}
+		}
+	case "function_definition":
+		nameNode := n.ChildByFieldName("name")
+		if nameNode != nil {
+			name := clean(nameNode.Utf8Text(content))
+			id := fmt.Sprintf("%s:%s", relPath, name)
+			doc := e.getPythonDocString(n, content)
+			sig := e.getSignature(n, content)
+			*symbols = append(*symbols, Symbol{
+				ID:         id,
+				Name:       name,
+				Type:       TypeFunction,
+				Signature:  sig,
+				DocComment: doc,
+				Content:    n.Utf8Text(content),
+				StartLine:  lineFromOffset(content, n.StartByte()),
+				EndLine:    lineFromOffset(content, n.EndByte()),
+			})
+		}
+	case "class_definition":
+		nameNode := n.ChildByFieldName("name")
+		if nameNode != nil {
+			name := clean(nameNode.Utf8Text(content))
+			id := fmt.Sprintf("%s:%s", relPath, name)
+			doc := e.getPythonDocString(n, content)
+			sig := e.getSignature(n, content)
+			*symbols = append(*symbols, Symbol{
+				ID:         id,
+				Name:       name,
+				Type:       TypeClass,
+				Signature:  sig,
+				DocComment: doc,
+				Content:    n.Utf8Text(content),
+				StartLine:  lineFromOffset(content, n.StartByte()),
+				EndLine:    lineFromOffset(content, n.EndByte()),
+			})
+		}
+	}
+}
+
+func (e *Extractor) extractPythonRefs(n *sitter.Node, content []byte, relPath, currentScope string, refs *[]Reference) string {
+	nextScope := currentScope
+	switch n.Kind() {
+	case "function_definition", "class_definition":
+		nameNode := n.ChildByFieldName("name")
+		if nameNode != nil {
+			name := clean(nameNode.Utf8Text(content))
+			nextScope = fmt.Sprintf("%s:%s", relPath, name)
+			// Handle nested scopes? For now simple scope calc:
+			// If we are already in a scope (e.g. class methods), append?
+			// Python ID strategy: we usually use `file:Function` or `file:Class`.
+			// Nested: `file:Class.Method` or `file:Function.Inner`.
+			// Keeping it simple for now to match `extractPythonNode`.
+		}
+	case "import_statement":
+		// import X
+		for i := uint(0); i < uint(n.ChildCount()); i++ {
+			child := n.Child(i)
+			if child.Kind() == "dotted_name" {
+				imp := clean(child.Utf8Text(content))
+				*refs = append(*refs, Reference{
+					Subject:   relPath,
+					Predicate: "imports",
+					Object:    imp,
+					Line:      lineFromOffset(content, n.StartByte()),
+				})
+			} else if child.Kind() == "aliased_import" {
+				name := child.ChildByFieldName("name")
+				if name != nil {
+					imp := clean(name.Utf8Text(content))
+					*refs = append(*refs, Reference{
+						Subject:   relPath,
+						Predicate: "imports",
+						Object:    imp,
+						Line:      lineFromOffset(content, n.StartByte()),
+					})
+				}
+			}
+		}
+	case "import_from_statement":
+		// from X import Y
+		modNameNode := n.ChildByFieldName("module_name")
+		if modNameNode != nil {
+			modName := clean(modNameNode.Utf8Text(content))
+			*refs = append(*refs, Reference{
+				Subject:   relPath,
+				Predicate: "imports",
+				Object:    modName,
+				Line:      lineFromOffset(content, n.StartByte()),
+			})
+		}
+	case "call":
+		if currentScope != "" {
+			funcNode := n.ChildByFieldName("function")
+			if funcNode != nil {
+				callee := clean(funcNode.Utf8Text(content))
+				*refs = append(*refs, Reference{
+					Subject:   currentScope,
+					Predicate: "calls",
+					Object:    callee,
+					Line:      lineFromOffset(content, n.StartByte()),
+				})
+			}
+		}
+	}
+	return nextScope
+}
+
+func (e *Extractor) getPythonDocString(n *sitter.Node, content []byte) string {
+	body := n.ChildByFieldName("body")
+	if body != nil && body.ChildCount() > 0 {
+		firstStmt := body.Child(0)
+		if firstStmt.Kind() == "expression_statement" {
+			expr := firstStmt.Child(0)
+			if expr.Kind() == "string" {
+				return clean(expr.Utf8Text(content))
+			}
+		}
+	}
+	return ""
+}
+
+// --- JS/TS Extraction ---
+
+func (e *Extractor) extractJSNode(n *sitter.Node, content []byte, relPath string, symbols *[]Symbol) {
+	kind := n.Kind()
+	var name, symType string
+	var receiver string
+
+	switch kind {
+	case "function_declaration":
+		nameNode := n.ChildByFieldName("name")
+		if nameNode != nil {
+			name = clean(nameNode.Utf8Text(content))
+			symType = TypeFunction
+		}
+	case "method_definition":
+		nameNode := n.ChildByFieldName("name")
+		if nameNode != nil {
+			name = clean(nameNode.Utf8Text(content))
+			symType = TypeMethod
+			// Try to find parent class name?
+			// Need parent hierarchy traversal or pass parent name down.
+			// Complex. For now, ID is `file:MethodName` which might collide if multiple classes.
+			// Ideally we want `file:Class.Method`.
+			// Let's rely on recursion logic if we were building full tree, but here we scan.
+			// Actually `walk` doesn't pass state for parent class.
+			// Let's just use `file:MethodName` for simplicity or try to peek parent.
+			if p := n.Parent(); p != nil && p.Parent() != nil && (p.Parent().Kind() == "class_declaration" || p.Parent().Kind() == "class_definition") {
+				cname := p.Parent().ChildByFieldName("name")
+				if cname != nil {
+					receiver = clean(cname.Utf8Text(content))
+				}
+			}
+		}
+	case "class_declaration", "class_definition":
+		nameNode := n.ChildByFieldName("name")
+		if nameNode != nil {
+			name = clean(nameNode.Utf8Text(content))
+			symType = TypeClass
+		}
+	case "interface_declaration":
+		nameNode := n.ChildByFieldName("name")
+		if nameNode != nil {
+			name = clean(nameNode.Utf8Text(content))
+			symType = TypeInterface
+		}
+	case "lexical_declaration", "variable_declaration":
+		// const x = 1; let y = 2; var z = 3;
+		// Can have multiple declarators: let a=1, b=2;
+		for i := uint(0); i < uint(n.ChildCount()); i++ {
+			child := n.Child(i)
+			if child.Kind() == "variable_declarator" {
+				nameNode := child.ChildByFieldName("name")
+				if nameNode != nil && nameNode.Kind() == "identifier" {
+					name = clean(nameNode.Utf8Text(content))
+					symType = TypeVariable
+
+					// We need to append here because this node kind handles multiple symbols
+					if name != "" {
+						id := fmt.Sprintf("%s:%s", relPath, name)
+						doc := e.getDocComment(n, content) // Comment on the whole declaration line
+						sig := n.Utf8Text(content)         // Use full line as sig for now
+
+						*symbols = append(*symbols, Symbol{
+							ID:         id,
+							Name:       name,
+							Type:       symType,
+							Signature:  sig,
+							DocComment: doc,
+							Content:    n.Utf8Text(content), // Note: this duplicates content if multiple vars on one line
+							StartLine:  lineFromOffset(content, child.StartByte()),
+							EndLine:    lineFromOffset(content, child.EndByte()),
+						})
+					}
+				}
+			}
+		}
+		// Reset name to avoid double add at end of function
+		name = ""
+
+	}
+
+	if name != "" {
+		id := fmt.Sprintf("%s:%s", relPath, name)
+		if receiver != "" {
+			id = fmt.Sprintf("%s:%s.%s", relPath, receiver, name)
+		}
+		doc := e.getDocComment(n, content) // JS uses comments preceding
+		sig := e.getSignature(n, content)
+		*symbols = append(*symbols, Symbol{
+			ID:         id,
+			Name:       name,
+			Type:       symType,
+			Receiver:   receiver,
+			Signature:  sig,
+			DocComment: doc,
+			Content:    n.Utf8Text(content),
+			StartLine:  lineFromOffset(content, n.StartByte()),
+			EndLine:    lineFromOffset(content, n.EndByte()),
+		})
+	}
+}
+
+func (e *Extractor) extractJSRefs(n *sitter.Node, content []byte, relPath, currentScope string, refs *[]Reference) string {
+	nextScope := currentScope
+	kind := n.Kind()
+
+	switch kind {
+	case "function_declaration", "method_definition", "class_declaration", "class_definition":
+		// Update scope
+		nameNode := n.ChildByFieldName("name")
+		if nameNode != nil {
+			name := clean(nameNode.Utf8Text(content))
+			nextScope = fmt.Sprintf("%s:%s", relPath, name)
+		}
+	case "import_statement":
+		// import { X } from 'Y'; or import X from 'Y';
+		sourceNode := n.ChildByFieldName("source")
+		if sourceNode != nil {
+			src := clean(sourceNode.Utf8Text(content))
+			*refs = append(*refs, Reference{
+				Subject:   relPath,
+				Predicate: "imports",
+				Object:    src,
+				Line:      lineFromOffset(content, n.StartByte()),
+			})
+		}
+	case "call_expression":
+		if currentScope != "" {
+			funcNode := n.ChildByFieldName("function")
+			if funcNode != nil {
+				callee := clean(funcNode.Utf8Text(content))
+				*refs = append(*refs, Reference{
+					Subject:   currentScope,
+					Predicate: "calls",
+					Object:    callee,
+					Line:      lineFromOffset(content, n.StartByte()),
+				})
+			}
+		}
+	}
+
+	return nextScope
+}
+
+// --- Helpers ---
+
+func (e *Extractor) addImportRef(content []byte, node *sitter.Node, relPath string, refs *[]Reference) {
+	pathNode := node.ChildByFieldName("path")
+	if pathNode != nil {
+		impPath := clean(pathNode.Utf8Text(content))
+		*refs = append(*refs, Reference{
+			Subject:   relPath,
+			Predicate: "imports",
+			Object:    impPath,
+			Line:      lineFromOffset(content, node.StartByte()),
+		})
+	}
+}
+
+// extractFunction, extractMethod, extractType are now integrated or helpers
+// I'll keep the Go ones as helpers called by extractGoNode to reduce code movement if I want,
+// but I've already inlined them in extractGoNode for cleaner switch.
+// Wait, I used e.extractFunction in extractGoNode above. I need to keep them or move logic.
+// I'll keep them to minimize diff noise if possible, but I rewrote the file logic.
+// I will re-implement them or include them.
+
 func (e *Extractor) extractFunction(n *sitter.Node, content []byte, relPath string, pkgName string) Symbol {
 	nameNode := n.ChildByFieldName("name")
 	name := ""
@@ -245,13 +568,8 @@ func (e *Extractor) extractFunction(n *sitter.Node, content []byte, relPath stri
 		name = clean(nameNode.Utf8Text(content))
 	}
 
-	// ID: path/to/file.go:FuncName
 	id := fmt.Sprintf("%s:%s", relPath, name)
-
-	// Doc Comment
 	doc := e.getDocComment(n, content)
-
-	// Signature (approximate: everything up to the block)
 	signature := e.getSignature(n, content)
 
 	return Symbol{
@@ -280,9 +598,7 @@ func (e *Extractor) extractMethod(n *sitter.Node, content []byte, relPath string
 		receiverType = e.getReceiverType(receiverNode, content)
 	}
 
-	// ID: path/to/file.go:Receiver.Method
 	id := fmt.Sprintf("%s:%s.%s", relPath, receiverType, name)
-
 	doc := e.getDocComment(n, content)
 	signature := e.getSignature(n, content)
 
@@ -301,7 +617,6 @@ func (e *Extractor) extractMethod(n *sitter.Node, content []byte, relPath string
 }
 
 func (e *Extractor) extractType(spec *sitter.Node, decl *sitter.Node, content []byte, relPath string, pkgName string) Symbol {
-	// decl is the parent (type_declaration), spec is the node (type_spec)
 	nameNode := spec.ChildByFieldName("name")
 	name := ""
 	if nameNode != nil {
@@ -315,14 +630,7 @@ func (e *Extractor) extractType(spec *sitter.Node, decl *sitter.Node, content []
 	}
 
 	id := fmt.Sprintf("%s:%s", relPath, name)
-
-	// Doc comments are usually on the parent type_declaration,
-	// UNLESS it's a grouped declaration type ( A B; C D ), in which case it might be tricky.
-	// For simplicity, we check the parent `type_declaration` if this is the only spec,
-	// or scan locally. Tree-sitter usually attaches comments as preceding siblings.
-	// If `decl` contains multiple `type_spec`s, the comment might refer to the group.
-	// We'll check `decl` for doc comments.
-	doc := e.getDocComment(decl, content)
+	doc := e.getDocComment(decl, content) // Use decl doc
 
 	return Symbol{
 		ID:         id,
@@ -330,37 +638,21 @@ func (e *Extractor) extractType(spec *sitter.Node, decl *sitter.Node, content []
 		Type:       kind,
 		Signature:  fmt.Sprintf("type %s %s", name, kind),
 		DocComment: doc,
-		Content:    spec.Utf8Text(content), // Just the spec, not the whole 'type' block if grouped?
-		// Actually for single line `type A struct {...}`, parent `type_declaration` covers it.
-		// If grouped, `spec` is just one line. Let's use `spec` content but `decl` doc?
-		// If we use `spec` content, we miss the `type` keyword for grouped specs.
-		// Let's use `spec` content for now.
-		StartLine: lineFromOffset(content, spec.StartByte()),
-		EndLine:   lineFromOffset(content, spec.EndByte()),
-		Package:   pkgName,
+		Content:    spec.Utf8Text(content),
+		StartLine:  lineFromOffset(content, spec.StartByte()),
+		EndLine:    lineFromOffset(content, spec.EndByte()),
+		Package:    pkgName,
 	}
 }
 
-// getDocComment looks for comment nodes immediately preceding the given node.
 func (e *Extractor) getDocComment(n *sitter.Node, content []byte) string {
-	// Look at previous siblings
 	var comments []string
-
 	prev := n.PrevSibling()
 	for prev != nil {
 		if prev.Kind() == "comment" {
 			text := prev.Utf8Text(content)
-			comments = append([]string{text}, comments...) // Prepend to keep order
-			// Check if there's a gap? Usually comments are adjacent.
-			// Ideally check line numbers to ensure contiguity.
+			comments = append([]string{text}, comments...)
 		} else {
-			// Stop if we hit something else (whitespace/newlines are skipped by Next/Prev sibling usually?
-			// No, Tree-sitter includes everything or skips named?
-			// Go grammar usually hides layout.
-			// Actually bindings/go might not expose whitespace nodes if they are anonymous.
-			// But 'comment' is named or hidden?
-			// Checking grammar...
-			// Assuming 'comment' nodes appear as siblings.
 			break
 		}
 		prev = prev.PrevSibling()
@@ -368,20 +660,15 @@ func (e *Extractor) getDocComment(n *sitter.Node, content []byte) string {
 	return strings.Join(comments, "\n")
 }
 
-// getSignature extracts the signature (up to Body).
 func (e *Extractor) getSignature(n *sitter.Node, content []byte) string {
-	// Simplistic: First line or everything before body?
-	// Body is usually "block".
 	body := n.ChildByFieldName("body")
 	if body != nil {
-		// Return text from start of N to start of Body
 		full := n.Utf8Text(content)
 		bodyText := body.Utf8Text(content)
 		if idx := strings.Index(full, bodyText); idx != -1 {
 			return strings.TrimSpace(full[:idx])
 		}
 	}
-	// Fallback to first line
 	full := n.Utf8Text(content)
 	if idx := strings.Index(full, "\n"); idx != -1 {
 		return full[:idx]
@@ -389,7 +676,6 @@ func (e *Extractor) getSignature(n *sitter.Node, content []byte) string {
 	return full
 }
 
-// getReceiverType helper
 func (e *Extractor) getReceiverType(n *sitter.Node, content []byte) string {
 	for i := uint(0); i < uint(n.ChildCount()); i++ {
 		child := n.Child(i)
@@ -399,7 +685,6 @@ func (e *Extractor) getReceiverType(n *sitter.Node, content []byte) string {
 				t := clean(typeNode.Utf8Text(content))
 				return strings.TrimPrefix(t, "*")
 			}
-			// Fallback
 			for j := uint(0); j < uint(child.ChildCount()); j++ {
 				gc := child.Child(j)
 				if gc.Kind() == "type_identifier" || gc.Kind() == "pointer_type" {

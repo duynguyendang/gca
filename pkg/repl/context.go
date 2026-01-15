@@ -5,9 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dgraph-io/badger/v4"
 	"github.com/duynguyendang/gca/pkg/meb"
-	"github.com/duynguyendang/gca/pkg/meb/keys"
 )
 
 // ProjectSummary holds a structured summary of the codebase for the AI Planner.
@@ -50,53 +48,9 @@ func GenerateProjectSummary(s *meb.MEBStore) (*ProjectSummary, error) {
 	}, nil
 }
 
-// discoverPredicates iterates through the database to find all unique predicates.
-// It scans the PSO index to efficiently collect predicate IDs.
+// discoverPredicates uses the high-level MEBStore API to find all unique predicates.
 func discoverPredicates(s *meb.MEBStore) ([]string, error) {
-	predicateSet := make(map[string]bool)
-
-	// Use a read transaction to scan the PSO index
-	err := s.DB().View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.PrefetchValues = false // Only need keys
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		// Scan PSO index
-		prefix := []byte{keys.PSOPrefix}
-		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-			key := it.Item().Key()
-			if len(key) != keys.TripleKeySize {
-				continue
-			}
-
-			// Decode PSO key to get predicate ID
-			_, pID, _ := keys.DecodePSOKey(key)
-
-			// Resolve predicate ID to string
-			predStr, err := s.Dict().GetString(pID)
-			if err != nil {
-				// Skip unresolvable predicates
-				continue
-			}
-
-			predicateSet[predStr] = true
-		}
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert set to sorted slice
-	predicates := make([]string, 0, len(predicateSet))
-	for pred := range predicateSet {
-		predicates = append(predicates, pred)
-	}
-	sort.Strings(predicates)
-
-	return predicates, nil
+	return s.GetAllPredicates()
 }
 
 // extractPackages scans for "defines" predicate facts and extracts unique directory paths.
@@ -136,11 +90,8 @@ func extractPackages(s *meb.MEBStore) ([]string, error) {
 	return packages, nil
 }
 
-// analyzeTopSymbols counts the frequency of subjects and objects in the database,
-// then returns the top N most frequent symbols (excluding common stdlib types).
+// analyzeTopSymbols retrieves the top N most frequent symbols using MEBStore API.
 func analyzeTopSymbols(s *meb.MEBStore, limit int) ([]string, error) {
-	symbolFreq := make(map[string]int)
-
 	// Common stdlib types to exclude
 	stdlibTypes := map[string]bool{
 		"int": true, "int64": true, "int32": true, "int16": true, "int8": true,
@@ -151,69 +102,11 @@ func analyzeTopSymbols(s *meb.MEBStore, limit int) ([]string, error) {
 		"true": true, "false": true, "nil": true,
 	}
 
-	// Scan all facts and count subject/object occurrences
-	err := s.DB().View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.PrefetchValues = false
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		// Scan SPO index
-		prefix := []byte{keys.SPOPrefix}
-		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-			key := it.Item().Key()
-			if len(key) != keys.TripleKeySize {
-				continue
-			}
-
-			// Decode key to get S, P, O IDs
-			sID, _, oID := keys.DecodeSPOKey(key)
-
-			// Resolve IDs to strings
-			subjectStr, err := s.Dict().GetString(sID)
-			if err == nil && !stdlibTypes[subjectStr] && subjectStr != "" {
-				symbolFreq[subjectStr]++
-			}
-
-			objectStr, err := s.Dict().GetString(oID)
-			if err == nil && !stdlibTypes[objectStr] && objectStr != "" {
-				symbolFreq[objectStr]++
-			}
-		}
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
+	filter := func(sym string) bool {
+		return !stdlibTypes[sym] && sym != ""
 	}
 
-	// Sort by frequency (descending)
-	type symbolCount struct {
-		symbol string
-		count  int
-	}
-
-	symbols := make([]symbolCount, 0, len(symbolFreq))
-	for symbol, count := range symbolFreq {
-		symbols = append(symbols, symbolCount{symbol, count})
-	}
-
-	sort.Slice(symbols, func(i, j int) bool {
-		return symbols[i].count > symbols[j].count
-	})
-
-	// Take top N
-	topN := limit
-	if topN > len(symbols) {
-		topN = len(symbols)
-	}
-
-	result := make([]string, topN)
-	for i := 0; i < topN; i++ {
-		result[i] = symbols[i].symbol
-	}
-
-	return result, nil
+	return s.GetTopSymbols(limit, filter)
 }
 
 // gatherStats computes high-level system statistics.

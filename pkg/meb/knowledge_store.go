@@ -249,6 +249,80 @@ func (m *MEBStore) DeleteGraph(graph string) error {
 	return nil
 }
 
+// DeleteFactsBySubject removes all facts where the subject matches the given string.
+// Used for incremental updates to clear old file facts.
+func (m *MEBStore) DeleteFactsBySubject(subject string) error {
+	sID, err := m.dict.GetID(subject)
+	if err != nil {
+		// Subject not found, nothing to delete
+		return nil
+	}
+
+	// SPO Prefix scan for this subject
+	prefix := keys.EncodeSPOPrefix(sID, 0)
+
+	// Collect keys to delete
+	var keysToDelete [][]byte
+
+	err = m.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			item := it.Item()
+			k := item.KeyCopy(nil)
+			keysToDelete = append(keysToDelete, k)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to scan subject keys: %w", err)
+	}
+
+	if len(keysToDelete) == 0 {
+		return nil
+	}
+
+	// Delete in batch
+	wb := m.db.NewWriteBatch()
+	defer wb.Cancel()
+
+	count := 0
+	for _, spoKey := range keysToDelete {
+		s, p, o := keys.DecodeSPOKey(spoKey)
+
+		// Delete SPO
+		if err := wb.Delete(spoKey); err != nil {
+			return err
+		}
+
+		// Delete OPS
+		opsKey := keys.EncodeOPSKey(s, p, o)
+		if err := wb.Delete(opsKey); err != nil {
+			return err
+		}
+
+		// Delete PSO
+		psoKey := keys.EncodePSOKey(s, p, o)
+		if err := wb.Delete(psoKey); err != nil {
+			return err
+		}
+
+		// Decrement count
+		m.numFacts.Add(^uint64(0))
+		count++
+	}
+
+	if err := wb.Flush(); err != nil {
+		return fmt.Errorf("failed to flush delete batch: %w", err)
+	}
+
+	slog.Debug("deleted facts for subject", "subject", subject, "count", count)
+	return nil
+}
+
 // Query executes a Datalog query and returns results.
 // Implements Multi-Atom Nested Loop Join.
 func (m *MEBStore) Query(ctx context.Context, query string) ([]map[string]any, error) {

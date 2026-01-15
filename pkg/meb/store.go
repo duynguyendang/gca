@@ -36,6 +36,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -63,7 +64,7 @@ type MEBStore struct {
 	config *store.Config
 
 	// Mutex for predicate table registration
-	mu sync.RWMutex
+	mu *sync.RWMutex
 
 	// numFacts tracks the total number of facts in RAM.
 	// We use atomic.Uint64 for lock-free thread safety.
@@ -72,6 +73,13 @@ type MEBStore struct {
 
 	// Vector registry for MRL vector search
 	vectors *vector.VectorRegistry
+
+	// Active transaction for batched operations (nil if not in batch)
+	txn *badger.Txn
+	// Flag to indicate if txn is owned by this instance (true) or inherited (false)
+	// Actually, if txn is set in struct, it's borrowed.
+	// But we need to know if we should commit/discard.
+	// Simpler: if txn != nil, we are inside ExecuteBatch, so we use it and DO NOT commit/discard.
 }
 
 // loadStats reads the counter from disk into RAM.
@@ -172,6 +180,7 @@ func NewMEBStore(cfg *store.Config) (*MEBStore, error) {
 		dict:       dictEncoder,
 		predicates: make(map[ast.PredicateSym]*predicates.PredicateTable),
 		config:     cfg,
+		mu:         &sync.RWMutex{},
 		vectors:    vector.NewRegistry(db),
 	}
 
@@ -199,6 +208,74 @@ func (m *MEBStore) registerDefaultPredicates() {
 	// Register "triples" predicate for subject-predicate-object relationships
 	triplesPred := ast.PredicateSym{Symbol: "triples", Arity: 3}
 	m.predicates[triplesPred] = predicates.NewPredicateTable(m.db, m.dict, triplesPred, keys.SPOPrefix)
+}
+
+// SetMetadata writes a metadata pair to the store.
+func (m *MEBStore) SetMetadata(key, value string) error {
+	return m.withWriteTxn(func(txn *badger.Txn) error {
+		// Use a specific prefix for metadata, e.g., "meta:"
+		// We can use a simple prefix convention in the key itself or a separate keyspace.
+		// For simplicity/compatibility, let's just prefix the key string.
+		// But wait, are we using existing keys package?
+		// keys package handles binary keys. Metadata usually implies string keys in a separate namespace.
+		// Let's assume we store them as raw keys with a prefix "meta:".
+		fullKey := []byte("meta:" + key)
+		return txn.Set(fullKey, []byte(value))
+	})
+}
+
+// GetMetadata retrieves a metadata value.
+func (m *MEBStore) GetMetadata(key string) (string, error) {
+	var value []byte
+	err := m.withReadTxn(func(txn *badger.Txn) error {
+		fullKey := []byte("meta:" + key)
+		item, err := txn.Get(fullKey)
+		if err != nil {
+			return err
+		}
+		return item.Value(func(val []byte) error {
+			value = append([]byte(nil), val...)
+			return nil
+		})
+	})
+	if err != nil {
+		if err == badger.ErrKeyNotFound {
+			return "", nil // Return empty string if not found
+		}
+		return "", err
+	}
+	return string(value), nil
+}
+
+// ResolveID converts a numeric ID back to its string representation.
+func (m *MEBStore) ResolveID(id uint64) (string, bool) {
+	val, err := m.dict.GetString(id)
+	if err != nil {
+		return "", false
+	}
+	return val, true
+}
+
+// LookupID finds the ID for a given string.
+func (m *MEBStore) LookupID(val string) (uint64, bool) {
+	id, err := m.dict.GetID(val)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
+}
+
+// ExecuteBatch executes a function within a single transaction.
+func (m *MEBStore) ExecuteBatch(fn func(store *MEBStore) error) error {
+	// Start a new update transaction
+	return m.db.Update(func(txn *badger.Txn) error {
+		// Create a shallow copy of the store
+		batchedStore := *m
+		// Inject the transaction
+		batchedStore.txn = txn
+		// Execute the callback with the batched store
+		return fn(&batchedStore)
+	})
 }
 
 // newTxn creates a new read-only transaction.
@@ -340,7 +417,7 @@ func (m *MEBStore) Vectors() *vector.VectorRegistry {
 // Example:
 //
 //	results, err := store.Find().
-//	    SimilarTo(embedding).
+//	    SimilarTo(embedding, 0.8).
 //	    Where("author", "alice").
 //	    Limit(5).
 //	    Execute()
@@ -348,14 +425,124 @@ func (m *MEBStore) Find() *Builder {
 	return NewBuilder(m)
 }
 
-// DB returns the underlying BadgerDB instance for direct access.
-// Use this carefully, as direct DB access bypasses the MEB abstraction layer.
-func (m *MEBStore) DB() *badger.DB {
-	return m.db
+// GetAllPredicates returns a sorted list of all unique predicates in the store.
+func (m *MEBStore) GetAllPredicates() ([]string, error) {
+	predicateSet := make(map[string]bool)
+
+	// Use a read transaction to scan the PSO index
+	err := m.withReadTxn(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false // Only need keys
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		// Scan PSO index
+		prefix := []byte{keys.PSOPrefix}
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			key := it.Item().Key()
+			if len(key) != keys.TripleKeySize {
+				continue
+			}
+
+			// Decode PSO key to get predicate ID
+			_, pID, _ := keys.DecodePSOKey(key)
+
+			// Resolve predicate ID to string
+			predStr, err := m.dict.GetString(pID)
+			if err != nil {
+				// Skip unresolvable predicates
+				continue
+			}
+
+			predicateSet[predStr] = true
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert set to sorted slice
+	predicates := make([]string, 0, len(predicateSet))
+	for pred := range predicateSet {
+		predicates = append(predicates, pred)
+	}
+	sort.Strings(predicates)
+
+	return predicates, nil
 }
 
-// Dict returns the dictionary encoder for ID/string resolution.
-// This is useful for advanced operations that need direct dictionary access.
-func (m *MEBStore) Dict() dict.Dictionary {
-	return m.dict
+// GetTopSymbols returns the top N most frequent symbols (subjects/objects).
+// An optional filter function can be provided to exclude certain symbols.
+func (m *MEBStore) GetTopSymbols(limit int, filter func(string) bool) ([]string, error) {
+	symbolFreq := make(map[string]int)
+
+	// Scan all facts and count subject/object occurrences
+	err := m.withReadTxn(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		// Scan SPO index
+		prefix := []byte{keys.SPOPrefix}
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			key := it.Item().Key()
+			if len(key) != keys.TripleKeySize {
+				continue
+			}
+
+			// Decode key to get S, P, O IDs
+			sID, _, oID := keys.DecodeSPOKey(key)
+
+			// Resolve IDs to strings
+			subjectStr, err := m.dict.GetString(sID)
+			if err == nil {
+				if filter == nil || filter(subjectStr) {
+					symbolFreq[subjectStr]++
+				}
+			}
+
+			objectStr, err := m.dict.GetString(oID)
+			if err == nil {
+				if filter == nil || filter(objectStr) {
+					symbolFreq[objectStr]++
+				}
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Sort by frequency (descending)
+	type symbolCount struct {
+		symbol string
+		count  int
+	}
+
+	symbols := make([]symbolCount, 0, len(symbolFreq))
+	for symbol, count := range symbolFreq {
+		symbols = append(symbols, symbolCount{symbol, count})
+	}
+
+	sort.Slice(symbols, func(i, j int) bool {
+		return symbols[i].count > symbols[j].count
+	})
+
+	// Take top N
+	topN := limit
+	if topN > len(symbols) {
+		topN = len(symbols)
+	}
+
+	result := make([]string, topN)
+	for i := 0; i < topN; i++ {
+		result[i] = symbols[i].symbol
+	}
+
+	return result, nil
 }

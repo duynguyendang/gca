@@ -10,6 +10,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/meb/store"
 	"github.com/duynguyendang/gca/pkg/repl"
+	"github.com/duynguyendang/gca/pkg/server"
 
 	"github.com/joho/godotenv"
 )
@@ -17,6 +18,8 @@ import (
 func main() {
 	// Define flags
 	ingestMode := flag.Bool("ingest", false, "run in ingestion mode (requires source and data folder arguments)")
+	serverMode := flag.Bool("server", false, "run REST API server")
+	sourceFlag := flag.String("source", "", "path to source code (for source view)")
 
 	flag.Parse() // Parse flags early
 
@@ -43,6 +46,11 @@ func main() {
 		// Optional: user can provide data folder as first arg
 		if len(args) >= 1 {
 			dataDir = args[0]
+		}
+
+		// If explicit source flag is provided, use it
+		if *sourceFlag != "" {
+			sourceDir = *sourceFlag
 		}
 	}
 
@@ -80,6 +88,19 @@ func main() {
 		fmt.Println("Skipping stats recalculation and manual writes in ReadOnly mode.")
 	}
 
-	// Start Interactive Repl
-	repl.Run(s, readOnly)
+	if *serverMode {
+		fmt.Println("Starting REST API Server on :8080...")
+		srv := server.NewServer(s, sourceDir)
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
+		}
+		addr := ":" + port
+		if err := srv.Run(addr); err != nil {
+			log.Fatalf("Server failed: %v", err)
+		}
+	} else {
+		// Start Interactive Repl
+		repl.Run(s, readOnly)
+	}
 }
