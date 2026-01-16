@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/duynguyendang/gca/pkg/meb"
 	sitter "github.com/tree-sitter/go-tree-sitter"
 	golang "github.com/tree-sitter/tree-sitter-go/bindings/go"
 	javascript "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
@@ -516,7 +517,7 @@ func (e *Extractor) extractJSRefs(n *sitter.Node, content []byte, relPath, curre
 			src := clean(sourceNode.Utf8Text(content))
 			*refs = append(*refs, Reference{
 				Subject:   relPath,
-				Predicate: "imports",
+				Predicate: meb.PredImports,
 				Object:    src,
 				Line:      lineFromOffset(content, n.StartByte()),
 			})
@@ -528,7 +529,7 @@ func (e *Extractor) extractJSRefs(n *sitter.Node, content []byte, relPath, curre
 				callee := clean(funcNode.Utf8Text(content))
 				*refs = append(*refs, Reference{
 					Subject:   currentScope,
-					Predicate: "calls",
+					Predicate: meb.PredCalls,
 					Object:    callee,
 					Line:      lineFromOffset(content, n.StartByte()),
 				})
@@ -547,7 +548,7 @@ func (e *Extractor) addImportRef(content []byte, node *sitter.Node, relPath stri
 		impPath := clean(pathNode.Utf8Text(content))
 		*refs = append(*refs, Reference{
 			Subject:   relPath,
-			Predicate: "imports",
+			Predicate: meb.PredImports,
 			Object:    impPath,
 			Line:      lineFromOffset(content, node.StartByte()),
 		})

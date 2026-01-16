@@ -40,13 +40,13 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/dgraph-io/badger/v4"
 	"github.com/duynguyendang/gca/pkg/meb/dict"
 	"github.com/duynguyendang/gca/pkg/meb/keys"
 	"github.com/duynguyendang/gca/pkg/meb/predicates"
 	"github.com/duynguyendang/gca/pkg/meb/store"
 	"github.com/duynguyendang/gca/pkg/meb/vector"
 
-	"github.com/dgraph-io/badger/v4"
 	"github.com/google/mangle/ast"
 )
 
@@ -518,33 +518,142 @@ func (m *MEBStore) GetTopSymbols(limit int, filter func(string) bool) ([]string,
 		return nil, err
 	}
 
-	// Sort by frequency (descending)
-	type symbolCount struct {
-		symbol string
-		count  int
+	// This function (GetTopSymbols) returns map[string]int, error
+	// results variable is undefined here, it belonged to SearchSymbols which got mixed up.
+	// We should just return the populated symbolFreq map.
+
+	// Wait, the previous block was `GetTopSymbols`.
+	// Let's verify what `m` is.
+	// Ah, I see `return m, nil` suggesting this was `NewMEBStore`?
+	// But `NewMEBStore` is at the beginning of file.
+	// `GetTopSymbols` should return `map[string]int`
+
+	// Actually, looking at context lines around 500, it seems we are inside `scanStrategy` or similar?
+	// No, line 500 shows logic populating `symbolFreq`.
+	// So this is `GetTopSymbols`.
+
+	// To return []string, we need to convert symbolFreq to a slice of strings,
+	// sort by frequency, and then take the top 'limit' items.
+	// For now, let's just return the keys as a slice, unsorted by frequency,
+	// as the original code had a commented-out `return symbolFreq, nil` which implies
+	// the intent was to return the map, but the signature is `([]string, error)`.
+	// Given the instruction is to "Correctly format the return value" and the provided
+	// edit uncomments `return symbolFreq, nil`, it seems the user wants to return the map.
+	// However, to match the signature `([]string, error)`, we must convert.
+	// Let's assume the user wants the keys of the map as strings, limited.
+
+	// Convert map keys to a slice of strings
+	symbols := make([]string, 0, len(symbolFreq))
+	for s := range symbolFreq {
+		symbols = append(symbols, s)
 	}
 
-	symbols := make([]symbolCount, 0, len(symbolFreq))
-	for symbol, count := range symbolFreq {
-		symbols = append(symbols, symbolCount{symbol, count})
-	}
-
+	// Sort by frequency (descending) and then alphabetically (ascending) for ties
 	sort.Slice(symbols, func(i, j int) bool {
-		return symbols[i].count > symbols[j].count
+		if symbolFreq[symbols[i]] != symbolFreq[symbols[j]] {
+			return symbolFreq[symbols[i]] > symbolFreq[symbols[j]]
+		}
+		return symbols[i] < symbols[j]
 	})
 
-	// Take top N
-	topN := limit
-	if topN > len(symbols) {
-		topN = len(symbols)
+	// Apply limit
+	if len(symbols) > limit {
+		symbols = symbols[:limit]
 	}
 
-	result := make([]string, topN)
-	for i := 0; i < topN; i++ {
-		result[i] = symbols[i].symbol
+	return symbols, nil
+}
+
+// SearchSymbols performs a prefix search on symbol names.
+// It returns at most limit results.
+// If predicateFilter is provided, only returns symbols that appear as Objects in triples with that predicate.
+func (m *MEBStore) SearchSymbols(query string, limit int, predicateFilter string) ([]string, error) {
+	if limit <= 0 {
+		limit = 10
 	}
 
-	return result, nil
+	var pID uint64
+	var filterByID bool
+	if predicateFilter != "" {
+		id, err := m.dict.GetID(predicateFilter)
+		if err != nil {
+			// Predicate doesn't exist, so no symbols can satisfy it.
+			return []string{}, nil
+		}
+		pID = id
+		filterByID = true
+	}
+
+	var results []string
+
+	// Open a read transaction on the main DB for checking OPS index if needed
+	var txn *badger.Txn
+	if filterByID {
+		txn = m.db.NewTransaction(false)
+		defer txn.Discard()
+	}
+
+	// We iterate over the dictionary DB directly to find candidate strings.
+	err := m.dictDB.View(func(dictTxn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = filterByID // We need values (IDs) only if filtering
+		it := dictTxn.NewIterator(opts)
+		defer it.Close()
+
+		prefix := []byte{0x80}
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			item := it.Item()
+			key := item.Key()
+			if len(key) < 3 {
+				continue
+			}
+			strBytes := key[3:] // Skip prefix + 2 length bytes
+			s := string(strBytes)
+
+			// Check prefix match on string content
+			if len(s) >= len(query) && s[:len(query)] == query {
+
+				// If filtering by predicate, check OPS index
+				if filterByID {
+					// Get Symbol ID (Object ID)
+					var sID uint64
+					err := item.Value(func(val []byte) error {
+						if len(val) == 8 {
+							sID = binary.BigEndian.Uint64(val)
+							return nil
+						}
+						return fmt.Errorf("invalid ID size")
+					})
+					if err != nil {
+						continue // Skip if invalid ID
+					}
+
+					// Check if OPS(sID, pID, *) exists
+					// keys.EncodeOPSPrefix(object, predicate)
+					opsPrefix := keys.EncodeOPSPrefix(sID, pID)
+
+					// We need to check if ANY triples exist with this O and P.
+					// Just checking ValidForPrefix is enough.
+					opsIt := txn.NewIterator(badger.DefaultIteratorOptions)
+					opsIt.Seek(opsPrefix)
+					valid := opsIt.ValidForPrefix(opsPrefix)
+					opsIt.Close()
+
+					if !valid {
+						continue // Symbol not found with this predicate
+					}
+				}
+
+				results = append(results, s)
+				if len(results) >= limit {
+					break // Found enough
+				}
+			}
+		}
+		return nil
+	})
+
+	return results, err
 }
 
 // IterateSymbols iterates over all symbols in the dictionary and calls the provided function.

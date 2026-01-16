@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/export"
+	"github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/repl"
 	"github.com/gin-gonic/gin"
 )
@@ -44,6 +44,8 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/v1/query", s.handleQuery)
 	s.router.GET("/v1/source", s.handleSource)
 	s.router.GET("/v1/summary", s.handleSummary)
+	s.router.GET("/v1/predicates", s.handlePredicates)
+	s.router.GET("/v1/symbols", s.handleSymbols)
 }
 
 // healthCheck returns 200 OK.
@@ -105,134 +107,6 @@ func (s *Server) handleQuery(c *gin.Context) {
 }
 
 // Graph structures
-type GraphNode struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Kind  string `json:"kind"`
-	Group string `json:"group"`
-}
-
-type GraphLink struct {
-	Source string `json:"source"`
-	Target string `json:"target"`
-	Label  string `json:"label"`
-}
-
-type GraphResponse struct {
-	Nodes []GraphNode `json:"nodes"`
-	Links []GraphLink `json:"links"`
-}
-
-func transformToGraph(results []map[string]any) GraphResponse {
-	nodeMap := make(map[string]GraphNode)
-	var links []GraphLink
-
-	for _, row := range results {
-		// Assume triples(S, P, O) format roughly.
-		// We really need to know WHICH variables map to S, P, O.
-		// The query engine returns map[string]any.
-		// Let's assume the query was something like triples(S, P, O).
-		// But the input is generic Datalog.
-		// In the requirement: "Transform the resulting triples into a flat graph format".
-		// This implies the query MUST return S, P, O or similar structures.
-		// Let's look for known variable names: S, P, O, Subject, Predicate, Object?
-		// Or just map *any* relation found.
-
-		// Heuristic: If we have at least 2 variables, treat as link?
-		// Or if we specifically look for 'S', 'P', 'O'.
-		// Let's try to find keys that look like Subject/Object.
-		// Or simply: Any 2 values in a row form a link? That's risky.
-
-		// Re-reading logic: "Transform the resulting triples into a flat graph format: { nodes: [], links: [] }."
-		// This suggests the API expects the query to output "triples".
-		// If the user queries `triples(?S, ?P, ?O)`, we get S, P, O.
-
-		var subj, pred, obj string
-
-		// Try to identify S, P, O from row
-		if s, ok := row["S"]; ok {
-			subj = fmt.Sprint(s)
-		} else if s, ok := row["Subject"]; ok {
-			subj = fmt.Sprint(s)
-		}
-
-		if p, ok := row["P"]; ok {
-			pred = fmt.Sprint(p)
-		} else if p, ok := row["Predicate"]; ok {
-			pred = fmt.Sprint(p)
-		}
-
-		if o, ok := row["O"]; ok {
-			obj = fmt.Sprint(o)
-		} else if o, ok := row["Object"]; ok {
-			obj = fmt.Sprint(o)
-		}
-
-		// If we didn't find them by name, maybe it's just implicit?
-		// Let's fallback to "S, P, O" exact match as primary requirement for graph view.
-		if subj != "" && obj != "" {
-			if pred == "" {
-				pred = "related"
-			}
-
-			// Add Nodes
-			if _, exists := nodeMap[subj]; !exists {
-				nodeMap[subj] = createNode(subj)
-			}
-			if _, exists := nodeMap[obj]; !exists {
-				nodeMap[obj] = createNode(obj)
-			}
-
-			// Add Link
-			links = append(links, GraphLink{
-				Source: subj,
-				Target: obj,
-				Label:  pred,
-			})
-		}
-	}
-
-	var nodes []GraphNode
-	for _, n := range nodeMap {
-		nodes = append(nodes, n)
-	}
-
-	return GraphResponse{
-		Nodes: nodes,
-		Links: links,
-	}
-}
-
-func createNode(id string) GraphNode {
-	// Logic: set id as full path, name as short filename/symbol.
-	// Enrich with kind (func, struct) and group (package).
-	// Start with basic defaults.
-
-	name := filepath.Base(id)
-	group := filepath.Dir(id)
-	kind := "unknown"
-
-	// Heuristics for Kind based on ID format?
-	// e.g., "mypkg/file.go:MyFunc" -> Kind: Code
-	// This is "Smart Labeling".
-	if strings.Contains(id, ".go") {
-		kind = "file"
-		if strings.Contains(id, ":") {
-			kind = "symbol"
-			parts := strings.Split(id, ":")
-			if len(parts) > 1 {
-				name = parts[1]
-			}
-		}
-	}
-
-	return GraphNode{
-		ID:    id,
-		Name:  name,
-		Kind:  kind,
-		Group: group,
-	}
-}
 
 // handleSource returns source code for a given file ID.
 func (s *Server) handleSource(c *gin.Context) {
@@ -264,7 +138,7 @@ func (s *Server) handleSource(c *gin.Context) {
 	// We scan for the source code fact.
 	var content string
 	found := false
-	for fact, _ := range store.Scan(id, "has_source_code", "", "") {
+	for fact := range store.Scan(id, meb.PredHasSourceCode, "", "") {
 		if str, ok := fact.Object.(string); ok {
 			content = str
 			found = true
@@ -333,4 +207,97 @@ func (s *Server) handleSummary(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, summary)
+}
+
+// handlePredicates returns the list of active predicates in the database.
+func (s *Server) handlePredicates(c *gin.Context) {
+	projectID := c.Query("project")
+
+	// If no project specified, try to pick the first one available
+	if projectID == "" {
+		projects, err := s.manager.ListProjects()
+		if err == nil && len(projects) > 0 {
+			projectID = projects[0].ID
+		}
+	}
+
+	if projectID == "" {
+		c.JSON(http.StatusOK, gin.H{"predicates": []map[string]string{}})
+		return
+	}
+
+	store, err := s.manager.GetStore(projectID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+		return
+	}
+
+	activePreds, err := store.GetAllPredicates()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get predicates: %v", err)})
+		return
+	}
+
+	// Static metadata for known system predicates
+	// meta := map[string]struct{...} replaced by meb.SystemPredicates
+
+	var results []map[string]string
+	for _, p := range activePreds {
+		desc := "Custom predicate"
+		ex := fmt.Sprintf("triples(S, '%s', O)", p)
+		if m, ok := meb.SystemPredicates[p]; ok {
+			desc = m.Description
+			ex = m.Example
+		}
+		results = append(results, map[string]string{
+			"name":        p,
+			"description": desc,
+			"example":     ex,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"predicates": results})
+}
+
+// handleSymbols provides fast symbol search/autocomplete.
+func (s *Server) handleSymbols(c *gin.Context) {
+	projectID := c.Query("project")
+	query := c.Query("q")
+
+	if projectID == "" {
+		// Default to first project if available, logic similar to predicates?
+		// Or keep strictly requiring projectID for search.
+		// Let's allow default to match predicates behavior for consistency/ease of use.
+		projects, err := s.manager.ListProjects()
+		if err == nil && len(projects) > 0 {
+			projectID = projects[0].ID
+		}
+	}
+
+	if projectID == "" {
+		c.JSON(http.StatusOK, gin.H{"symbols": []string{}})
+		return
+	}
+
+	store, err := s.manager.GetStore(projectID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+		return
+	}
+
+	// Limit results to 50 for autocomplete
+	// Use 'p' param for predicate filter, default to 'defines_symbol' to show only defined symbols by default.
+	// This matches user expectation of "symbols not facts".
+	predicate := c.Query("p")
+	if predicate == "" && c.Query("all") != "true" {
+		predicate = meb.PredDefinesSymbol
+	}
+
+	results, err := store.SearchSymbols(query, 50, predicate)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Search failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"symbols": results})
 }

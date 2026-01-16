@@ -91,7 +91,7 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 			localExt := NewExtractor() // Thread-local extractor
 			for path := range jobs {
 				log.Printf("Worker %d processing: %s", workerID, path)
-				if err := processFileIncremental(ctx, s, nil, localExt, path, testDir); err != nil {
+				if err := processFileIncremental(ctx, s, localExt, path, testDir); err != nil {
 					log.Printf("Error processing file %s: %v", path, err)
 					pass2ErrorCount.Add(1)
 				}
@@ -126,7 +126,7 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 }
 
 // processFileIncremental handles hashing and skipping
-func processFileIncremental(ctx context.Context, s *meb.MEBStore, embedder *EmbeddingService, ext *Extractor, path string, sourceRoot string) error {
+func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext *Extractor, path string, sourceRoot string) error {
 	relPath, _ := filepath.Rel(sourceRoot, path)
 
 	// 1. Calculate Hash
@@ -137,7 +137,7 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, embedder *Embe
 
 	// 2. Check Existing Hash
 	qPath := fmt.Sprintf("\"%s\"", strings.ReplaceAll(relPath, "\"", "\\\""))
-	query := fmt.Sprintf(`triples(%s, "hash_sha256", ?h)`, qPath)
+	query := fmt.Sprintf(`triples(%s, "%s", ?h)`, qPath, meb.PredHash)
 
 	res, err := s.Query(ctx, query)
 	if err == nil && len(res) > 0 {
@@ -152,7 +152,7 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, embedder *Embe
 	// 3. File Changed or New -> Process
 	// Clear old facts using Subject = relPath
 	// Step 3a: Find symbols defined by this file (to delete them)
-	qSym := fmt.Sprintf(`triples(%s, "defines_symbol", ?sym)`, qPath)
+	qSym := fmt.Sprintf(`triples(%s, "%s", ?sym)`, qPath, meb.PredDefinesSymbol)
 	symRes, _ := s.Query(ctx, qSym)
 
 	// Step 3b: Delete File facts
@@ -168,20 +168,20 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, embedder *Embe
 	}
 
 	// Step 4: Full Processing (Extraction & Storage)
-	if err := processFile(ctx, s, embedder, ext, path, sourceRoot); err != nil {
+	if err := processFile(s, ext, path, sourceRoot); err != nil {
 		return err
 	}
 
 	// Step 5: Store New Hash
 	return s.AddFact(meb.Fact{
 		Subject:   relPath,
-		Predicate: "hash_sha256",
+		Predicate: meb.PredHash,
 		Object:    newHash,
 		Graph:     "default",
 	})
 }
 
-func processFile(ctx context.Context, s *meb.MEBStore, embedder *EmbeddingService, ext *Extractor, path string, sourceRoot string) error {
+func processFile(s *meb.MEBStore, ext *Extractor, path string, sourceRoot string) error {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -213,11 +213,11 @@ func processFile(ctx context.Context, s *meb.MEBStore, embedder *EmbeddingServic
 		// But passing empty metadata to avoid individual AddFact calls inside it.
 		// We will add metadata facts in our big batch.
 		meta := map[string]any{
-			"type":       sym.Type,
-			"file":       relPath,
-			"start_line": sym.StartLine,
-			"end_line":   sym.EndLine,
-			"package":    sym.Package,
+			meb.PredType:      sym.Type,
+			meb.PredFile:      relPath,
+			meb.PredStartLine: sym.StartLine,
+			meb.PredEndLine:   sym.EndLine,
+			meb.PredPackage:   sym.Package,
 		}
 
 		// 1. Add Document content/vector (optimized: no metadata passed to avoid individual writes)
@@ -226,9 +226,9 @@ func processFile(ctx context.Context, s *meb.MEBStore, embedder *EmbeddingServic
 		}
 
 		// 2. Add structural/metadata facts to BATCH
-		batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: "type", Object: sym.Type, Graph: "default"})
-		batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: "defines", Object: sym.Name, Graph: "default"})
-		batch = append(batch, meb.Fact{Subject: relPath, Predicate: "defines_symbol", Object: sym.ID, Graph: "default"})
+		batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: meb.PredType, Object: sym.Type, Graph: "default"})
+		batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: meb.PredDefines, Object: sym.Name, Graph: "default"})
+		batch = append(batch, meb.Fact{Subject: relPath, Predicate: meb.PredDefinesSymbol, Object: sym.ID, Graph: "default"})
 
 		// Metadata facts
 		for k, v := range meta {
@@ -236,7 +236,7 @@ func processFile(ctx context.Context, s *meb.MEBStore, embedder *EmbeddingServic
 		}
 
 		// Add Source Code fact
-		batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: "has_source_code", Object: sym.Content, Graph: "default"})
+		batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: meb.PredHasSourceCode, Object: sym.Content, Graph: "default"})
 	}
 
 	// Extract References (Calls, Imports)
