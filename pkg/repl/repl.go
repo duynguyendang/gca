@@ -199,6 +199,74 @@ func Run(s *meb.MEBStore, readOnly bool) {
 			continue
 		}
 
+		// Handle search command
+		if strings.HasPrefix(line, "search ") {
+			query := strings.TrimPrefix(line, "search ")
+			if query == "" {
+				fmt.Println("Usage: search <query>")
+				continue
+			}
+
+			fmt.Println("🔍 Analyzing query...")
+
+			// 1. Extract keywords
+			keywords, err := ExtractKeywords(context.Background(), query)
+			if err != nil {
+				fmt.Printf("⚠️ Keyword extraction failed (using raw query): %v\n", err)
+				keywords = []string{query}
+			} else {
+				fmt.Printf("🔑 Keywords: %v\n", keywords)
+			}
+
+			// 2. Gather candidates from MEBStore
+			// We scan all symbols in the dictionary
+			var candidates []string
+			err = s.IterateSymbols(func(sym string) bool {
+				candidates = append(candidates, sym)
+				return true
+			})
+			if err != nil {
+				fmt.Printf("❌ Failed to scan symbols: %v\n", err)
+				continue
+			}
+
+			// 3. Fuzzy Match
+			// tailoredQuery combines keywords for better fuzzy matching context if needed,
+			// but our search logic handles the raw query + tokenization.
+			// Passing the raw user query usually works best with our logic,
+			// but we can also append keywords if the query is very vague.
+			// Let's pass the raw query.
+
+			// Note: If we really want to leverage the "Technical Keywords" extracted by Gemini,
+			// we should probably pass THOSE to the updated FindNodesBySimilarity or join them.
+			// The current FindNodesBySimilarity takes a single query string.
+			// Let's try joining keywords as the query, or better, stick to user query
+			// and treat keywords as "boosters"??
+			// Actually, let's trust the user's raw query for the Levenshtein part (typos),
+			// and maybe the keywords help?
+			//
+			// If I use `keywords` joined by space, it might clean up "find the function" -> "function".
+			// Let's try using the extracted keywords joined as the query string,
+			// as Gemini is likely smarter at picking the important parts.
+			searchQuery := strings.Join(keywords, " ")
+			if len(keywords) == 0 {
+				searchQuery = query
+			}
+
+			fmt.Printf("🔎 Searching for: %q\n", searchQuery)
+			results := FindNodesBySimilarity(searchQuery, candidates)
+
+			if len(results) == 0 {
+				fmt.Println("📭 No matching nodes found.")
+			} else {
+				fmt.Printf("\n✅ Search Results (%d matches):\n", len(results))
+				for i, r := range results {
+					fmt.Printf("%d. %s\n", i+1, r)
+				}
+			}
+			continue
+		}
+
 		// Detect if this is a follow-up query
 		isFollowUp := isFollowUpQuery(line) && session.HasContext()
 

@@ -546,3 +546,52 @@ func (m *MEBStore) GetTopSymbols(limit int, filter func(string) bool) ([]string,
 
 	return result, nil
 }
+
+// IterateSymbols iterates over all symbols in the dictionary and calls the provided function.
+// If the function returns false, iteration stops.
+// This is useful for fuzzy search or other full-scan operations.
+func (m *MEBStore) IterateSymbols(fn func(string) bool) error {
+	// We need to access the dictionary directly
+	// Since MEBStore doesn't expose the dictionary DB, we must assume
+	// we can iterate via the dictionary interface if it supported it.
+	// However, the current Dictionary interface does not support iteration.
+	// But! We have access to m.dictDB which IS the dictionary database.
+	// We can iterate over it directly here since MEBStore owns it.
+
+	return m.dictDB.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false // We only need keys (which contain the string)
+		// Wait, the key format for Forward index (String -> ID) is:
+		// [0x80 | len(2) | string... ]
+		// So the string IS in the key.
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		// Dictionary Forward Prefix is 0x80
+		// We must match what is in pkg/meb/dict/encoder.go
+		// To avoid circular dependency or magic numbers, we should export the prefix from dict package
+		// or just use 0x80 as we know it internal to this repo.
+		// Let's check imports. We import "github.com/duynguyendang/gca/pkg/meb/dict"
+		// But dict package doesn't export the constants.
+		// For now, I will use 0x80 based on my read of encoder.go.
+		prefix := []byte{0x80}
+
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			key := it.Item().Key()
+			// Format: [0x80 | len(2) | string... ]
+			if len(key) < 3 {
+				continue
+			}
+			// Extract string
+			// We don't even need to read the length if we just take everything after byte 3
+			// strictly speaking length is at key[1:3].
+			strBytes := key[3:]
+			s := string(strBytes)
+
+			if !fn(s) {
+				break
+			}
+		}
+		return nil
+	})
+}

@@ -22,6 +22,7 @@ profile.cov
 test-code/
 data/
 bkup/
+docs/
 
 # Go workspace file
 go.work
