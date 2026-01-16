@@ -238,22 +238,19 @@ func (s *Server) handlePredicates(c *gin.Context) {
 		return
 	}
 
-	// Static metadata for known system predicates
-	// meta := map[string]struct{...} replaced by meb.SystemPredicates
+	// Static metadata for known system predicates provided by meb.SystemPredicates
+	// (Map removed)
 
 	var results []map[string]string
 	for _, p := range activePreds {
-		desc := "Custom predicate"
-		ex := fmt.Sprintf("triples(S, '%s', O)", p)
+		// Only include predicates that are in the SystemPredicates registry (Whitelist)
 		if m, ok := meb.SystemPredicates[p]; ok {
-			desc = m.Description
-			ex = m.Example
+			results = append(results, map[string]string{
+				"name":        p,
+				"description": m.Description,
+				"example":     m.Example,
+			})
 		}
-		results = append(results, map[string]string{
-			"name":        p,
-			"description": desc,
-			"example":     ex,
-		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{"predicates": results})
@@ -290,7 +287,7 @@ func (s *Server) handleSymbols(c *gin.Context) {
 	// This matches user expectation of "symbols not facts".
 	predicate := c.Query("p")
 	if predicate == "" && c.Query("all") != "true" {
-		predicate = meb.PredDefinesSymbol
+		predicate = meb.PredDefines
 	}
 
 	results, err := store.SearchSymbols(query, 50, predicate)

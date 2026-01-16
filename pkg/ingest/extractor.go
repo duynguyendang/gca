@@ -235,12 +235,14 @@ func (e *Extractor) extractGoRefs(n *sitter.Node, content []byte, relPath, curre
 			funcNode := n.ChildByFieldName("function")
 			if funcNode != nil {
 				callee := clean(funcNode.Utf8Text(content))
-				*refs = append(*refs, Reference{
-					Subject:   currentScope,
-					Predicate: "calls",
-					Object:    callee,
-					Line:      lineFromOffset(content, n.StartByte()),
-				})
+				if !isStdLibCall(callee, "go") {
+					*refs = append(*refs, Reference{
+						Subject:   currentScope,
+						Predicate: meb.PredCalls,
+						Object:    callee,
+						Line:      lineFromOffset(content, n.StartByte()),
+					})
+				}
 			}
 		}
 	}
@@ -336,7 +338,7 @@ func (e *Extractor) extractPythonRefs(n *sitter.Node, content []byte, relPath, c
 				imp := clean(child.Utf8Text(content))
 				*refs = append(*refs, Reference{
 					Subject:   relPath,
-					Predicate: "imports",
+					Predicate: meb.PredImports,
 					Object:    imp,
 					Line:      lineFromOffset(content, n.StartByte()),
 				})
@@ -346,7 +348,7 @@ func (e *Extractor) extractPythonRefs(n *sitter.Node, content []byte, relPath, c
 					imp := clean(name.Utf8Text(content))
 					*refs = append(*refs, Reference{
 						Subject:   relPath,
-						Predicate: "imports",
+						Predicate: meb.PredImports,
 						Object:    imp,
 						Line:      lineFromOffset(content, n.StartByte()),
 					})
@@ -360,7 +362,7 @@ func (e *Extractor) extractPythonRefs(n *sitter.Node, content []byte, relPath, c
 			modName := clean(modNameNode.Utf8Text(content))
 			*refs = append(*refs, Reference{
 				Subject:   relPath,
-				Predicate: "imports",
+				Predicate: meb.PredImports,
 				Object:    modName,
 				Line:      lineFromOffset(content, n.StartByte()),
 			})
@@ -370,12 +372,14 @@ func (e *Extractor) extractPythonRefs(n *sitter.Node, content []byte, relPath, c
 			funcNode := n.ChildByFieldName("function")
 			if funcNode != nil {
 				callee := clean(funcNode.Utf8Text(content))
-				*refs = append(*refs, Reference{
-					Subject:   currentScope,
-					Predicate: "calls",
-					Object:    callee,
-					Line:      lineFromOffset(content, n.StartByte()),
-				})
+				if !isStdLibCall(callee, "python") {
+					*refs = append(*refs, Reference{
+						Subject:   currentScope,
+						Predicate: meb.PredCalls,
+						Object:    callee,
+						Line:      lineFromOffset(content, n.StartByte()),
+					})
+				}
 			}
 		}
 	}
@@ -527,12 +531,14 @@ func (e *Extractor) extractJSRefs(n *sitter.Node, content []byte, relPath, curre
 			funcNode := n.ChildByFieldName("function")
 			if funcNode != nil {
 				callee := clean(funcNode.Utf8Text(content))
-				*refs = append(*refs, Reference{
-					Subject:   currentScope,
-					Predicate: meb.PredCalls,
-					Object:    callee,
-					Line:      lineFromOffset(content, n.StartByte()),
-				})
+				if !isStdLibCall(callee, "js") {
+					*refs = append(*refs, Reference{
+						Subject:   currentScope,
+						Predicate: meb.PredCalls,
+						Object:    callee,
+						Line:      lineFromOffset(content, n.StartByte()),
+					})
+				}
 			}
 		}
 	}

@@ -152,7 +152,7 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext *Extractor
 	// 3. File Changed or New -> Process
 	// Clear old facts using Subject = relPath
 	// Step 3a: Find symbols defined by this file (to delete them)
-	qSym := fmt.Sprintf(`triples(%s, "%s", ?sym)`, qPath, meb.PredDefinesSymbol)
+	qSym := fmt.Sprintf(`triples(%s, "%s", ?sym)`, qPath, meb.PredDefines)
 	symRes, _ := s.Query(ctx, qSym)
 
 	// Step 3b: Delete File facts
@@ -212,30 +212,29 @@ func processFile(s *meb.MEBStore, ext *Extractor, path string, sourceRoot string
 		// We use s.AddDocument for the "Document" aspect (content + vector)
 		// But passing empty metadata to avoid individual AddFact calls inside it.
 		// We will add metadata facts in our big batch.
+		// Metadata map for AddDocument (storage only, no graph predicates)
 		meta := map[string]any{
-			meb.PredType:      sym.Type,
-			meb.PredFile:      relPath,
-			meb.PredStartLine: sym.StartLine,
-			meb.PredEndLine:   sym.EndLine,
-			meb.PredPackage:   sym.Package,
+			"file":       relPath,
+			"start_line": sym.StartLine,
+			"end_line":   sym.EndLine,
+			"package":    sym.Package,
 		}
 
-		// 1. Add Document content/vector (optimized: no metadata passed to avoid individual writes)
-		if err := s.AddDocument(sym.ID, []byte(sym.Content), vec, nil); err != nil {
+		// 1. Add Document content/vector with metadata
+		if err := s.AddDocument(sym.ID, []byte(sym.Content), vec, meta); err != nil {
 			log.Printf("Error adding document %s: %v", sym.ID, err)
 		}
 
-		// 2. Add structural/metadata facts to BATCH
+		// 2. Add structural facts to BATCH (Core Predicates only)
 		batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: meb.PredType, Object: sym.Type, Graph: "default"})
-		batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: meb.PredDefines, Object: sym.Name, Graph: "default"})
-		batch = append(batch, meb.Fact{Subject: relPath, Predicate: meb.PredDefinesSymbol, Object: sym.ID, Graph: "default"})
+		batch = append(batch, meb.Fact{Subject: relPath, Predicate: meb.PredDefines, Object: sym.ID, Graph: "default"})
 
-		// Metadata facts
-		for k, v := range meta {
-			batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: k, Object: v, Graph: "default"})
+		// Add Doc predicate if present
+		if sym.DocComment != "" {
+			batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: meb.PredHasDoc, Object: sym.DocComment, Graph: "default"})
 		}
 
-		// Add Source Code fact
+		// Add Source Code fact (Whitelisted System Predicate)
 		batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: meb.PredHasSourceCode, Object: sym.Content, Graph: "default"})
 	}
 
@@ -247,25 +246,11 @@ func processFile(s *meb.MEBStore, ext *Extractor, path string, sourceRoot string
 		for _, ref := range refs {
 			// Resolve callee if possible
 			object := ref.Object
-			if ref.Predicate == "calls" {
+			if ref.Predicate == meb.PredCalls {
 				if resolved, ok := symbolTable[object]; ok {
 					object = resolved
 				}
-
-				// Optional: Add calls_at fact
-				// triples(Caller, "calls_at", LineNumber)
-				// ref.Subject is the Caller Scope (e.g. "path:CallerFunc")
-				// We need "calls_at" to point to the line number.
-				// NOTE: We probably want `calls` fact to remain as is: `calls(Caller, Callee)`.
-				// And add a parallel fact `calls_at(Caller, LineNumber)`?
-				// But one caller can call multiple things.
-				// `calls_at` needs to target the unique call event.
-				// User Req: "triples(Caller, 'calls_at', LineNumber)"
-				// This links the Caller to the line number.
-				// If Caller calls multiple things on multiple lines, we get multiple `calls_at` facts.
-				// S -> calls_at -> Line.
-				// This seems fine.
-				batch = append(batch, meb.Fact{Subject: ref.Subject, Predicate: "calls_at", Object: ref.Line, Graph: "default"})
+				// calls_at removed per Core Registry requirements.
 			}
 
 			batch = append(batch, meb.Fact{Subject: ref.Subject, Predicate: ref.Predicate, Object: object, Graph: "default"})
