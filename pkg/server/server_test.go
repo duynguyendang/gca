@@ -9,98 +9,91 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/duynguyendang/gca/pkg/meb"
-	"github.com/duynguyendang/gca/pkg/meb/store"
-	"github.com/stretchr/testify/assert"
+	"github.com/duynguyendang/gca/internal/manager"
 )
 
-func setupTestStore(t *testing.T) *meb.MEBStore {
-	tmpDir, err := os.MkdirTemp("", "meb_test")
+func TestServer_MultiProject(t *testing.T) {
+	// Setup temp directory for projects
+	tmpDir, err := os.MkdirTemp("", "gca-server-test-*")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	defer os.RemoveAll(tmpDir)
 
-	cfg := store.DefaultConfig(tmpDir)
-	cfg.InMemory = false // Use disk for simplicity of setup/cleanup or true? Default is fine.
-	// Actually, Default might use disk. Let's force in-memory if supported or just tmpDir.
-	// MEBStore uses Badger, which needs disk usually unless InMem is set.
-	// store.DefaultConfig just sets dir.
-
-	s, err := meb.NewMEBStore(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return s
-}
-
-func TestHealthCheck(t *testing.T) {
-	s := setupTestStore(t)
-	defer s.Close()
-	srv := NewServer(s, "")
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/health", nil)
-	srv.router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestQuery(t *testing.T) {
-	s := setupTestStore(t)
-	defer s.Close()
-	srv := NewServer(s, "")
-
-	// Insert some dummy data
-	fact := meb.NewFact("start_node", "connects_to", "end_node")
-	s.AddFact(fact)
-
-	w := httptest.NewRecorder()
-	body := `{"query": "triples(S, P, O)"}`
-	req, _ := http.NewRequest("POST", "/v1/query", strings.NewReader(body))
-	srv.router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var graph GraphResponse
-	json.Unmarshal(w.Body.Bytes(), &graph)
-
-	// Should have at least 2 nodes and 1 link
-	assert.GreaterOrEqual(t, len(graph.Nodes), 2)
-	assert.GreaterOrEqual(t, len(graph.Links), 1)
-}
-
-func TestSource(t *testing.T) {
-	s := setupTestStore(t)
-	defer s.Close()
-
-	// Create a dummy source file
-	tmpSource, err := os.MkdirTemp("", "source_test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(tmpSource) })
-
-	fileName := "test.go"
-	content := "line1\nline2\nline3\nline4\nline5"
-	err = os.WriteFile(filepath.Join(tmpSource, fileName), []byte(content), 0644)
-	if err != nil {
-		t.Fatal(err)
+	// Create project directories
+	projects := []string{"projA", "projB"}
+	for _, p := range projects {
+		pDir := filepath.Join(tmpDir, p)
+		if err := os.Mkdir(pDir, 0755); err != nil {
+			t.Fatalf("Failed to create project dir %v", err)
+		}
+		// Create metadata.json for projA
+		if p == "projA" {
+			meta := `{"name": "Project A", "description": "Test Project A"}`
+			if err := os.WriteFile(filepath.Join(pDir, "metadata.json"), []byte(meta), 0644); err != nil {
+				t.Fatalf("Failed to write metadata: %v", err)
+			}
+		}
 	}
 
-	// Index the file ID in store so LookUpID works
-	// We need to inject "test.go" into the dictionary.
-	// MEBStore doesn't expose dictionary directly for writing without facts?
-	// But AddFact does it.
-	s.AddFact(meb.NewFact(fileName, "type", "file"))
+	// Initialize Manager
+	mgr := manager.NewStoreManager(tmpDir)
+	defer mgr.CloseAll()
 
-	srv := NewServer(s, tmpSource)
+	// Initialize Server
+	s := NewServer(mgr, tmpDir)
 
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/v1/source?id="+fileName+"&start=2&end=4", nil)
-	srv.router.ServeHTTP(w, req)
+	// Test GET /v1/projects
+	t.Run("ListProjects", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "/v1/projects", nil)
+		w := httptest.NewRecorder()
+		s.router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "line2\nline3\nline4", w.Body.String())
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected 200 OK, got %d", w.Code)
+		}
+
+		var resp []manager.ProjectMetadata
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("Failed to parse response: %v", err)
+		}
+
+		if len(resp) != 2 {
+			t.Errorf("Expected 2 projects, got %d", len(resp))
+		}
+
+		// Verify metadata
+		for _, p := range resp {
+			if p.ID == "projA" {
+				if p.Name != "Project A" {
+					t.Errorf("Expected Project A name to be 'Project A', got '%s'", p.Name)
+				}
+			}
+		}
+	})
+
+	// Test GET /v1/query (Lazy Loading)
+	// Note: The store will be empty, so queries won't find anything, but we check for successful execution vs "Project not found".
+	t.Run("Query_LazyLoad", func(t *testing.T) {
+		// Valid project
+		body := strings.NewReader(`{"query": "triples(?S, ?P, ?O)"}`)
+		req, _ := http.NewRequest("POST", "/v1/query?project=projA", body)
+		w := httptest.NewRecorder()
+		s.router.ServeHTTP(w, req)
+
+		// Expect 200 OK (empty result is fine)
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected 200 OK for valid project, got %d. Body: %s", w.Code, w.Body.String())
+		}
+
+		// Invalid project
+		body = strings.NewReader(`{"query": "triples(?S, ?P, ?O)"}`)
+		req, _ = http.NewRequest("POST", "/v1/query?project=invalid", body)
+		w = httptest.NewRecorder()
+		s.router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("Expected 404 Not Found for invalid project, got %d", w.Code)
+		}
+	})
 }

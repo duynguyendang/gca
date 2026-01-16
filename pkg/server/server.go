@@ -9,23 +9,23 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/repl"
 	"github.com/gin-gonic/gin"
 )
 
 // Server holds the state for the REST API server.
 type Server struct {
-	store     *meb.MEBStore
+	manager   *manager.StoreManager
 	sourceDir string
 	router    *gin.Engine
 }
 
 // NewServer creates a new Server instance.
-func NewServer(store *meb.MEBStore, sourceDir string) *Server {
+func NewServer(mgr *manager.StoreManager, sourceDir string) *Server {
 	r := gin.Default()
 	s := &Server{
-		store:     store,
+		manager:   mgr,
 		sourceDir: sourceDir,
 		router:    r,
 	}
@@ -40,6 +40,7 @@ func (s *Server) Run(addr string) error {
 
 func (s *Server) setupRoutes() {
 	s.router.GET("/health", s.healthCheck)
+	s.router.GET("/v1/projects", s.handleProjects)
 	s.router.POST("/v1/query", s.handleQuery)
 	s.router.GET("/v1/source", s.handleSource)
 	s.router.GET("/v1/summary", s.handleSummary)
@@ -48,6 +49,16 @@ func (s *Server) setupRoutes() {
 // healthCheck returns 200 OK.
 func (s *Server) healthCheck(c *gin.Context) {
 	c.Status(http.StatusOK)
+}
+
+// handleProjects returns a list of available projects.
+func (s *Server) handleProjects(c *gin.Context) {
+	projects, err := s.manager.ListProjects()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to list projects: %v", err)})
+		return
+	}
+	c.JSON(http.StatusOK, projects)
 }
 
 // handleQuery executes a Datalog query and returns the results in a graph format.
@@ -60,7 +71,24 @@ func (s *Server) handleQuery(c *gin.Context) {
 		return
 	}
 
-	results, err := s.store.Query(c.Request.Context(), req.Query)
+	// Get project ID from query parameter
+	projectID := c.Query("project")
+	if projectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing 'project' query parameter"})
+		return
+	}
+
+	store, err := s.manager.GetStore(projectID)
+	if err != nil {
+		if os.IsNotExist(err) || err.Error() == fmt.Sprintf("project not found: %s", projectID) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to load project: %v", err)})
+		}
+		return
+	}
+
+	results, err := store.Query(c.Request.Context(), req.Query)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Query execution failed: %v", err)})
 		return
@@ -211,12 +239,24 @@ func (s *Server) handleSource(c *gin.Context) {
 		return
 	}
 
+	projectID := c.Query("project")
+	if projectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing 'project' query parameter"})
+		return
+	}
+
+	store, err := s.manager.GetStore(projectID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+		return
+	}
+
 	// Verify ID exists using LookUpID?
 	// The instructions say "Verify the id exists in MEBStore".
 	// Does LookUpID check existence? Yes, returns bool.
 	// However, filepath-based IDs might not be in dict if they are literals?
 	// But usually file paths are subjects.
-	if _, exists := s.store.LookupID(id); !exists {
+	if _, exists := store.LookupID(id); !exists {
 		// It might be a valid file even if not indexed as a subject?
 		// But the requirement says "Verify the id exists in MEBStore".
 		// I'll enforce it.
@@ -234,6 +274,8 @@ func (s *Server) handleSource(c *gin.Context) {
 	}
 
 	// Locate file
+	// Assuming source files are relative to sourceDir, or we need project-specific source logic?
+	// For now, retaining original behavior.
 	path := filepath.Join(s.sourceDir, id)
 
 	// Security check: simple path traversal prevention
@@ -287,7 +329,19 @@ func readFileRange(path string, start, end int) (string, error) {
 
 // handleSummary returns the project summary.
 func (s *Server) handleSummary(c *gin.Context) {
-	summary, err := repl.GenerateProjectSummary(s.store)
+	projectID := c.Query("project")
+	if projectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing 'project' query parameter"})
+		return
+	}
+
+	store, err := s.manager.GetStore(projectID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+		return
+	}
+
+	summary, err := repl.GenerateProjectSummary(store)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to generate summary: %v", err)})
 		return

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/ingest"
 	"github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/meb/store"
@@ -41,6 +42,7 @@ func main() {
 		}
 		sourceDir = args[0]
 		dataDir = args[1]
+		// In ingestion mode, dataDir is the specific project store
 	} else {
 		// Read-only mode
 		// Optional: user can provide data folder as first arg
@@ -53,6 +55,27 @@ func main() {
 			sourceDir = *sourceFlag
 		}
 	}
+
+	if *serverMode {
+		fmt.Printf("Starting REST API Server. Project Root: %s\n", dataDir)
+
+		// Initialize StoreManager
+		mgr := manager.NewStoreManager(dataDir)
+		defer mgr.CloseAll()
+
+		srv := server.NewServer(mgr, sourceDir)
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
+		}
+		addr := ":" + port
+		if err := srv.Run(addr); err != nil {
+			log.Fatalf("Server failed: %v", err)
+		}
+		return
+	}
+
+	// === Single Store Mode (Ingest / Repl) ===
 
 	// 1. MEB Store Initialization
 	cfg := store.DefaultConfig(dataDir)
@@ -75,7 +98,7 @@ func main() {
 	}
 	defer s.Close()
 
-	if !readOnly {
+	if *ingestMode {
 		if err := ingest.Run(s, sourceDir); err != nil {
 			log.Fatalf("Ingestion failed: %v", err)
 		}
@@ -83,21 +106,6 @@ func main() {
 		// Force stats recalc only in write mode
 		if _, err := s.RecalculateStats(); err != nil {
 			log.Printf("Stats recalc error: %v", err)
-		}
-	} else {
-		fmt.Println("Skipping stats recalculation and manual writes in ReadOnly mode.")
-	}
-
-	if *serverMode {
-		fmt.Println("Starting REST API Server on :8080...")
-		srv := server.NewServer(s, sourceDir)
-		port := os.Getenv("PORT")
-		if port == "" {
-			port = "8080"
-		}
-		addr := ":" + port
-		if err := srv.Run(addr); err != nil {
-			log.Fatalf("Server failed: %v", err)
 		}
 	} else {
 		// Start Interactive Repl

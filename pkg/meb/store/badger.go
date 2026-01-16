@@ -58,6 +58,9 @@ type Config struct {
 
 	// ReadOnly enables read-only mode.
 	ReadOnly bool
+
+	// BypassLockGuard allows bypassing the lock guard.
+	BypassLockGuard bool
 }
 
 // Validate checks if the configuration is valid and returns an error if not.
@@ -118,6 +121,7 @@ func buildBadgerOptions(cfg *Config) badger.Options {
 	// === Common Settings ===
 	// Disable conflict detection as we handle logic at app layer (SPO/OPS)
 	opts.DetectConflicts = false
+	opts.BypassLockGuard = cfg.BypassLockGuard
 
 	// 1% false positive rate balances memory vs performance
 	opts.BloomFalsePositive = 0.01
