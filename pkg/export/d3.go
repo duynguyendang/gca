@@ -18,6 +18,7 @@ type D3Node struct {
 	Kind     string `json:"kind,omitempty"`     // e.g. "func", "struct", "interface"
 	Language string `json:"language,omitempty"` // e.g. "go", "typescript"
 	Group    string `json:"group,omitempty"`    // Grouping for visualization (uses Language)
+	Code     string `json:"code,omitempty"`     // Source code snippet
 }
 
 // D3Link represents a link/edge in the D3 force-directed graph.
@@ -149,7 +150,7 @@ func (t *D3Transformer) Transform(ctx context.Context, query string, results []m
 // createNode builds a D3Node with enriched metadata.
 func (t *D3Transformer) createNode(id string) D3Node {
 	displayName := t.generateDisplayName(id)
-	kind, language := t.getMetadata(id)
+	kind, language, code := t.getMetadata(id)
 
 	// Default group to language, fallback to "unknown"
 	group := language
@@ -163,6 +164,7 @@ func (t *D3Transformer) createNode(id string) D3Node {
 		Kind:     kind,
 		Language: language,
 		Group:    group,
+		Code:     code,
 	}
 }
 
@@ -178,10 +180,11 @@ func (t *D3Transformer) generateDisplayName(id string) string {
 	return lastPart
 }
 
-// getMetadata fetches has_kind and has_language from the store.
-func (t *D3Transformer) getMetadata(id string) (string, string) {
+// getMetadata fetches has_kind, has_language, and has_source_code from the store.
+func (t *D3Transformer) getMetadata(id string) (string, string, string) {
 	kind := ""
 	language := ""
+	code := ""
 
 	// We use the store to scan for specific metadata predicates attached to this ID
 	// Note: This performs individual scans per node. For massive exports, batching would be better,
@@ -203,6 +206,14 @@ func (t *D3Transformer) getMetadata(id string) (string, string) {
 		}
 	}
 
+	// 3. Check for 'has_source_code'
+	for fact, _ := range t.Store.Scan(id, "has_source_code", "", "") {
+		if str, ok := fact.Object.(string); ok {
+			code = str
+			break
+		}
+	}
+
 	// Fallback: Infer language from file extension if not found in DB
 	if language == "" {
 		if strings.Contains(id, ".go") {
@@ -216,7 +227,7 @@ func (t *D3Transformer) getMetadata(id string) (string, string) {
 		}
 	}
 
-	return kind, language
+	return kind, language, code
 }
 
 // ExportD3 is a convenience wrapper for D3Transformer.

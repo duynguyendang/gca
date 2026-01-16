@@ -2,7 +2,6 @@ package server
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/duynguyendang/gca/internal/manager"
+	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/duynguyendang/gca/pkg/repl"
 	"github.com/gin-gonic/gin"
 )
@@ -94,7 +94,13 @@ func (s *Server) handleQuery(c *gin.Context) {
 		return
 	}
 
-	graph := transformToGraph(results)
+	// Use the shared D3 exporter
+	graph, err := export.ExportD3(c.Request.Context(), store, req.Query, results)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Graph transformation failed: %v", err)})
+		return
+	}
+
 	c.JSON(http.StatusOK, graph)
 }
 
@@ -231,9 +237,6 @@ func createNode(id string) GraphNode {
 // handleSource returns source code for a given file ID.
 func (s *Server) handleSource(c *gin.Context) {
 	id := c.Query("id")
-	startStr := c.Query("start")
-	endStr := c.Query("end")
-
 	if id == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing 'id' parameter"})
 		return
@@ -251,18 +254,35 @@ func (s *Server) handleSource(c *gin.Context) {
 		return
 	}
 
-	// Verify ID exists using LookUpID?
-	// The instructions say "Verify the id exists in MEBStore".
-	// Does LookUpID check existence? Yes, returns bool.
-	// However, filepath-based IDs might not be in dict if they are literals?
-	// But usually file paths are subjects.
+	// Verify ID exists using LookUpID
 	if _, exists := store.LookupID(id); !exists {
-		// It might be a valid file even if not indexed as a subject?
-		// But the requirement says "Verify the id exists in MEBStore".
-		// I'll enforce it.
 		c.JSON(http.StatusNotFound, gin.H{"error": "File ID not found in index"})
 		return
 	}
+
+	// Fetch source code from "has_source_code" predicate
+	// We scan for the source code fact.
+	var content string
+	found := false
+	for fact, _ := range store.Scan(id, "has_source_code", "", "") {
+		if str, ok := fact.Object.(string); ok {
+			content = str
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		// Fallback or error?
+		// If "has_source_code" is missing, maybe it wasn't ingested with code?
+		// We return 404 or empty.
+		c.JSON(http.StatusNotFound, gin.H{"error": "Source code not available for this ID"})
+		return
+	}
+
+	// Handle line range extraction if requested
+	startStr := c.Query("start")
+	endStr := c.Query("end")
 
 	start, err := strconv.Atoi(startStr)
 	if err != nil {
@@ -273,44 +293,7 @@ func (s *Server) handleSource(c *gin.Context) {
 		end = -1
 	}
 
-	// Locate file
-	// Assuming source files are relative to sourceDir, or we need project-specific source logic?
-	// For now, retaining original behavior.
-	path := filepath.Join(s.sourceDir, id)
-
-	// Security check: simple path traversal prevention
-	// Ensure final path is within sourceDir?
-	// For now, assuming standard usage. absolute path check is good practice.
-	// cleanPath := filepath.Clean(path)
-	// if !strings.HasPrefix(cleanPath, filepath.Clean(s.sourceDir)) { ... }
-	// Proceeding with basic open.
-
-	content, err := readFileRange(path, start, end)
-	if err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Source file not found"})
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read file"})
-		}
-		return
-	}
-
-	c.String(http.StatusOK, content)
-}
-
-func readFileRange(path string, start, end int) (string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	bytes, err := io.ReadAll(file)
-	if err != nil {
-		return "", err
-	}
-	lines := strings.Split(string(bytes), "\n")
-
+	lines := strings.Split(content, "\n")
 	if start < 1 {
 		start = 1
 	}
@@ -318,13 +301,16 @@ func readFileRange(path string, start, end int) (string, error) {
 		end = len(lines)
 	}
 
-	// Adjust to 0-indexed slice
 	if start > len(lines) {
-		return "", nil
+		c.String(http.StatusOK, "")
+		return
 	}
 
+	// Adjust 0-based
 	slice := lines[start-1 : end]
-	return strings.Join(slice, "\n"), nil
+	result := strings.Join(slice, "\n")
+
+	c.String(http.StatusOK, result)
 }
 
 // handleSummary returns the project summary.

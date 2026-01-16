@@ -234,6 +234,9 @@ func processFile(ctx context.Context, s *meb.MEBStore, embedder *EmbeddingServic
 		for k, v := range meta {
 			batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: k, Object: v, Graph: "default"})
 		}
+
+		// Add Source Code fact
+		batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: "has_source_code", Object: sym.Content, Graph: "default"})
 	}
 
 	// Extract References (Calls, Imports)
