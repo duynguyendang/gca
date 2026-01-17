@@ -69,7 +69,7 @@ func extractPackages(s *meb.MEBStore) ([]string, error) {
 		filePath := fact.Subject
 
 		// Split by "/" and extract directory parts
-		parts := strings.Split(filePath, "/")
+		parts := strings.Split(string(filePath), "/")
 		if len(parts) > 1 {
 			// Build package path by removing the filename
 			// For "mangle/pkg/parser/file.go", we want "mangle/pkg/parser"

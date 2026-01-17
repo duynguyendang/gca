@@ -197,7 +197,7 @@ func (m *MEBStore) ScanContext(ctx context.Context, s, p, o, g string) iter.Seq2
 
 			// Build the Fact
 			fact := Fact{
-				Subject:   subject,
+				Subject:   DocumentID(subject),
 				Predicate: predicate,
 				Object:    objectStr,
 				Graph:     normalizeGraph(g), // Use normalized graph

@@ -25,7 +25,7 @@ const MaxWorkers = 8 // Default max workers, can be tuned or runtime.NumCPU()
 // Run executes the ingestion process.
 func Run(s *meb.MEBStore, sourceDir string) error {
 	ctx := context.Background()
-	ext := NewExtractor()
+	ext := NewTreeSitterExtractor()
 	testDir := sourceDir
 
 	// Pass 1: Collect Symbols (Sequential for now, to ensure map is populated safely)
@@ -88,7 +88,7 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 		go func() {
 			defer wg.Done()
 			log.Printf("Worker %d started", workerID)
-			localExt := NewExtractor() // Thread-local extractor
+			localExt := NewTreeSitterExtractor() // Thread-local extractor
 			for path := range jobs {
 				log.Printf("Worker %d processing: %s", workerID, path)
 				if err := processFileIncremental(ctx, s, localExt, path, testDir); err != nil {
@@ -126,7 +126,7 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 }
 
 // processFileIncremental handles hashing and skipping
-func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext *Extractor, path string, sourceRoot string) error {
+func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor, path string, sourceRoot string) error {
 	relPath, _ := filepath.Rel(sourceRoot, path)
 
 	// 1. Calculate Hash
@@ -174,92 +174,55 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext *Extractor
 
 	// Step 5: Store New Hash
 	return s.AddFact(meb.Fact{
-		Subject:   relPath,
+		Subject:   meb.DocumentID(relPath),
 		Predicate: meb.PredHash,
 		Object:    newHash,
 		Graph:     "default",
 	})
 }
 
-func processFile(s *meb.MEBStore, ext *Extractor, path string, sourceRoot string) error {
+func processFile(s *meb.MEBStore, ext Extractor, path string, sourceRoot string) error {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 	relPath, _ := filepath.Rel(sourceRoot, path)
 
-	symbols, err := ext.ExtractSymbols(path, content, relPath)
+	// Use the new Extract interface
+	bundle, err := ext.Extract(context.Background(), relPath, content)
 	if err != nil {
 		return err
 	}
 
-	var batch []meb.Fact
-
-	for _, sym := range symbols {
-		// Embeddings and Content Store handled separately from batch
-		var vec []float32
-		// if embedder != nil { ... }
-
-		// Metadata map for AddDocument (which adds its own metadata facts internally, but we manually add some for batch optimization if needed)
-		// Actually AddDocument calls AddFact internally.
-		// To use batching efficiently, we should collect facts here and call AddFactBatch,
-		// OR modify AddDocument to accept a batch or return facts.
-		// Given AddDocument interface, we'll use it as is for vector/content, but maybe duplicate metadata facts in batch?
-		// No, AddDocument adds facts. If we want batching, we should probably manually add facts and use AddDocument only for vector/content.
-		// Let's defer Vector/Content logic to AddDocument but handling metadata manually in batch for speed.
-
-		// Metadata map for AddDocument (which adds its own metadata facts internally, but we manually add some for batch optimization if needed)
-		// We use s.AddDocument for the "Document" aspect (content + vector)
-		// But passing empty metadata to avoid individual AddFact calls inside it.
-		// We will add metadata facts in our big batch.
-		// Metadata map for AddDocument (storage only, no graph predicates)
-		meta := map[string]any{
-			"file":       relPath,
-			"start_line": sym.StartLine,
-			"end_line":   sym.EndLine,
-			"package":    sym.Package,
+	// 1. Add Documents
+	for _, doc := range bundle.Documents {
+		if err := s.AddDocument(doc.ID, doc.Content, doc.Embedding, doc.Metadata); err != nil {
+			log.Printf("Error adding document %s: %v", doc.ID, err)
 		}
-
-		// 1. Add Document content/vector with metadata
-		if err := s.AddDocument(sym.ID, []byte(sym.Content), vec, meta); err != nil {
-			log.Printf("Error adding document %s: %v", sym.ID, err)
-		}
-
-		// 2. Add structural facts to BATCH (Core Predicates only)
-		batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: meb.PredType, Object: sym.Type, Graph: "default"})
-		batch = append(batch, meb.Fact{Subject: relPath, Predicate: meb.PredDefines, Object: sym.ID, Graph: "default"})
-
-		// Add Doc predicate if present
-		if sym.DocComment != "" {
-			batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: meb.PredHasDoc, Object: sym.DocComment, Graph: "default"})
-		}
-
-		// Add Source Code fact (Whitelisted System Predicate)
-		batch = append(batch, meb.Fact{Subject: sym.ID, Predicate: meb.PredHasSourceCode, Object: sym.Content, Graph: "default"})
 	}
 
-	// Extract References (Calls, Imports)
-	refs, err := ext.ExtractReferences(path, content, relPath)
-	if err != nil {
-		log.Printf("Warning: failed to extract references from %s: %v", path, err)
-	} else {
-		for _, ref := range refs {
-			// Resolve callee if possible
-			object := ref.Object
-			if ref.Predicate == meb.PredCalls {
-				if resolved, ok := symbolTable[object]; ok {
-					object = resolved
+	// 2. Add Facts
+	// Resolve calls in facts if possible (local symbol table logic)
+	// Ideally this should be done inside Extractor or a post-processing step?
+	// Existing logic did it in processFile.
+	// Since AnalysisBundle has Facts, we can iterate and modify them or just add them.
+	// The symbol table logic requires modify OBJECT of preds=calls.
+	// Let's iterate and fixup.
+
+	finalFacts := make([]meb.Fact, 0, len(bundle.Facts))
+	for _, f := range bundle.Facts {
+		if f.Predicate == meb.PredCalls {
+			if objStr, ok := f.Object.(string); ok {
+				if resolved, ok := symbolTable[objStr]; ok {
+					f.Object = resolved
 				}
-				// calls_at removed per Core Registry requirements.
 			}
-
-			batch = append(batch, meb.Fact{Subject: ref.Subject, Predicate: ref.Predicate, Object: object, Graph: "default"})
 		}
+		finalFacts = append(finalFacts, f)
 	}
 
-	// Flush Batch
-	if len(batch) > 0 {
-		return s.AddFactBatch(batch)
+	if len(finalFacts) > 0 {
+		return s.AddFactBatch(finalFacts)
 	}
 
 	return nil

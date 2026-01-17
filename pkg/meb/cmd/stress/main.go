@@ -199,7 +199,7 @@ func runIngestion(store *meb.MEBStore, stats *Stats) error {
 			}
 
 			// Add document using high-level API
-			if err := store.AddDocument(doc.ID, doc.Content, doc.Vector, metadata); err != nil {
+			if err := store.AddDocument(meb.DocumentID(doc.ID), doc.Content, doc.Vector, metadata); err != nil {
 				return fmt.Errorf("failed to add document %s: %w", doc.ID, err)
 			}
 
@@ -208,7 +208,7 @@ func runIngestion(store *meb.MEBStore, stats *Stats) error {
 				linkFacts := make([]meb.Fact, 0, len(doc.Links))
 				for _, link := range doc.Links {
 					linkFacts = append(linkFacts, meb.Fact{
-						Subject:   doc.ID,
+						Subject:   meb.DocumentID(doc.ID),
 						Predicate: "links_to",
 						Object:    link,
 						Graph:     "graph",

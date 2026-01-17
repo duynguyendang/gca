@@ -50,11 +50,11 @@ func (m *MEBStore) AddFactBatch(facts []Fact) error {
 		graph := normalizeGraph(fact.Graph)
 
 		// Process Subject
-		if _, ok := uniqueStringsMap[fact.Subject]; !ok {
-			uniqueStringsMap[fact.Subject] = len(uniqueStrings)
-			uniqueStrings = append(uniqueStrings, fact.Subject)
+		if _, ok := uniqueStringsMap[string(fact.Subject)]; !ok {
+			uniqueStringsMap[string(fact.Subject)] = len(uniqueStrings)
+			uniqueStrings = append(uniqueStrings, string(fact.Subject))
 		}
-		factStringRefs[i] = append(factStringRefs[i], stringRef{index: uniqueStringsMap[fact.Subject], isObj: false})
+		factStringRefs[i] = append(factStringRefs[i], stringRef{index: uniqueStringsMap[string(fact.Subject)], isObj: false})
 
 		// Process Predicate
 		if _, ok := uniqueStringsMap[fact.Predicate]; !ok {
@@ -420,7 +420,7 @@ func (m *MEBStore) Query(ctx context.Context, query string) ([]map[string]any, e
 					}
 
 					// Extract new bindings from fact
-					row := []string{fact.Subject, fact.Predicate, ""}
+					row := []string{string(fact.Subject), fact.Predicate, ""}
 					// Object type handling
 					if s, ok := fact.Object.(string); ok {
 						row[2] = s

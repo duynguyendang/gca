@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -54,19 +55,19 @@ func lineFromOffset(content []byte, offset uint) int {
 	return strings.Count(string(content[:offset]), "\n") + 1
 }
 
-// Extractor handles AST parsing and symbol extraction.
-type Extractor struct {
+// TreeSitterExtractor handles AST parsing and symbol extraction.
+type TreeSitterExtractor struct {
 	parser *sitter.Parser
 }
 
-// NewExtractor creates a new extractor instance.
-func NewExtractor() *Extractor {
+// NewTreeSitterExtractor creates a new extractor instance.
+func NewTreeSitterExtractor() *TreeSitterExtractor {
 	parser := sitter.NewParser()
-	return &Extractor{parser: parser}
+	return &TreeSitterExtractor{parser: parser}
 }
 
 // GetParser returns the appropriate language parser for the given extension.
-func (e *Extractor) GetParser(ext string) *sitter.Language {
+func (e *TreeSitterExtractor) GetParser(ext string) *sitter.Language {
 	switch ext {
 	case ".py":
 		return sitter.NewLanguage(python.Language())
@@ -82,7 +83,7 @@ func (e *Extractor) GetParser(ext string) *sitter.Language {
 }
 
 // ExtractSymbols parses the content and returns a list of symbols.
-func (e *Extractor) ExtractSymbols(filename string, content []byte, relPath string) ([]Symbol, error) {
+func (e *TreeSitterExtractor) ExtractSymbols(filename string, content []byte, relPath string) ([]Symbol, error) {
 	ext := filepath.Ext(filename)
 	lang := e.GetParser(ext)
 	e.parser.SetLanguage(lang)
@@ -136,7 +137,7 @@ func (e *Extractor) ExtractSymbols(filename string, content []byte, relPath stri
 }
 
 // ExtractReferences parses the content and returns a list of references (calls, imports, etc).
-func (e *Extractor) ExtractReferences(filename string, content []byte, relPath string) ([]Reference, error) {
+func (e *TreeSitterExtractor) ExtractReferences(filename string, content []byte, relPath string) ([]Reference, error) {
 	ext := filepath.Ext(filename)
 	lang := e.GetParser(ext)
 	e.parser.SetLanguage(lang)
@@ -168,12 +169,78 @@ func (e *Extractor) ExtractReferences(filename string, content []byte, relPath s
 	}
 
 	walk(root, "")
+	walk(root, "")
 	return refs, nil
+}
+
+// Extract satisfies the Extractor interface.
+func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, content []byte) (*AnalysisBundle, error) {
+	// Parse Symbols
+	symbols, err := e.ExtractSymbols(relPath, content, relPath)
+	if err != nil {
+		return nil, err
+	}
+
+	bundle := &AnalysisBundle{
+		Documents: make([]meb.Document, 0, len(symbols)),
+		Facts:     make([]meb.Fact, 0, len(symbols)*5),
+	}
+
+	// Process Symbols
+	for _, sym := range symbols {
+		// Create Document
+		doc := meb.Document{
+			ID:      meb.DocumentID(sym.ID),
+			Content: []byte(sym.Content),
+			Metadata: map[string]any{
+				"file":       relPath,
+				"start_line": sym.StartLine,
+				"end_line":   sym.EndLine,
+				"package":    sym.Package,
+			},
+		}
+		bundle.Documents = append(bundle.Documents, doc)
+
+		// Create Facts
+		bundle.Facts = append(bundle.Facts,
+			meb.Fact{Subject: meb.DocumentID(sym.ID), Predicate: meb.PredType, Object: sym.Type, Graph: "default"},
+			meb.Fact{Subject: meb.DocumentID(relPath), Predicate: meb.PredDefines, Object: sym.ID, Graph: "default"},
+			meb.Fact{Subject: meb.DocumentID(sym.ID), Predicate: meb.PredHasSourceCode, Object: sym.Content, Graph: "default"},
+		)
+
+		if sym.DocComment != "" {
+			bundle.Facts = append(bundle.Facts, meb.Fact{
+				Subject:   meb.DocumentID(sym.ID),
+				Predicate: meb.PredHasDoc,
+				Object:    sym.DocComment,
+				Graph:     "default",
+			})
+		}
+	}
+
+	// Process References
+	refs, err := e.ExtractReferences(relPath, content, relPath)
+	if err != nil {
+		// Log error but continue? Or fail? Sticking to non-fatal for refs extraction issues.
+		// For now return partial bundle with error? Or just log?
+		return bundle, fmt.Errorf("failed to extract references: %w", err)
+	}
+
+	for _, ref := range refs {
+		bundle.Facts = append(bundle.Facts, meb.Fact{
+			Subject:   meb.DocumentID(ref.Subject),
+			Predicate: ref.Predicate,
+			Object:    ref.Object,
+			Graph:     "default",
+		})
+	}
+
+	return bundle, nil
 }
 
 // --- Go Extraction ---
 
-func (e *Extractor) extractGoNode(n *sitter.Node, content []byte, relPath, pkgName string, symbols *[]Symbol) {
+func (e *TreeSitterExtractor) extractGoNode(n *sitter.Node, content []byte, relPath, pkgName string, symbols *[]Symbol) {
 	switch n.Kind() {
 	case "function_declaration":
 		*symbols = append(*symbols, e.extractFunction(n, content, relPath, pkgName))
@@ -195,7 +262,7 @@ func (e *Extractor) extractGoNode(n *sitter.Node, content []byte, relPath, pkgNa
 	}
 }
 
-func (e *Extractor) extractGoRefs(n *sitter.Node, content []byte, relPath, currentScope string, refs *[]Reference) string {
+func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relPath, currentScope string, refs *[]Reference) string {
 	nextScope := currentScope
 	switch n.Kind() {
 	case "import_declaration":
@@ -251,7 +318,7 @@ func (e *Extractor) extractGoRefs(n *sitter.Node, content []byte, relPath, curre
 
 // --- Python Extraction ---
 
-func (e *Extractor) extractPythonNode(n *sitter.Node, content []byte, relPath string, symbols *[]Symbol) {
+func (e *TreeSitterExtractor) extractPythonNode(n *sitter.Node, content []byte, relPath string, symbols *[]Symbol) {
 	switch n.Kind() {
 	case "expression_statement":
 		child := n.Child(0)
@@ -316,7 +383,7 @@ func (e *Extractor) extractPythonNode(n *sitter.Node, content []byte, relPath st
 	}
 }
 
-func (e *Extractor) extractPythonRefs(n *sitter.Node, content []byte, relPath, currentScope string, refs *[]Reference) string {
+func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, relPath, currentScope string, refs *[]Reference) string {
 	nextScope := currentScope
 	switch n.Kind() {
 	case "function_definition", "class_definition":
@@ -386,7 +453,7 @@ func (e *Extractor) extractPythonRefs(n *sitter.Node, content []byte, relPath, c
 	return nextScope
 }
 
-func (e *Extractor) getPythonDocString(n *sitter.Node, content []byte) string {
+func (e *TreeSitterExtractor) getPythonDocString(n *sitter.Node, content []byte) string {
 	body := n.ChildByFieldName("body")
 	if body != nil && body.ChildCount() > 0 {
 		firstStmt := body.Child(0)
@@ -402,7 +469,7 @@ func (e *Extractor) getPythonDocString(n *sitter.Node, content []byte) string {
 
 // --- JS/TS Extraction ---
 
-func (e *Extractor) extractJSNode(n *sitter.Node, content []byte, relPath string, symbols *[]Symbol) {
+func (e *TreeSitterExtractor) extractJSNode(n *sitter.Node, content []byte, relPath string, symbols *[]Symbol) {
 	kind := n.Kind()
 	var name, symType string
 	var receiver string
@@ -502,7 +569,7 @@ func (e *Extractor) extractJSNode(n *sitter.Node, content []byte, relPath string
 	}
 }
 
-func (e *Extractor) extractJSRefs(n *sitter.Node, content []byte, relPath, currentScope string, refs *[]Reference) string {
+func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relPath, currentScope string, refs *[]Reference) string {
 	nextScope := currentScope
 	kind := n.Kind()
 
@@ -548,7 +615,7 @@ func (e *Extractor) extractJSRefs(n *sitter.Node, content []byte, relPath, curre
 
 // --- Helpers ---
 
-func (e *Extractor) addImportRef(content []byte, node *sitter.Node, relPath string, refs *[]Reference) {
+func (e *TreeSitterExtractor) addImportRef(content []byte, node *sitter.Node, relPath string, refs *[]Reference) {
 	pathNode := node.ChildByFieldName("path")
 	if pathNode != nil {
 		impPath := clean(pathNode.Utf8Text(content))
@@ -568,7 +635,7 @@ func (e *Extractor) addImportRef(content []byte, node *sitter.Node, relPath stri
 // I'll keep them to minimize diff noise if possible, but I rewrote the file logic.
 // I will re-implement them or include them.
 
-func (e *Extractor) extractFunction(n *sitter.Node, content []byte, relPath string, pkgName string) Symbol {
+func (e *TreeSitterExtractor) extractFunction(n *sitter.Node, content []byte, relPath string, pkgName string) Symbol {
 	nameNode := n.ChildByFieldName("name")
 	name := ""
 	if nameNode != nil {
@@ -592,7 +659,7 @@ func (e *Extractor) extractFunction(n *sitter.Node, content []byte, relPath stri
 	}
 }
 
-func (e *Extractor) extractMethod(n *sitter.Node, content []byte, relPath string, pkgName string) Symbol {
+func (e *TreeSitterExtractor) extractMethod(n *sitter.Node, content []byte, relPath string, pkgName string) Symbol {
 	nameNode := n.ChildByFieldName("name")
 	name := ""
 	if nameNode != nil {
@@ -623,7 +690,7 @@ func (e *Extractor) extractMethod(n *sitter.Node, content []byte, relPath string
 	}
 }
 
-func (e *Extractor) extractType(spec *sitter.Node, decl *sitter.Node, content []byte, relPath string, pkgName string) Symbol {
+func (e *TreeSitterExtractor) extractType(spec *sitter.Node, decl *sitter.Node, content []byte, relPath string, pkgName string) Symbol {
 	nameNode := spec.ChildByFieldName("name")
 	name := ""
 	if nameNode != nil {
@@ -652,7 +719,7 @@ func (e *Extractor) extractType(spec *sitter.Node, decl *sitter.Node, content []
 	}
 }
 
-func (e *Extractor) getDocComment(n *sitter.Node, content []byte) string {
+func (e *TreeSitterExtractor) getDocComment(n *sitter.Node, content []byte) string {
 	var comments []string
 	prev := n.PrevSibling()
 	for prev != nil {
@@ -667,7 +734,7 @@ func (e *Extractor) getDocComment(n *sitter.Node, content []byte) string {
 	return strings.Join(comments, "\n")
 }
 
-func (e *Extractor) getSignature(n *sitter.Node, content []byte) string {
+func (e *TreeSitterExtractor) getSignature(n *sitter.Node, content []byte) string {
 	body := n.ChildByFieldName("body")
 	if body != nil {
 		full := n.Utf8Text(content)
@@ -683,7 +750,7 @@ func (e *Extractor) getSignature(n *sitter.Node, content []byte) string {
 	return full
 }
 
-func (e *Extractor) getReceiverType(n *sitter.Node, content []byte) string {
+func (e *TreeSitterExtractor) getReceiverType(n *sitter.Node, content []byte) string {
 	for i := uint(0); i < uint(n.ChildCount()); i++ {
 		child := n.Child(i)
 		if child.Kind() == "parameter_declaration" {

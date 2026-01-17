@@ -116,7 +116,7 @@ func (m *MEBStore) encodeObject(obj any) (string, uint64, error) {
 func (m *MEBStore) factToAtom(fact Fact) (ast.Atom, error) {
 	// Create args from Subject, Object, and Graph (not Predicate)
 	args := []ast.BaseTerm{
-		ast.String(fact.Subject),
+		ast.String(string(fact.Subject)),
 		m.goValueToTerm(fact.Object),
 		ast.String(fact.Graph),
 	}

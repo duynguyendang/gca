@@ -126,6 +126,10 @@ func buildBadgerOptions(cfg *Config) badger.Options {
 	// 1% false positive rate balances memory vs performance
 	opts.BloomFalsePositive = 0.01
 
+	if cfg.ReadOnly {
+		opts.ReadOnly = true
+	}
+
 	// === Compression ===
 	if cfg.Compression {
 		opts.Compression = options.ZSTD
@@ -148,11 +152,6 @@ func buildBadgerOptions(cfg *Config) badger.Options {
 		// Limit compactors to prevent IO saturation on shared/emulated drives
 		// Badger v4 requires at least 2 compactors.
 		opts.NumCompactors = 2
-
-		// Force ReadOnly if configured (prevents compactions completely)
-		if cfg.ReadOnly {
-			opts.ReadOnly = true
-		}
 
 	case "Ingest-Heavy":
 		fallthrough

@@ -74,7 +74,7 @@ func (m *MEBStore) GetFacts(atom ast.Atom, callback func(ast.Atom) error) error 
 
 		// Convert Fact back to ast.Atom format
 		resultArgs := make([]ast.BaseTerm, 3)
-		resultArgs[0] = ast.Constant{Type: ast.StringType, Symbol: fact.Subject}
+		resultArgs[0] = ast.Constant{Type: ast.StringType, Symbol: string(fact.Subject)}
 		resultArgs[1] = ast.Constant{Type: ast.StringType, Symbol: fact.Predicate}
 
 		// Object is stored as string in dictionary
@@ -135,7 +135,7 @@ func (m *MEBStore) Add(atom ast.Atom) bool {
 
 	// Add fact using the quad store format
 	fact := Fact{
-		Subject:   subject,
+		Subject:   DocumentID(subject),
 		Predicate: predicate,
 		Object:    object,
 		Graph:     graph,

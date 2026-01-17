@@ -64,7 +64,7 @@ func (m *MEBStore) GetContent(id uint64) ([]byte, error) {
 
 // AddDocument adds a complete document with vector, content, and metadata.
 // This is a high-level helper that handles the full RAG pipeline.
-func (m *MEBStore) AddDocument(docKey string, content []byte, vec []float32, metadata map[string]any) error {
+func (m *MEBStore) AddDocument(docKey DocumentID, content []byte, vec []float32, metadata map[string]any) error {
 	if docKey == "" {
 		return fmt.Errorf("%w: document key cannot be empty", ErrInvalidFact)
 	}
@@ -77,7 +77,7 @@ func (m *MEBStore) AddDocument(docKey string, content []byte, vec []float32, met
 	)
 
 	// 1. Get or create ID for the document
-	id, err := m.dict.GetOrCreateID(docKey)
+	id, err := m.dict.GetOrCreateID(string(docKey))
 	if err != nil {
 		slog.Error("failed to get document ID", "key", docKey, "error", err)
 		return fmt.Errorf("failed to get document ID: %w", err)
