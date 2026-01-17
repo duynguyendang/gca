@@ -118,3 +118,47 @@ func (m *MEBStore) AddDocument(docKey DocumentID, content []byte, vec []float32,
 	slog.Debug("document added successfully", "key", docKey, "id", id)
 	return nil
 }
+
+// GetDocument retrieves a complete document by its ID.
+func (m *MEBStore) GetDocument(docKey DocumentID) (*Document, error) {
+	// 1. Resolve ID
+	id, err := m.dict.GetID(string(docKey))
+	if err != nil {
+		return nil, fmt.Errorf("document not found: %w", err)
+	}
+
+	// 2. Retrieve Content
+	content, err := m.GetContent(id)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Retrieve Vector (Optional)
+	var vec []float32
+	// Check if vectors are enabled/initialized
+	if m.vectors != nil {
+		vec, err = m.vectors.GetFullVector(id)
+		if err != nil && err != badger.ErrKeyNotFound {
+			// Log error but continue? Or fail?
+			slog.Warn("failed to get vector for document", "key", docKey, "error", err)
+		}
+	}
+
+	// 4. Retrieve Metadata (from Facts)
+	metadata := make(map[string]any)
+	// Iterate over facts where Subject matches docKey and Graph is "metadata"
+	// Using ScanContext. Predicate is wildcard.
+	for fact := range m.Scan(string(docKey), "", "", "metadata") {
+		// Assuming fact.Predicate is the key and fact.Object is the value
+		metadata[fact.Predicate] = fact.Object
+	}
+	// Also retrieve standard metadata from default graph if needed?
+	// Usually metadata is stored in "metadata" graph per AddDocument.
+
+	return &Document{
+		ID:        docKey,
+		Content:   content,
+		Embedding: vec,
+		Metadata:  metadata,
+	}, nil
+}

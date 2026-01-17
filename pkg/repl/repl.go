@@ -267,6 +267,13 @@ func Run(s *meb.MEBStore, readOnly bool) {
 			continue
 		}
 
+		// Handle show command
+		if strings.HasPrefix(line, "show ") {
+			arg := strings.TrimPrefix(line, "show ")
+			HandleShow(context.Background(), s, arg)
+			continue
+		}
+
 		// Detect if this is a follow-up query
 		isFollowUp := isFollowUpQuery(line) && session.HasContext()
 
