@@ -15,13 +15,16 @@ GCA is a knowledge graph-powered code analysis tool that allows you to query you
 -   **Zero-Dependency Serving**: Embeds source code directly into the knowledge graph, allowing the server to operate without access to the original source files ("portability").
 -   **Interactive REPL**: Explore your codebase interactively with autocomplete and history.
 
-## Architecture
+## Architecture (MEB v2.0)
 
--   **`pkg/ingest`**: Handles parsing of source code and extraction of symbols into facts.
--   **`pkg/meb`**: The core graph storage engine (MEBStore) handling fact persistence and indexing.
+-   **`pkg/ingest`**: High-fidelity ingestion pipeline. Uses `tree-sitter` to produce `AnalysisBundle` containing structurally separated **Documents** (raw content) and **Facts** (relational logic).
+-   **`pkg/meb`**: The Memory-Efficient Bidirectional (MEB) graph store.
+    -   **FactStore**: Stores relational triples (`SPO`, `OPS` indices).
+    -   **DocStore**: Stores raw content, embeddings, and metadata using Canonical IDs (`DocumentID`).
+    -   **Hydration Service**: Joins Facts and Documents on-the-fly for rich API responses.
 -   **`pkg/datalog`**: Custom Datalog parser for query processing.
 -   **`pkg/server`**: REST API server implementation for stateless project querying.
--   **`pkg/repl`**: Interactive Read-Eval-Print Loop for querying the graph.
+-   **`pkg/repl`**: Interactive Read-Eval-Print Loop for querying the graph and viewing source code.
 
 ## Installation
 
@@ -90,19 +93,26 @@ Once in the REPL, you can ask questions in Datalog or Natural Language.
 > Find cycles of length 3
 ```
 
+**Source Inspection:**
+```text
+> show main.go:main
+```
+
 ## Schema
 
 The current schema includes the following predicates:
+-   `defines(File, Symbol)`: File defines a symbol.
 -   `calls(Caller, Callee)`: Function usage.
--   `calls_at(Caller, Line)`: Line number of a call.
--   `defines_symbol(File, Symbol)`: File defines a symbol.
--   `has_source_code(Symbol, Code)`: Raw source code.
 -   `imports(File, Package)`: Package dependencies.
--   `kind(Symbol, Kind)`: Symbol kind (e.g., `func`, `struct`).
--   `type(Symbol, Type)`: Type information.
--   `file(Symbol, File)`: Reverse lookup.
--   `package(Symbol, Package)`: Package membership.
--   `start_line/end_line(Symbol, Line)`: Source positioning.
+-   `type(Symbol, Type)`: Symbol type (e.g., `function`, `struct`).
+-   `has_doc(Symbol, Doc)`: Documentation comments.
+-   `has_source_code(Symbol, Code)`: Raw source code.
+-   `hash_sha256(File, Hash)`: File content hash.
+
+**Metadata Predicates** (Stored in `metadata` graph, accessible via inspection):
+-   `package(Symbol, Package)`
+-   `start_line/end_line(Symbol, Line)`
+-   `file(Symbol, File)`
 
 ## HTTP API Reference
 
