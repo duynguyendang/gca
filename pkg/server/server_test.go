@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/duynguyendang/gca/internal/manager"
+	"github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/meb/store"
 )
 
 func TestServer_MultiProject(t *testing.T) {
@@ -33,7 +35,17 @@ func TestServer_MultiProject(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(pDir, "metadata.json"), []byte(meta), 0644); err != nil {
 				t.Fatalf("Failed to write metadata: %v", err)
 			}
+			if err := os.WriteFile(filepath.Join(pDir, "metadata.json"), []byte(meta), 0644); err != nil {
+				t.Fatalf("Failed to write metadata: %v", err)
+			}
 		}
+		// Initialize DB (Open and Close to create manifest)
+		cfg := store.DefaultConfig(pDir)
+		db, err := meb.Open(pDir, cfg)
+		if err != nil {
+			t.Fatalf("Failed to initialize DB: %v", err)
+		}
+		db.Close()
 	}
 
 	// Initialize Manager

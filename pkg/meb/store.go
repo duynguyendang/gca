@@ -475,7 +475,7 @@ func (m *MEBStore) GetAllPredicates() ([]string, error) {
 
 // GetTopSymbols returns the top N most frequent symbols (subjects/objects).
 // An optional filter function can be provided to exclude certain symbols.
-func (m *MEBStore) GetTopSymbols(limit int, filter func(string) bool) ([]string, error) {
+func (m *MEBStore) GetTopSymbols(limit int, filter func(string) bool) ([]SymbolStat, error) {
 	symbolFreq := make(map[string]int)
 
 	// Scan all facts and count subject/object occurrences
@@ -542,26 +542,26 @@ func (m *MEBStore) GetTopSymbols(limit int, filter func(string) bool) ([]string,
 	// However, to match the signature `([]string, error)`, we must convert.
 	// Let's assume the user wants the keys of the map as strings, limited.
 
-	// Convert map keys to a slice of strings
-	symbols := make([]string, 0, len(symbolFreq))
-	for s := range symbolFreq {
-		symbols = append(symbols, s)
+	// Convert map to slice of SymbolStat
+	stats := make([]SymbolStat, 0, len(symbolFreq))
+	for s, count := range symbolFreq {
+		stats = append(stats, SymbolStat{Name: s, Count: count})
 	}
 
 	// Sort by frequency (descending) and then alphabetically (ascending) for ties
-	sort.Slice(symbols, func(i, j int) bool {
-		if symbolFreq[symbols[i]] != symbolFreq[symbols[j]] {
-			return symbolFreq[symbols[i]] > symbolFreq[symbols[j]]
+	sort.Slice(stats, func(i, j int) bool {
+		if stats[i].Count != stats[j].Count {
+			return stats[i].Count > stats[j].Count
 		}
-		return symbols[i] < symbols[j]
+		return stats[i].Name < stats[j].Name
 	})
 
 	// Apply limit
-	if len(symbols) > limit {
-		symbols = symbols[:limit]
+	if len(stats) > limit {
+		stats = stats[:limit]
 	}
 
-	return symbols, nil
+	return stats, nil
 }
 
 // SearchSymbols performs a prefix search on symbol names.

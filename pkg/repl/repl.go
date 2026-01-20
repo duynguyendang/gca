@@ -16,11 +16,11 @@ import (
 )
 
 // Run starts the interactive REPL with intelligent feedback loop.
-func Run(s *meb.MEBStore, readOnly bool) {
+func Run(ctx context.Context, cfg Config, s *meb.MEBStore) {
 	fmt.Println("\n--- Interactive Query Mode ---")
 
 	// Recalculate stats to ensure we have fresh counts
-	if !readOnly {
+	if !cfg.ReadOnly {
 		if _, err := s.RecalculateStats(); err != nil {
 			log.Printf("Stats recalc error: %v", err)
 		}
@@ -60,7 +60,7 @@ func Run(s *meb.MEBStore, readOnly bool) {
 					fmt.Printf("   ... and %d more\n", len(projectContext.TopSymbols)-displayLimit)
 					break
 				}
-				fmt.Printf("   - %s\n", symbol)
+				fmt.Printf("   - %s (%d)\n", symbol.Name, symbol.Count)
 			}
 		}
 
@@ -134,7 +134,7 @@ func Run(s *meb.MEBStore, readOnly bool) {
 				fmt.Println("Error: Planner prompt not loaded.")
 				continue
 			}
-			if err := executePlanCommand(context.Background(), s, goal, projectContext, plannerPrompt); err != nil {
+			if err := executePlanCommand(ctx, cfg, s, goal, projectContext, plannerPrompt); err != nil {
 				fmt.Printf("❌ Plan execution failed: %v\n", err)
 			}
 			continue
@@ -296,7 +296,7 @@ func Run(s *meb.MEBStore, readOnly bool) {
 				prevSuggestions = session.GetLastSuggestions()
 			}
 
-			translated, err := askGeminiWithContext(context.Background(), nlPrompt, line, factStrings, prevSuggestions)
+			translated, err := askGeminiWithContext(ctx, cfg, nlPrompt, line, factStrings, prevSuggestions)
 			if err != nil {
 				fmt.Printf("Gemini Error: %v\n", err)
 				continue
@@ -340,7 +340,7 @@ func Run(s *meb.MEBStore, readOnly bool) {
 		// Explain results if we have a natural language query and the explain prompt
 		if nlQuery != "" && explainPrompt != nil {
 			fmt.Println("\n🤖 Analyzing results...")
-			explanation, err := explainResults(context.Background(), session, explainPrompt)
+			explanation, err := explainResults(ctx, cfg, session, explainPrompt)
 			if err != nil {
 				log.Printf("Warning: Failed to generate explanation: %v", err)
 			} else {
@@ -383,7 +383,7 @@ func isFollowUpQuery(query string) bool {
 }
 
 // explainResults generates a natural language explanation of query results.
-func explainResults(ctx context.Context, session *SessionContext, explainPrompt *Prompt) (string, error) {
+func explainResults(ctx context.Context, cfg Config, session *SessionContext, explainPrompt *Prompt) (string, error) {
 	if session.ResultSummary == nil {
 		return "", fmt.Errorf("no result summary available")
 	}
@@ -405,9 +405,10 @@ func explainResults(ctx context.Context, session *SessionContext, explainPrompt 
 	}
 
 	// Call Gemini with the explain prompt
-	apiKey := os.Getenv("GEMINI_API_KEY")
+	// Call Gemini with the explain prompt
+	apiKey := cfg.GeminiAPIKey
 	if apiKey == "" {
-		return "", fmt.Errorf("GEMINI_API_KEY not set")
+		return "", fmt.Errorf("Gemini API key not configured")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -456,15 +457,15 @@ func clean(s string) string {
 	return strings.TrimSpace(strings.ReplaceAll(s, "\"", ""))
 }
 
-func askGemini(ctx context.Context, p *Prompt, question string, facts []string) (string, error) {
-	return askGeminiWithContext(ctx, p, question, facts, "")
+func askGemini(ctx context.Context, cfg Config, p *Prompt, question string, facts []string) (string, error) {
+	return askGeminiWithContext(ctx, cfg, p, question, facts, "")
 }
 
-func askGeminiWithContext(ctx context.Context, p *Prompt, question string, facts []string, suggestedQueries string) (string, error) {
+func askGeminiWithContext(ctx context.Context, cfg Config, p *Prompt, question string, facts []string, suggestedQueries string) (string, error) {
 
-	apiKey := os.Getenv("GEMINI_API_KEY")
+	apiKey := cfg.GeminiAPIKey
 	if apiKey == "" {
-		return "", fmt.Errorf("GEMINI_API_KEY not set")
+		return "", fmt.Errorf("Gemini API key not configured")
 	}
 
 	// Increased timeout to 30 seconds to handle complex queries
@@ -524,7 +525,7 @@ func askGeminiWithContext(ctx context.Context, p *Prompt, question string, facts
 }
 
 // executePlanCommand handles the "plan <goal>" command by generating and executing a multi-step plan.
-func executePlanCommand(ctx context.Context, s *meb.MEBStore, goal string, projectContext *ProjectSummary, plannerPrompt *Prompt) error {
+func executePlanCommand(ctx context.Context, cfg Config, s *meb.MEBStore, goal string, projectContext *ProjectSummary, plannerPrompt *Prompt) error {
 	fmt.Println("\n🧠 Analyzing codebase and generating execution plan...")
 
 	// Prepare template data with project context
@@ -542,9 +543,9 @@ func executePlanCommand(ctx context.Context, s *meb.MEBStore, goal string, proje
 	}
 
 	// Call Gemini to generate plan
-	apiKey := os.Getenv("GEMINI_API_KEY")
+	apiKey := cfg.GeminiAPIKey
 	if apiKey == "" {
-		return fmt.Errorf("GEMINI_API_KEY not set")
+		return fmt.Errorf("Gemini API key not configured")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -607,5 +608,5 @@ func executePlanCommand(ctx context.Context, s *meb.MEBStore, goal string, proje
 	}
 
 	// Execute the plan
-	return ExecutePlan(ctx, s, session, plannerPrompt)
+	return ExecutePlan(ctx, cfg, s, session, plannerPrompt)
 }

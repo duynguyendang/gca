@@ -4,23 +4,28 @@ import (
 	"net/http"
 
 	"github.com/duynguyendang/gca/internal/manager"
+	"github.com/duynguyendang/gca/pkg/service"
 	"github.com/gin-gonic/gin"
 )
 
 // Server holds the state for the REST API server.
 type Server struct {
-	manager   *manager.StoreManager
-	sourceDir string
-	router    *gin.Engine
+	manager      *manager.StoreManager
+	graphService *service.GraphService
+	sourceDir    string
+	router       *gin.Engine
 }
 
 // NewServer creates a new Server instance.
 func NewServer(mgr *manager.StoreManager, sourceDir string) *Server {
 	r := gin.Default()
+	svc := service.NewGraphService(mgr)
+
 	s := &Server{
-		manager:   mgr,
-		sourceDir: sourceDir,
-		router:    r,
+		manager:      mgr,
+		graphService: svc,
+		sourceDir:    sourceDir,
+		router:       r,
 	}
 	s.setupRoutes()
 	return s

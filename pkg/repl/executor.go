@@ -15,9 +15,8 @@ import (
 	"google.golang.org/api/option"
 )
 
-// ExecutePlan executes a multi-step plan with user confirmation, variable injection,
-// and self-correction on failures.
-func ExecutePlan(ctx context.Context, s *meb.MEBStore, session *ExecutionSession, plannerPrompt *Prompt) error {
+// ExecutePlan executes the plan steps.
+func ExecutePlan(ctx context.Context, cfg Config, s *meb.MEBStore, session *ExecutionSession, plannerPrompt *Prompt) error {
 	fmt.Printf("\n🚀 Executing plan: %s\n\n", session.Goal)
 
 	for !session.IsComplete() {

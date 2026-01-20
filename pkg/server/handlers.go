@@ -1,23 +1,20 @@
 package server
 
 import (
-	"fmt"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 
-	"github.com/duynguyendang/gca/pkg/export"
-	"github.com/duynguyendang/gca/pkg/meb"
-	"github.com/duynguyendang/gca/pkg/repl"
+	"github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/gin-gonic/gin"
 )
 
 // handleProjects returns a list of available projects.
+// handleProjects returns a list of available projects.
 func (s *Server) handleProjects(c *gin.Context) {
-	projects, err := s.manager.ListProjects()
+	projects, err := s.graphService.ListProjects()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to list projects: %v", err)})
+		handleError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, projects)
@@ -29,77 +26,17 @@ func (s *Server) handleQuery(c *gin.Context) {
 		Query string `json:"query"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Invalid request body", err))
 		return
 	}
 
-	// Get project ID from query parameter
 	projectID := c.Query("project")
-	if projectID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing 'project' query parameter"})
-		return
-	}
 
-	store, err := s.manager.GetStore(projectID)
+	// Delegate to service
+	graph, err := s.graphService.ExportGraph(c.Request.Context(), projectID, req.Query, true)
 	if err != nil {
-		if os.IsNotExist(err) || err.Error() == fmt.Sprintf("project not found: %s", projectID) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to load project: %v", err)})
-		}
+		handleError(c, err)
 		return
-	}
-
-	results, err := store.Query(c.Request.Context(), req.Query)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Query execution failed: %v", err)})
-		return
-	}
-
-	// Use the shared D3 exporter
-	graph, err := export.ExportD3(c.Request.Context(), store, req.Query, results)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Graph transformation failed: %v", err)})
-		return
-	}
-
-	// Hydrate Nodes
-	// Collect IDs
-	if len(graph.Nodes) > 0 {
-		ids := make([]meb.DocumentID, len(graph.Nodes))
-		for i, n := range graph.Nodes {
-			ids[i] = meb.DocumentID(n.ID)
-		}
-
-		// Hydrate
-		hydrated, err := store.Hydrate(c.Request.Context(), ids)
-		if err != nil {
-			// Log warning but return graph? Or fail?
-			// Let's log and proceed with partial hydration if possible, but Hydrate returns all or error.
-			// Ideally we shouldn't fail the whole query if hydration fails for some reason, but errgroup returns first error.
-			// Let's return error for now to be safe.
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Hydration failed: %v", err)})
-			return
-		}
-
-		// Map back to nodes
-		hMap := make(map[meb.DocumentID]meb.HydratedSymbol)
-		for _, h := range hydrated {
-			hMap[h.ID] = h
-		}
-
-		for i := range graph.Nodes {
-			n := &graph.Nodes[i]
-			if h, ok := hMap[meb.DocumentID(n.ID)]; ok {
-				n.Code = h.Content
-				if h.Kind != "" {
-					n.Kind = h.Kind
-				}
-				// Metadata to other fields if needed?
-				// D3Node has Language. We can infer from metadata if present?
-				// h.Metadata might have "language".
-			}
-		}
 	}
 
 	c.JSON(http.StatusOK, graph)
@@ -108,33 +45,20 @@ func (s *Server) handleQuery(c *gin.Context) {
 // handleSource returns source code for a given file ID.
 func (s *Server) handleSource(c *gin.Context) {
 	id := c.Query("id")
-	if id == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing 'id' parameter"})
-		return
-	}
-
 	projectID := c.Query("project")
-	if projectID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing 'project' query parameter"})
-		return
-	}
 
-	store, err := s.manager.GetStore(projectID)
+	content, err := s.graphService.GetSource(projectID, id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+		handleError(c, err)
 		return
 	}
-
-	// Use Hydrator (GetDocument)
-	doc, err := store.GetDocument(meb.DocumentID(id))
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Document not found"})
-		return
-	}
-
-	content := string(doc.Content)
 
 	// Handle line range extraction if requested
+	// Keep presentation logic in handler? Or move to service?
+	// Line range is view logic, maybe keep here or helper.
+	// Check lines...
+	// ... (Existing slice logic) ...
+
 	startStr := c.Query("start")
 	endStr := c.Query("end")
 
@@ -148,6 +72,7 @@ func (s *Server) handleSource(c *gin.Context) {
 	}
 
 	lines := strings.Split(content, "\n")
+	// ... (Normalization logic) ...
 	if start < 1 {
 		start = 1
 	}
@@ -155,19 +80,11 @@ func (s *Server) handleSource(c *gin.Context) {
 		end = len(lines)
 	}
 
-	if start > len(lines) {
-		c.String(http.StatusOK, "")
-		return
-	}
-	if start > end {
+	if start > len(lines) || start > end {
 		c.String(http.StatusOK, "")
 		return
 	}
 
-	// Adjust 0-based
-	if end > len(lines) {
-		end = len(lines)
-	}
 	slice := lines[start-1 : end]
 	result := strings.Join(slice, "\n")
 
@@ -177,20 +94,9 @@ func (s *Server) handleSource(c *gin.Context) {
 // handleSummary returns the project summary.
 func (s *Server) handleSummary(c *gin.Context) {
 	projectID := c.Query("project")
-	if projectID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing 'project' query parameter"})
-		return
-	}
-
-	store, err := s.manager.GetStore(projectID)
+	summary, err := s.graphService.GenerateSummary(projectID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
-		return
-	}
-
-	summary, err := repl.GenerateProjectSummary(store)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to generate summary: %v", err)})
+		handleError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, summary)
@@ -202,7 +108,7 @@ func (s *Server) handlePredicates(c *gin.Context) {
 
 	// If no project specified, try to pick the first one available
 	if projectID == "" {
-		projects, err := s.manager.ListProjects()
+		projects, err := s.graphService.ListProjects()
 		if err == nil && len(projects) > 0 {
 			projectID = projects[0].ID
 		}
@@ -213,31 +119,11 @@ func (s *Server) handlePredicates(c *gin.Context) {
 		return
 	}
 
-	store, err := s.manager.GetStore(projectID)
+	results, err := s.graphService.GetPredicates(projectID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+		handleError(c, err)
 		return
 	}
-
-	activePreds, err := store.GetAllPredicates()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get predicates: %v", err)})
-		return
-	}
-
-	// Static metadata for known system predicates provided by meb.SystemPredicates
-	var results []map[string]string
-	for _, p := range activePreds {
-		// Only include predicates that are in the SystemPredicates registry (Whitelist)
-		if m, ok := meb.SystemPredicates[p]; ok {
-			results = append(results, map[string]string{
-				"name":        p,
-				"description": m.Description,
-				"example":     m.Example,
-			})
-		}
-	}
-
 	c.JSON(http.StatusOK, gin.H{"predicates": results})
 }
 
@@ -247,7 +133,7 @@ func (s *Server) handleSymbols(c *gin.Context) {
 	query := c.Query("q")
 
 	if projectID == "" {
-		projects, err := s.manager.ListProjects()
+		projects, err := s.graphService.ListProjects()
 		if err == nil && len(projects) > 0 {
 			projectID = projects[0].ID
 		}
@@ -258,23 +144,27 @@ func (s *Server) handleSymbols(c *gin.Context) {
 		return
 	}
 
-	store, err := s.manager.GetStore(projectID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
-		return
-	}
-
-	// Limit results to 50 for autocomplete
 	predicate := c.Query("p")
 	if predicate == "" && c.Query("all") != "true" {
-		predicate = meb.PredDefines
+		predicate = "defines" // Hardcoded literal instead of importing meb? Or import meb just for constant if needed.
+		// meb is not imported yet, I removed it.
+		// Let's assume "defines" string or import meb if critical.
+		// The original code used meb.PredDefines.
+		// GraphService doesn't expose constant.
+		// Let's just use string "defines".
 	}
 
-	results, err := store.SearchSymbols(query, 50, predicate)
+	results, err := s.graphService.SearchSymbols(projectID, query, predicate, 50)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Search failed"})
+		handleError(c, err)
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"symbols": results})
+}
+
+// handleError helper
+func handleError(c *gin.Context, err error) {
+	appErr := errors.MapError(err)
+	c.JSON(appErr.Code, gin.H{"error": appErr.Message})
 }

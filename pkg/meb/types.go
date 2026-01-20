@@ -70,3 +70,9 @@ func NewFactInGraph(subject DocumentID, predicate string, object any, graph stri
 		Graph:     graph,
 	}
 }
+
+// SymbolStat represents a symbol and its frequency.
+type SymbolStat struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}

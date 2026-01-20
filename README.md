@@ -1,21 +1,22 @@
 # GCA (Gem Code Analysis)
 
-GCA is a knowledge graph-powered code analysis tool that allows you to query your Go codebase using Datalog and Natural Language. It ingests Go source code, builds a Semantic Knowledge Graph (Subject-Predicate-Object), and provides a neuro-symbolic query interface.
+GCA is a knowledge graph-powered code analysis tool that allows you to query your codebase using Datalog and Natural Language. It ingests source code (Go, Python, TypeScript, JavaScript), builds a Semantic Knowledge Graph (Subject-Predicate-Object), and provides a neuro-symbolic query interface.
 
 ## Features
 
--   **Code Ingestion**: Uses `tree-sitter` to parse Go code and extract facts (function calls, imports, struct definitions, etc.).
+-   **Code Ingestion**: Uses `tree-sitter` to parse code (Go, Python, TypeScript, JavaScript) and extract facts (function calls, imports, struct/class definitions, etc.).
 -   **Knowledge Graph**: Stores facts in a highly optimized, memory-efficient graph database (`MEB`) backed by BadgerDB.
 -   **Datalog Query Engine**: Built-in Datalog parser and execution engine supporting:
     -   Triples: `triples(S, P, O)`
     -   Joins: Multi-hop queries (e.g., `triples(A, "calls", B), triples(B, "calls", C)`)
     -   Constraints: `regex(Var, "pattern")`, Inequalities (`A != B`)
+-   **Fuzzy Symbol Search**:  Finds symbols using Levenshtein distance and Jaccard similarity, allowing for typo-tolerant searching.
 -   **AI-Powered Querying**: Integrates with Google's Gemini models to translate Natural Language questions into Datalog queries automatically.
 -   **RESTful API**: Exposes a full-featured API for discovery, querying, and source code retrieval.
 -   **Zero-Dependency Serving**: Embeds source code directly into the knowledge graph, allowing the server to operate without access to the original source files ("portability").
 -   **Interactive REPL**: Explore your codebase interactively with autocomplete and history.
 
-## Architecture (MEB v2.0)
+## Architecture
 
 -   **`pkg/ingest`**: High-fidelity ingestion pipeline. Uses `tree-sitter` to produce `AnalysisBundle` containing structurally separated **Documents** (raw content) and **Facts** (relational logic).
 -   **`pkg/meb`**: The Memory-Efficient Bidirectional (MEB) graph store.
@@ -23,7 +24,9 @@ GCA is a knowledge graph-powered code analysis tool that allows you to query you
     -   **DocStore**: Stores raw content, embeddings, and metadata using Canonical IDs (`DocumentID`).
     -   **Hydration Service**: Joins Facts and Documents on-the-fly for rich API responses.
 -   **`pkg/datalog`**: Custom Datalog parser for query processing.
--   **`pkg/server`**: REST API server implementation for stateless project querying.
+-   **`pkg/service`**: Logic layer orchestrating queries, export, and graph hydration.
+-   **`pkg/server`**: Lightweight REST API/Validation layer.
+-   **`pkg/common/errors`**: Standardized domain error types and HTTP mapping.
 -   **`pkg/repl`**: Interactive Read-Eval-Print Loop for querying the graph and viewing source code.
 
 ## Installation
@@ -193,7 +196,10 @@ Generates a high-level statistical summary of the project.
 {
   "total_facts": 1250,
   "unique_predicates": ["calls", "imports", "defines"],
-  "top_symbols": ["main", "ServeHTTP"],
+  "top_symbols": [
+    { "name": "main", "count": 42 },
+    { "name": "ServeHTTP", "count": 15 }
+  ],
   "stats": { ... }
 }
 ```
@@ -223,7 +229,7 @@ Returns the graph schema (list of active predicates) with descriptions and usage
 ### 6. Symbol Search API
 **Endpoint:** `GET /v1/symbols`
 
-Provides fast prefix-based symbol search and autocomplete.
+Provides fast prefix-based and fuzzy symbol search (using Levenshtein and Jaccard similarity).
 
 **Query Parameters:**
 - `project`: The ID of the project.

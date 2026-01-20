@@ -13,6 +13,8 @@ import (
 	"github.com/duynguyendang/gca/pkg/repl"
 	"github.com/duynguyendang/gca/pkg/server"
 
+	"context"
+
 	"github.com/joho/godotenv"
 )
 
@@ -109,6 +111,15 @@ func main() {
 		}
 	} else {
 		// Start Interactive Repl
-		repl.Run(s, readOnly)
+		replCfg := repl.DefaultConfig()
+		replCfg.GeminiAPIKey = os.Getenv("GEMINI_API_KEY")
+		replCfg.ReadOnly = readOnly
+
+		// Allow overriding model via env
+		if model := os.Getenv("GEMINI_MODEL"); model != "" {
+			replCfg.Model = model
+		}
+
+		repl.Run(context.Background(), replCfg, s)
 	}
 }

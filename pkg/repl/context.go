@@ -10,10 +10,10 @@ import (
 
 // ProjectSummary holds a structured summary of the codebase for the AI Planner.
 type ProjectSummary struct {
-	Predicates []string       `json:"predicates"`
-	Packages   []string       `json:"packages"`
-	TopSymbols []string       `json:"top_symbols"`
-	Stats      map[string]int `json:"stats"`
+	Predicates []string         `json:"predicates"`
+	Packages   []string         `json:"packages"`
+	TopSymbols []meb.SymbolStat `json:"top_symbols"`
+	Stats      map[string]int   `json:"stats"`
 }
 
 // GenerateProjectSummary scans the database and generates a structured context summary.
@@ -91,7 +91,7 @@ func extractPackages(s *meb.MEBStore) ([]string, error) {
 }
 
 // analyzeTopSymbols retrieves the top N most frequent symbols using MEBStore API.
-func analyzeTopSymbols(s *meb.MEBStore, limit int) ([]string, error) {
+func analyzeTopSymbols(s *meb.MEBStore, limit int) ([]meb.SymbolStat, error) {
 	// Common stdlib types to exclude
 	stdlibTypes := map[string]bool{
 		"int": true, "int64": true, "int32": true, "int16": true, "int8": true,
