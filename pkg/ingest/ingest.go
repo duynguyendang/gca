@@ -195,6 +195,11 @@ func processFile(s *meb.MEBStore, ext Extractor, path string, sourceRoot string)
 	}
 
 	// 1. Add Documents
+	// Add file-level document
+	if err := s.AddDocument(meb.DocumentID(relPath), content, nil, map[string]any{"type": "file"}); err != nil {
+		log.Printf("Error adding file document %s: %v", relPath, err)
+	}
+
 	for _, doc := range bundle.Documents {
 		if err := s.AddDocument(doc.ID, doc.Content, doc.Embedding, doc.Metadata); err != nil {
 			log.Printf("Error adding document %s: %v", doc.ID, err)

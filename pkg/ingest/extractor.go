@@ -205,7 +205,6 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 		bundle.Facts = append(bundle.Facts,
 			meb.Fact{Subject: meb.DocumentID(sym.ID), Predicate: meb.PredType, Object: sym.Type, Graph: "default"},
 			meb.Fact{Subject: meb.DocumentID(relPath), Predicate: meb.PredDefines, Object: sym.ID, Graph: "default"},
-			meb.Fact{Subject: meb.DocumentID(sym.ID), Predicate: meb.PredHasSourceCode, Object: sym.Content, Graph: "default"},
 		)
 
 		if sym.DocComment != "" {
@@ -320,30 +319,6 @@ func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relP
 
 func (e *TreeSitterExtractor) extractPythonNode(n *sitter.Node, content []byte, relPath string, symbols *[]Symbol) {
 	switch n.Kind() {
-	case "expression_statement":
-		child := n.Child(0)
-		if child != nil && child.Kind() == "assignment" {
-			left := child.ChildByFieldName("left")
-			if left != nil {
-				if left.Kind() == "identifier" {
-					name := clean(left.Utf8Text(content))
-					id := fmt.Sprintf("%s:%s", relPath, name)
-					doc := e.getDocComment(n, content)
-					sig := fmt.Sprintf("%s = ...", name)
-
-					*symbols = append(*symbols, Symbol{
-						ID:         id,
-						Name:       name,
-						Type:       TypeVariable,
-						Signature:  sig,
-						DocComment: doc,
-						Content:    n.Utf8Text(content),
-						StartLine:  lineFromOffset(content, n.StartByte()),
-						EndLine:    lineFromOffset(content, n.EndByte()),
-					})
-				}
-			}
-		}
 	case "function_definition":
 		nameNode := n.ChildByFieldName("name")
 		if nameNode != nil {
@@ -512,40 +487,6 @@ func (e *TreeSitterExtractor) extractJSNode(n *sitter.Node, content []byte, relP
 			name = clean(nameNode.Utf8Text(content))
 			symType = TypeInterface
 		}
-	case "lexical_declaration", "variable_declaration":
-		// const x = 1; let y = 2; var z = 3;
-		// Can have multiple declarators: let a=1, b=2;
-		for i := uint(0); i < uint(n.ChildCount()); i++ {
-			child := n.Child(i)
-			if child.Kind() == "variable_declarator" {
-				nameNode := child.ChildByFieldName("name")
-				if nameNode != nil && nameNode.Kind() == "identifier" {
-					name = clean(nameNode.Utf8Text(content))
-					symType = TypeVariable
-
-					// We need to append here because this node kind handles multiple symbols
-					if name != "" {
-						id := fmt.Sprintf("%s:%s", relPath, name)
-						doc := e.getDocComment(n, content) // Comment on the whole declaration line
-						sig := n.Utf8Text(content)         // Use full line as sig for now
-
-						*symbols = append(*symbols, Symbol{
-							ID:         id,
-							Name:       name,
-							Type:       symType,
-							Signature:  sig,
-							DocComment: doc,
-							Content:    n.Utf8Text(content), // Note: this duplicates content if multiple vars on one line
-							StartLine:  lineFromOffset(content, child.StartByte()),
-							EndLine:    lineFromOffset(content, child.EndByte()),
-						})
-					}
-				}
-			}
-		}
-		// Reset name to avoid double add at end of function
-		name = ""
-
 	}
 
 	if name != "" {

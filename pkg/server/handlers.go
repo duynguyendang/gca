@@ -163,6 +163,31 @@ func (s *Server) handleSymbols(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"symbols": results})
 }
 
+// handleFiles returns a list of all ingested files for the project.
+func (s *Server) handleFiles(c *gin.Context) {
+	projectID := c.Query("project")
+	if projectID == "" {
+		// Try discovery
+		projects, err := s.graphService.ListProjects()
+		if err == nil && len(projects) > 0 {
+			projectID = projects[0].ID
+		}
+	}
+
+	if projectID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+		return
+	}
+
+	files, err := s.graphService.ListFiles(projectID)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"files": files})
+}
+
 // handleError helper
 func handleError(c *gin.Context, err error) {
 	appErr := errors.MapError(err)

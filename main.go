@@ -102,6 +102,7 @@ func main() {
 
 	if *ingestMode {
 		if err := ingest.Run(s, sourceDir); err != nil {
+			s.Close()
 			log.Fatalf("Ingestion failed: %v", err)
 		}
 

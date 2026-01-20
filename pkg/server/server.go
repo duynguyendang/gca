@@ -44,6 +44,7 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/v1/summary", s.handleSummary)
 	s.router.GET("/v1/predicates", s.handlePredicates)
 	s.router.GET("/v1/symbols", s.handleSymbols)
+	s.router.GET("/v1/files", s.handleFiles)
 }
 
 // Health check

@@ -195,3 +195,33 @@ func (s *GraphService) SearchSymbols(projectID, query, predicate string, limit i
 
 	return store.SearchSymbols(query, limit, predicate)
 }
+
+// ListFiles returns all ingested file paths for a project.
+func (s *GraphService) ListFiles(projectID string) ([]string, error) {
+	store, err := s.getStore(projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Query for all files that have a hash
+	// Use explicit predicate string to avoid depending on meb package details here if possible,
+	// but meb.PredHash is cleaner.
+	q := fmt.Sprintf("triples(?f, \"%s\", ?h)", meb.PredHash)
+	results, err := store.Query(context.Background(), q)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errors.ErrInternal, err)
+	}
+
+	files := make([]string, 0, len(results))
+	for _, res := range results {
+		if f, ok := res["?f"].(string); ok {
+			// clean quotes if any (datalog sometimes returns quoted strings if not careful,
+			// but here they should be DocumentIDs which are strings)
+			f = strings.Trim(f, "\"")
+			files = append(files, f)
+		}
+	}
+	// Sort for consistent output
+	// Not strictly necessary but good for UI
+	return files, nil
+}
