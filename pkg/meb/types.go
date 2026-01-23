@@ -29,6 +29,8 @@ type Fact struct {
 	Predicate string     // The relationship type
 	Object    any        // The target value (can be another DocumentID or literal)
 	Graph     string     // Context/Tenant ID (defaults to "default")
+	Weight    float64    // Confidence score (0.0-1.0), defaults to 1.0
+	Source    string     // Provenance ("ast", "virtual", "inference"), defaults to "ast"
 }
 
 // String returns a human-readable representation of the Fact.

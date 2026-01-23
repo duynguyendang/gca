@@ -114,7 +114,7 @@ func (m *MEBStore) ScanContext(ctx context.Context, s, p, o, g string) iter.Seq2
 
 		// Create iterator
 		opts := badger.DefaultIteratorOptions
-		opts.PrefetchValues = false // We only need keys
+		opts.PrefetchValues = true // We need values for metadata
 
 		it := txn.NewIterator(opts)
 		defer it.Close()
@@ -134,6 +134,22 @@ func (m *MEBStore) ScanContext(ctx context.Context, s, p, o, g string) iter.Seq2
 
 			if len(key) != keys.TripleKeySize { // 25 bytes
 				continue // Skip non-fact keys
+			}
+
+			// Capture value (metadata)
+			var weight float64 = 1.0
+			var source string = "ast"
+
+			// Badger Item.Value() access
+			err := item.Value(func(val []byte) error {
+				w, s := DecodeFactMetadata(val)
+				weight = w
+				source = s
+				return nil
+			})
+			if err != nil {
+				// Log error? Or continue with defaults?
+				// Defaults are safer.
 			}
 
 			// Decode the key based on which index we're using
@@ -200,7 +216,9 @@ func (m *MEBStore) ScanContext(ctx context.Context, s, p, o, g string) iter.Seq2
 				Subject:   DocumentID(subject),
 				Predicate: predicate,
 				Object:    objectStr,
-				Graph:     normalizeGraph(g), // Use normalized graph
+				Graph:     normalizeGraph(g),
+				Weight:    weight,
+				Source:    source,
 			}
 
 			if !yield(fact, nil) {

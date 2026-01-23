@@ -19,6 +19,8 @@ type Server struct {
 // NewServer creates a new Server instance.
 func NewServer(mgr *manager.StoreManager, sourceDir string) *Server {
 	r := gin.Default()
+	r.Use(CORSMiddleware())
+
 	svc := service.NewGraphService(mgr)
 
 	s := &Server{
@@ -39,6 +41,7 @@ func (s *Server) Run(addr string) error {
 func (s *Server) setupRoutes() {
 	s.router.GET("/health", s.healthCheck)
 	s.router.GET("/v1/projects", s.handleProjects)
+	s.router.GET("/v1/graph", s.handleGraph)
 	s.router.POST("/v1/query", s.handleQuery)
 	s.router.GET("/v1/source", s.handleSource)
 	s.router.GET("/v1/summary", s.handleSummary)
@@ -50,4 +53,21 @@ func (s *Server) setupRoutes() {
 // Health check
 func (s *Server) healthCheck(c *gin.Context) {
 	c.Status(http.StatusOK)
+}
+
+// CORSMiddleware handles CORS headers.
+func CORSMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+
+		c.Next()
+	}
 }

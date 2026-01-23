@@ -110,21 +110,26 @@ func (m *MEBStore) AddFactBatch(facts []Fact) error {
 			}
 		}
 
+		// Encode Metadata (Weight/Source)
+		metaBytes := EncodeFactMetadata(fact)
+
 		// Add to main index: SPO (25 bytes)
 		spogKey := keys.EncodeSPOKey(sID, pID, oID)
-		if err := batch.Set(spogKey, nil); err != nil {
+		if err := batch.Set(spogKey, metaBytes); err != nil {
 			return fmt.Errorf("failed to set SPO key for fact %d: %w", i, err)
 		}
 
 		// Add to inverse index: OPS (25 bytes)
+		// We store metadata in OPS as well for fast retrieval during reverse lookups?
+		// Metadata is property of the Fact (edge), so it should be same.
 		opsKey := keys.EncodeOPSKey(sID, pID, oID)
-		if err := batch.Set(opsKey, nil); err != nil {
+		if err := batch.Set(opsKey, metaBytes); err != nil {
 			return fmt.Errorf("failed to set OPS key for fact %d: %w", i, err)
 		}
 
 		// Add to predicate index: PSO (25 bytes)
 		psoKey := keys.EncodePSOKey(sID, pID, oID)
-		if err := batch.Set(psoKey, nil); err != nil {
+		if err := batch.Set(psoKey, metaBytes); err != nil {
 			return fmt.Errorf("failed to set PSO key for fact %d: %w", i, err)
 		}
 
@@ -433,6 +438,11 @@ func (m *MEBStore) Query(ctx context.Context, query string) ([]map[string]any, e
 							newBinding[varName] = row[idx]
 						}
 					}
+
+					// Inject Metadata (Weight/Source) into hidden fields
+					newBinding["_weight"] = fact.Weight
+					newBinding["_source"] = fact.Source
+
 					nextBindings = append(nextBindings, newBinding)
 				}
 			}

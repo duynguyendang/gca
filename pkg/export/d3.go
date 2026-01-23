@@ -13,19 +13,22 @@ import (
 
 // D3Node represents a node in the D3 force-directed graph.
 type D3Node struct {
-	ID       string `json:"id"`                 // Full absolute path (unique identifier)
-	Name     string `json:"name"`               // Display name (filename:symbol)
-	Kind     string `json:"kind,omitempty"`     // e.g. "func", "struct", "interface"
-	Language string `json:"language,omitempty"` // e.g. "go", "typescript"
-	Group    string `json:"group,omitempty"`    // Grouping for visualization (uses Language)
-	Code     string `json:"code,omitempty"`     // Source code snippet
+	ID       string   `json:"id"`                 // Full absolute path (unique identifier)
+	Name     string   `json:"name"`               // Display name (filename:symbol)
+	Kind     string   `json:"kind,omitempty"`     // e.g. "func", "struct", "interface"
+	Language string   `json:"language,omitempty"` // e.g. "go", "typescript"
+	Group    string   `json:"group,omitempty"`    // Grouping for visualization (uses Language)
+	Code     string   `json:"code,omitempty"`     // Source code snippet
+	Children []D3Node `json:"children,omitempty"` // Recursive children
 }
 
 // D3Link represents a link/edge in the D3 force-directed graph.
 type D3Link struct {
-	Source   string `json:"source"`
-	Target   string `json:"target"`
-	Relation string `json:"relation"`
+	Source           string  `json:"source"`
+	Target           string  `json:"target"`
+	Relation         string  `json:"relation"`
+	Weight           float64 `json:"weight,omitempty"`
+	SourceProvenance string  `json:"provenance,omitempty"` // Renamed to avoid collision with Source field
 }
 
 // D3Graph represents the full graph structure for D3.js.
@@ -127,11 +130,24 @@ func (t *D3Transformer) Transform(ctx context.Context, query string, results []m
 			nodesMap[oVal] = t.createNode(oVal)
 		}
 
+		// Extract metadata
+		var weight float64 = 1.0
+		if w, ok := row["_weight"].(float64); ok {
+			weight = w
+		}
+
+		var provenance string = "ast"
+		if s, ok := row["_source"].(string); ok {
+			provenance = s
+		}
+
 		// Add Link
 		links = append(links, D3Link{
-			Source:   sVal,
-			Target:   oVal,
-			Relation: pVal,
+			Source:           sVal,
+			Target:           oVal,
+			Relation:         pVal,
+			Weight:           weight,
+			SourceProvenance: provenance,
 		})
 	}
 
@@ -206,12 +222,10 @@ func (t *D3Transformer) getMetadata(id string) (string, string, string) {
 		}
 	}
 
-	// 3. Check for 'has_source_code'
-	for fact, _ := range t.Store.Scan(id, "has_source_code", "", "") {
-		if str, ok := fact.Object.(string); ok {
-			code = str
-			break
-		}
+	// 3. Get Source Code from DocStore (instead of FactStore)
+	doc, err := t.Store.GetDocument(meb.DocumentID(id))
+	if err == nil && len(doc.Content) > 0 {
+		code = string(doc.Content)
 	}
 
 	// Fallback: Infer language from file extension if not found in DB

@@ -144,3 +144,70 @@ func TestHydration(t *testing.T) {
 		t.Errorf("Expected metadata language='go', got %v", val)
 	}
 }
+
+func TestRecursiveHydration(t *testing.T) {
+	// Setup Store
+	tmpDir := t.TempDir()
+	cfg := store.DefaultConfig(tmpDir)
+	cfg.DictDir = filepath.Join(tmpDir, "dict")
+	cfg.InMemory = true
+
+	s, err := NewMEBStore(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer s.Close()
+
+	// 1. Ingest Parent (File)
+	parentID := DocumentID("pkg/auth/login.go")
+	parentContent := []byte("package auth\n...")
+	if err := s.AddDocument(parentID, parentContent, nil, nil); err != nil {
+		t.Fatalf("Failed to add parent: %v", err)
+	}
+
+	// 2. Ingest Child (Function)
+	childID := DocumentID("pkg/auth/login.go:Login")
+	childContent := []byte("func Login() {}")
+	if err := s.AddDocument(childID, childContent, nil, nil); err != nil {
+		t.Fatalf("Failed to add child: %v", err)
+	}
+
+	// 3. Add Relationship: File defines Function
+	definesFact := Fact{
+		Subject:   parentID,
+		Predicate: "defines",
+		Object:    string(childID), // Object is string for now
+		Graph:     "default",
+	}
+	if err := s.AddFact(definesFact); err != nil {
+		t.Fatalf("Failed to add defines fact: %v", err)
+	}
+
+	// 4. Hydrate Parent
+	ctx := context.Background()
+	results, err := s.Hydrate(ctx, []DocumentID{parentID})
+	if err != nil {
+		t.Fatalf("Hydrate failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("Expected 1 result, got %d", len(results))
+	}
+
+	parent := results[0]
+	if parent.ID != parentID {
+		t.Errorf("Expected parent ID %s, got %s", parentID, parent.ID)
+	}
+
+	// 5. Verify Child
+	if len(parent.Children) != 1 {
+		t.Fatalf("Expected 1 child, got %d", len(parent.Children))
+	}
+	child := parent.Children[0]
+	if child.ID != childID {
+		t.Errorf("Expected child ID %s, got %s", childID, child.ID)
+	}
+	if child.Content != string(childContent) {
+		t.Errorf("Expected child content %q, got %q", string(childContent), child.Content)
+	}
+}

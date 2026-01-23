@@ -10,10 +10,11 @@ import (
 
 // HydratedSymbol represents a symbol with both its relational facts and raw content.
 type HydratedSymbol struct {
-	ID       DocumentID     `json:"id"`
-	Kind     string         `json:"kind"` // From Facts
-	Content  string         `json:"code"` // From DocStore
-	Metadata map[string]any `json:"meta"` // From DocStore
+	ID       DocumentID       `json:"id"`
+	Kind     string           `json:"kind"` // From Facts
+	Content  string           `json:"code"` // From DocStore
+	Metadata map[string]any   `json:"meta"` // From DocStore
+	Children []HydratedSymbol `json:"children,omitempty"`
 }
 
 // Hydrate fetches content and metadata for a list of document IDs, parallelizing the I/O.
@@ -22,63 +23,28 @@ func (m *MEBStore) Hydrate(ctx context.Context, ids []DocumentID) ([]HydratedSym
 		return []HydratedSymbol{}, nil
 	}
 
+	// We'll limit concurrency to avoid overwhelming if list is huge.
+	// We use a shared semaphore via errgroup limit? No, errgroup limit is per group.
+	// If we curse recursively, we might spawn too many goroutines.
+	// For now, let's keep it simple: Top level parallel, children serial or limited.
+	// Given the depth isn't usually huge, simple recursion might be okay, but
+	// "defines" tree can be large. Let's stick to top-level parallelism for now.
+
 	results := make([]HydratedSymbol, len(ids))
 	g, ctx := errgroup.WithContext(ctx)
-
-	// We can process in chunks or just parallelize per ID.
-	// Given BadgerDB is local, heavy parallelism might contend, but let's stick to errgroup.
-	// We'll limit concurrency to avoid overwhelming if list is huge.
 	g.SetLimit(10)
 
 	var mu sync.Mutex
 
 	for i, id := range ids {
-		i, id := i, id // capture loop variables
+		i, id := i, id
 		g.Go(func() error {
-			// 1. Fetch from DocStore (using public API)
-			doc, err := m.GetDocument(id)
+			sym, err := m.hydrateOne(ctx, id)
 			if err != nil {
-				// If not found, maybe just partial result? Or error?
-				// For now, let's assume valid IDs or just return partial data.
-				// If error is "not found", we might want to continue.
-				// But GetDocument currently (I need to check if it exists)
-				// Assuming m.GetDocument exists or I need to implement it.
-				// m.AddDocument exists. I probably need m.GetDocument.
-				// Let's implement m.GetDocument in content.go if missing.
-				return fmt.Errorf("failed to get document %s: %w", id, err)
+				return err
 			}
-
-			// 2. Fetch Kind from Facts
-			// We can use m.Query or specific lookup.
-			// triples(ID, "type", ?k)
-			// Assuming we have a helper or just query.
-			kind := ""
-			// This query inside a loop might be slow. We might want to batch query kinds first?
-			// But for now, let's do it simply.
-			// Using Scan for exact match on Subject=ID and Predicate="type"
-			// But ScanContext takes strings.
-			// We need to be careful about locking if multiple goroutines access Scan.
-			// Badger transactions are thread-safe usually?
-			// m.ScanContext creates a new transaction.
-
-			// Note: If we are inside a read transaction, we should reuse it, but here we are top level.
-			// ScanContext creates its own txn.
-			for fact := range m.ScanContext(ctx, string(id), PredType, "", "") {
-				if k, ok := fact.Object.(string); ok {
-					kind = k
-					break
-				}
-			}
-
-			hydrated := HydratedSymbol{
-				ID:       id,
-				Kind:     kind,
-				Content:  string(doc.Content),
-				Metadata: doc.Metadata,
-			}
-
 			mu.Lock()
-			results[i] = hydrated
+			results[i] = sym
 			mu.Unlock()
 			return nil
 		})
@@ -89,4 +55,50 @@ func (m *MEBStore) Hydrate(ctx context.Context, ids []DocumentID) ([]HydratedSym
 	}
 
 	return results, nil
+}
+
+// hydrateOne hydrates a single symbol and its children recursively.
+func (m *MEBStore) hydrateOne(ctx context.Context, id DocumentID) (HydratedSymbol, error) {
+	// 1. Fetch from DocStore
+	doc, err := m.GetDocument(id)
+	if err != nil {
+		// If document missing, we might still want to return partial info if it exists in graph?
+		// For now, fail as before.
+		return HydratedSymbol{}, fmt.Errorf("failed to get document %s: %w", id, err)
+	}
+
+	// 2. Fetch Kind
+	kind := ""
+	for fact := range m.ScanContext(ctx, string(id), PredType, "", "") {
+		if k, ok := fact.Object.(string); ok {
+			kind = k
+			break
+		}
+	}
+
+	// 3. Fetch Children (recursive "defines")
+	var children []HydratedSymbol
+	// Scan for triples(id, "defines", ?child)
+	for fact := range m.ScanContext(ctx, string(id), "defines", "", "") {
+		if childIDStr, ok := fact.Object.(string); ok {
+			// Check for cycles? "defines" implies strict hierarchy usually.
+			// To be safe we could pass a visited map, but for now assuming DAG.
+			// Recursive call
+			childSym, err := m.hydrateOne(ctx, DocumentID(childIDStr))
+			if err != nil {
+				// Log warning? Or fail?
+				// If a child fails to hydrate (defines a symbol that has no doc?), maybe skip it.
+				continue
+			}
+			children = append(children, childSym)
+		}
+	}
+
+	return HydratedSymbol{
+		ID:       id,
+		Kind:     kind,
+		Content:  string(doc.Content),
+		Metadata: doc.Metadata,
+		Children: children,
+	}, nil
 }

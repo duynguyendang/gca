@@ -109,9 +109,37 @@ func (s *GraphService) enrichNodes(ctx context.Context, store *meb.MEBStore, gra
 			if h.Kind != "" {
 				n.Kind = h.Kind
 			}
+			n.Children = s.mapChildren(h.Children)
 		}
 	}
 	return nil
+}
+
+func (s *GraphService) mapChildren(hydrated []meb.HydratedSymbol) []export.D3Node {
+	if len(hydrated) == 0 {
+		return nil
+	}
+	nodes := make([]export.D3Node, len(hydrated))
+	for i, h := range hydrated {
+		// Fix Name generation first
+		parts := strings.Split(string(h.ID), "/")
+		name := parts[len(parts)-1]
+
+		nodes[i] = export.D3Node{
+			ID:       string(h.ID),
+			Name:     name,
+			Kind:     h.Kind,
+			Code:     h.Content,
+			Children: s.mapChildren(h.Children),
+		}
+
+		// Map Metadata if needed (Language/Group) - HydratedSymbol has Metadata map.
+		if lang, ok := h.Metadata["language"].(string); ok {
+			nodes[i].Language = lang
+			nodes[i].Group = lang
+		}
+	}
+	return nodes
 }
 
 // GetSource returns the content of a specific file/symbol.
@@ -224,4 +252,97 @@ func (s *GraphService) ListFiles(projectID string) ([]string, error) {
 	// Sort for consistent output
 	// Not strictly necessary but good for UI
 	return files, nil
+}
+
+// GetFileGraph returns a composite graph for a specific file (Defines + Imports + Calls).
+func (s *GraphService) GetFileGraph(ctx context.Context, projectID, fileID string) (*export.D3Graph, error) {
+	store, err := s.getStore(projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Clean fileID (remove quotes if present, though handler should pass clean string)
+	cleanFileID := strings.Trim(fileID, "\"")
+	quotedFileID := fmt.Sprintf("\"%s\"", cleanFileID)
+
+	// We will collect all results and then transform.
+	// Actually, D3Transformer expects a single query string for parsing "triples" atom.
+	// But here we present a unified view.
+	// Hack: We can construct a synthetic result set and a dummy query for the transformer,
+	// OR we can manually merge D3Graphs. Merging D3Graphs is safer.
+
+	var mergedGraph *export.D3Graph = &export.D3Graph{
+		Nodes: []export.D3Node{},
+		Links: []export.D3Link{},
+	}
+
+	// Map for link deduplication
+	linkMap := make(map[string]bool)
+
+	// Helper to merge
+	merge := func(query string) error {
+		results, err := store.Query(ctx, query)
+		if err != nil {
+			return err
+		}
+		if len(results) == 0 {
+			return nil
+		}
+
+		subGraph, err := export.ExportD3(ctx, store, query, results)
+		if err != nil {
+			return err
+		}
+
+		// Merge Nodes (deduplicate by ID)
+		nodeMap := make(map[string]export.D3Node)
+		for _, n := range mergedGraph.Nodes {
+			nodeMap[n.ID] = n
+		}
+		for _, n := range subGraph.Nodes {
+			if _, exists := nodeMap[n.ID]; !exists {
+				nodeMap[n.ID] = n
+				mergedGraph.Nodes = append(mergedGraph.Nodes, n)
+			}
+		}
+
+		// Merge Links with Deduplication
+		for _, l := range subGraph.Links {
+			// Create a unique key for the link
+			key := fmt.Sprintf("%s-%s-%s", l.Source, l.Relation, l.Target)
+			if _, exists := linkMap[key]; !exists {
+				linkMap[key] = true
+				mergedGraph.Links = append(mergedGraph.Links, l)
+			}
+		}
+		return nil
+	}
+
+	// 1. Defines: triples("file", "defines", ?s)
+	q1 := fmt.Sprintf("triples(%s, \"defines\", ?s)", quotedFileID)
+	if err := merge(q1); err != nil {
+		return nil, fmt.Errorf("failed to get definitions: %w", err)
+	}
+
+	// 2. Imports: triples("file", "imports", ?t)
+	q2 := fmt.Sprintf("triples(%s, \"imports\", ?t)", quotedFileID)
+	if err := merge(q2); err != nil {
+		return nil, fmt.Errorf("failed to get imports: %w", err)
+	}
+
+	// 3. Calls: triples(?s, "calls", ?t), triples("file", "defines", ?s)
+	// This finds calls originating from symbols defined in this file.
+	q3 := fmt.Sprintf("triples(?s, \"calls\", ?t), triples(%s, \"defines\", ?s)", quotedFileID)
+	if err := merge(q3); err != nil {
+		return nil, fmt.Errorf("failed to get calls: %w", err)
+	}
+
+	// 4. Hydrate
+	if len(mergedGraph.Nodes) > 0 {
+		if err := s.enrichNodes(ctx, store, mergedGraph); err != nil {
+			return nil, fmt.Errorf("hydration failed: %w", err)
+		}
+	}
+
+	return mergedGraph, nil
 }

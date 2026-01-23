@@ -30,10 +30,40 @@ func (s *Server) handleQuery(c *gin.Context) {
 		return
 	}
 
+	// If query is empty, return empty graph to prevent frontend crashes
+	if strings.TrimSpace(req.Query) == "" {
+		c.JSON(http.StatusOK, gin.H{"nodes": []interface{}{}, "links": []interface{}{}})
+		return
+	}
+
 	projectID := c.Query("project")
 
 	// Delegate to service
 	graph, err := s.graphService.ExportGraph(c.Request.Context(), projectID, req.Query, true)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, graph)
+	c.JSON(http.StatusOK, graph)
+}
+
+// handleGraph returns a composite graph for a specific file.
+func (s *Server) handleGraph(c *gin.Context) {
+	projectID := c.Query("project")
+	fileID := c.Query("file")
+
+	if projectID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+		return
+	}
+	if fileID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing file ID", nil))
+		return
+	}
+
+	graph, err := s.graphService.GetFileGraph(c.Request.Context(), projectID, fileID)
 	if err != nil {
 		handleError(c, err)
 		return
@@ -46,6 +76,11 @@ func (s *Server) handleQuery(c *gin.Context) {
 func (s *Server) handleSource(c *gin.Context) {
 	id := c.Query("id")
 	projectID := c.Query("project")
+
+	if projectID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+		return
+	}
 
 	content, err := s.graphService.GetSource(projectID, id)
 	if err != nil {
@@ -166,13 +201,6 @@ func (s *Server) handleSymbols(c *gin.Context) {
 // handleFiles returns a list of all ingested files for the project.
 func (s *Server) handleFiles(c *gin.Context) {
 	projectID := c.Query("project")
-	if projectID == "" {
-		// Try discovery
-		projects, err := s.graphService.ListProjects()
-		if err == nil && len(projects) > 0 {
-			projectID = projects[0].ID
-		}
-	}
 
 	if projectID == "" {
 		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
