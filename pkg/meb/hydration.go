@@ -17,19 +17,13 @@ type HydratedSymbol struct {
 	Children []HydratedSymbol `json:"children,omitempty"`
 }
 
-// Hydrate fetches content and metadata for a list of document IDs, parallelizing the I/O.
-// If lazy is true, it skips fetching large content bodies and only returns metadata/structure.
-func (m *MEBStore) Hydrate(ctx context.Context, ids []DocumentID, lazy bool) ([]HydratedSymbol, error) {
+// HydrateShallow fetches metadata for a list of document IDs without recursing into children.
+// This is optimized for bulk operations like backbone generation where children are not needed.
+// It also accepts a lazy flag to skip content fetching.
+func (m *MEBStore) HydrateShallow(ctx context.Context, ids []DocumentID, lazy bool) ([]HydratedSymbol, error) {
 	if len(ids) == 0 {
 		return []HydratedSymbol{}, nil
 	}
-
-	// We'll limit concurrency to avoid overwhelming if list is huge.
-	// We use a shared semaphore via errgroup limit? No, errgroup limit is per group.
-	// If we curse recursively, we might spawn too many goroutines.
-	// For now, let's keep it simple: Top level parallel, children serial or limited.
-	// Given the depth isn't usually huge, simple recursion might be okay, but
-	// "defines" tree can be large. Let's stick to top-level parallelism for now.
 
 	results := make([]HydratedSymbol, len(ids))
 	g, ctx := errgroup.WithContext(ctx)
@@ -40,7 +34,7 @@ func (m *MEBStore) Hydrate(ctx context.Context, ids []DocumentID, lazy bool) ([]
 	for i, id := range ids {
 		i, id := i, id
 		g.Go(func() error {
-			sym, err := m.hydrateOne(ctx, id, lazy)
+			sym, err := m.hydrateOne(ctx, id, lazy, true) // shallow=true
 			if err != nil {
 				return err
 			}
@@ -58,8 +52,43 @@ func (m *MEBStore) Hydrate(ctx context.Context, ids []DocumentID, lazy bool) ([]
 	return results, nil
 }
 
-// hydrateOne hydrates a single symbol and its children recursively.
-func (m *MEBStore) hydrateOne(ctx context.Context, id DocumentID, lazy bool) (HydratedSymbol, error) {
+// Hydrate fetches content and metadata for a list of document IDs, parallelizing the I/O.
+// If lazy is true, it skips fetching large content bodies and only returns metadata/structure.
+func (m *MEBStore) Hydrate(ctx context.Context, ids []DocumentID, lazy bool) ([]HydratedSymbol, error) {
+	if len(ids) == 0 {
+		return []HydratedSymbol{}, nil
+	}
+
+	results := make([]HydratedSymbol, len(ids))
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(10)
+
+	var mu sync.Mutex
+
+	for i, id := range ids {
+		i, id := i, id
+		g.Go(func() error {
+			sym, err := m.hydrateOne(ctx, id, lazy, false) // shallow=false
+			if err != nil {
+				return err
+			}
+			mu.Lock()
+			results[i] = sym
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	return results, nil
+}
+
+// hydrateOne hydrates a single symbol.
+// shallow=true skips recursive child fetching.
+func (m *MEBStore) hydrateOne(ctx context.Context, id DocumentID, lazy bool, shallow bool) (HydratedSymbol, error) {
 	// 1. Fetch details
 	var doc *Document
 	var err error
@@ -71,8 +100,6 @@ func (m *MEBStore) hydrateOne(ctx context.Context, id DocumentID, lazy bool) (Hy
 	}
 
 	if err != nil {
-		// If document missing, we might still want to return partial info if it exists in graph?
-		// For now, fail as before.
 		return HydratedSymbol{}, fmt.Errorf("failed to get document %s: %w", id, err)
 	}
 
@@ -85,21 +112,21 @@ func (m *MEBStore) hydrateOne(ctx context.Context, id DocumentID, lazy bool) (Hy
 		}
 	}
 
-	// 3. Fetch Children (recursive "defines")
+	// 3. Fetch Children (recursive "defines") - SKIP if shallow
 	var children []HydratedSymbol
-	// Scan for triples(id, "defines", ?child)
-	for fact := range m.ScanContext(ctx, string(id), "defines", "", "") {
-		if childIDStr, ok := fact.Object.(string); ok {
-			// Check for cycles? "defines" implies strict hierarchy usually.
-			// To be safe we could pass a visited map, but for now assuming DAG.
-			// Recursive call
-			childSym, err := m.hydrateOne(ctx, DocumentID(childIDStr), lazy)
-			if err != nil {
-				// Log warning? Or fail?
-				// If a child fails to hydrate (defines a symbol that has no doc?), maybe skip it.
-				continue
+	if !shallow {
+		// Scan for triples(id, "defines", ?child)
+		for fact := range m.ScanContext(ctx, string(id), "defines", "", "") {
+			if childIDStr, ok := fact.Object.(string); ok {
+				// Recursive call with same flags (propagate shallow? usually children are fetched fully if parent is fetched fully?
+				// Actually original code was always recursive.
+				// If we are deep fetching, we probably want deep children.
+				childSym, err := m.hydrateOne(ctx, DocumentID(childIDStr), lazy, shallow)
+				if err != nil {
+					continue
+				}
+				children = append(children, childSym)
 			}
-			children = append(children, childSym)
 		}
 	}
 

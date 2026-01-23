@@ -92,7 +92,38 @@ func (s *GraphService) enrichNodes(ctx context.Context, store *meb.MEBStore, gra
 		ids[i] = meb.DocumentID(n.ID)
 	}
 
-	hydrated, err := store.Hydrate(ctx, ids, lazy)
+	// Use HydrateShallow if lazy is true, assuming lazy implies we just want metadata
+	// and for backbone we definitely want shallow (no children).
+	// Actually, lazy=true is used for GetFileGraph too, where we might want children structure?
+	// GetFileGraph calls with lazy=false for content? No, GetFileGraph uses explicit calls.
+	// Let's check call sites:
+	// 1. ExportGraph with hydrate=true -> calls enrichNodes(..., lazy)
+	// 2. GetBackboneGraph -> calls enrichNodes(..., true)
+
+	// If lazy is true, we assume shallow is also acceptable for performance context unless specified.
+	// To be safe, let's strictly use HydrateShallow ONLY if lazy is true because
+	// typically if we are lazy-loading content, we likely don't need deep children tree either
+	// (e.g. Backbone or List views).
+	// But `GetFileDetails` uses `ExportGraph(..., true)` (lazy) but might want children?
+	// `GetFileDetails` returns internal structure, so it uses `triples(defines)` query explicitly.
+	// The explicit query returns nodes. The hydration just fills metadata.
+	// If the hydration *also* brings children, it duplicates the graph structure in `n.Children` which D3Transformer might not use.
+	// D3Transformer builds graph from Query results. `enrichNodes` populates `n.Children` from hydration.
+	// `n.Children` in D3Node is often used for hierarchical views.
+	// For Backbone, we rely on DAGRE and manual clustering, not `n.Children`.
+	// For FileDetails, we rely on Query nodes.
+	// So `n.Children` from hydration is likely redundant or used only for specific "Expand" actions in old logic.
+	// Safe to use HydrateShallow if lazy is true.
+
+	var hydrated []meb.HydratedSymbol
+	var err error
+
+	if lazy {
+		hydrated, err = store.HydrateShallow(ctx, ids, true)
+	} else {
+		hydrated, err = store.Hydrate(ctx, ids, false)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -109,7 +140,10 @@ func (s *GraphService) enrichNodes(ctx context.Context, store *meb.MEBStore, gra
 			if h.Kind != "" {
 				n.Kind = h.Kind
 			}
-			n.Children = s.mapChildren(h.Children)
+			// Only map children if we have them (which HydrateShallow won't return)
+			if len(h.Children) > 0 {
+				n.Children = s.mapChildren(h.Children)
+			}
 		}
 	}
 	return nil

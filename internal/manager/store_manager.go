@@ -18,18 +18,28 @@ type ProjectMetadata struct {
 	Description string `json:"description"`
 }
 
+// MemoryProfile defines the memory optimization strategy
+type MemoryProfile string
+
+const (
+	MemoryProfileDefault MemoryProfile = "default"
+	MemoryProfileLow     MemoryProfile = "low"
+)
+
 // StoreManager manages multiple MEBStore instances.
 type StoreManager struct {
 	baseDir  string
 	projects map[string]*meb.MEBStore
 	mu       sync.RWMutex
+	profile  MemoryProfile
 }
 
 // NewStoreManager creates a new StoreManager.
-func NewStoreManager(baseDir string) *StoreManager {
+func NewStoreManager(baseDir string, profile MemoryProfile) *StoreManager {
 	return &StoreManager{
 		baseDir:  baseDir,
 		projects: make(map[string]*meb.MEBStore),
+		profile:  profile,
 	}
 }
 
@@ -56,9 +66,21 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 	}
 
 	// Open in ReadOnly mode with BypassLockGuard
+	// Open in ReadOnly mode with BypassLockGuard
 	cfg := store.DefaultConfig(projectDir)
 	cfg.ReadOnly = true
 	cfg.BypassLockGuard = true
+
+	// Apply Memory Profile
+	if sm.profile == MemoryProfileLow {
+		cfg.BlockCacheSize = 64 << 20  // 64 MB
+		cfg.IndexCacheSize = 128 << 20 // 128 MB
+		cfg.Profile = "Cloud-Run-LowMem"
+	} else {
+		cfg.BlockCacheSize = 256 << 20 // 256 MB
+		cfg.IndexCacheSize = 256 << 20 // 256 MB
+		cfg.Profile = "Safe-Serving"
+	}
 
 	s, err := meb.Open(projectDir, cfg)
 	if err != nil {

@@ -23,6 +23,7 @@ func main() {
 	ingestMode := flag.Bool("ingest", false, "run in ingestion mode (requires source and data folder arguments)")
 	serverMode := flag.Bool("server", false, "run REST API server")
 	sourceFlag := flag.String("source", "", "path to source code (for source view)")
+	lowMemMode := flag.Bool("low-mem", false, "optimize for low-memory environments (e.g., Cloud Run with 1GB RAM)")
 
 	flag.Parse() // Parse flags early
 
@@ -58,11 +59,18 @@ func main() {
 		}
 	}
 
+	// Determine memory profile
+	memProfile := manager.MemoryProfileDefault
+	if *lowMemMode {
+		memProfile = manager.MemoryProfileLow
+		fmt.Println("Running in LOW MEMORY mode")
+	}
+
 	if *serverMode {
 		fmt.Printf("Starting REST API Server. Project Root: %s\n", dataDir)
 
 		// Initialize StoreManager
-		mgr := manager.NewStoreManager(dataDir)
+		mgr := manager.NewStoreManager(dataDir, memProfile)
 		defer mgr.CloseAll()
 
 		srv := server.NewServer(mgr, sourceDir)
