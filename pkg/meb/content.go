@@ -162,3 +162,34 @@ func (m *MEBStore) GetDocument(docKey DocumentID) (*Document, error) {
 		Metadata:  metadata,
 	}, nil
 }
+
+// GetDocumentMetadata retrieves a document's metadata without loading its content.
+// This is used for lazy loading / partial hydration to reduce latency.
+func (m *MEBStore) GetDocumentMetadata(docKey DocumentID) (*Document, error) {
+	// 1. Resolve ID
+	_, err := m.dict.GetID(string(docKey))
+	if err != nil {
+		return nil, fmt.Errorf("document not found: %w", err)
+	}
+
+	// 2. Retrieve Metadata (from Facts)
+	metadata := make(map[string]any)
+	// Iterate over facts where Subject matches docKey and Graph is "metadata"
+	for fact := range m.Scan(string(docKey), "", "", "metadata") {
+		metadata[fact.Predicate] = fact.Object
+	}
+
+	// 3. Retrieve Vector (Optional)
+	// Typically we skip vector for metadata display too, but it's small.
+	// But getting vector involves another seek. Let's skip it for pure metadata view unless needed.
+	// The Document struct has Embedding field.
+	// Partial hydration usually implies just what's needed for visualization (Kind, Metadata).
+	// Let's skip vector to be fast.
+
+	return &Document{
+		ID:        docKey,
+		Content:   nil, // Explicitly empty
+		Embedding: nil,
+		Metadata:  metadata,
+	}, nil
+}

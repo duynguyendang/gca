@@ -122,6 +122,14 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 		return fmt.Errorf("pass 2 completed with %d file processing errors", count)
 	}
 
+	// Pass 3: Resolve Virtual Dependencies
+	fmt.Println("Pass 3: Resolving dependencies...")
+	if err := s.ResolveDependencies(context.Background()); err != nil {
+		// Log error but generally don't fail entire ingestion?
+		// User request implies this is critical part of pipeline.
+		return fmt.Errorf("dependency resolution failed: %w", err)
+	}
+
 	return nil
 }
 

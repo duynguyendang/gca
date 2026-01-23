@@ -18,7 +18,8 @@ type HydratedSymbol struct {
 }
 
 // Hydrate fetches content and metadata for a list of document IDs, parallelizing the I/O.
-func (m *MEBStore) Hydrate(ctx context.Context, ids []DocumentID) ([]HydratedSymbol, error) {
+// If lazy is true, it skips fetching large content bodies and only returns metadata/structure.
+func (m *MEBStore) Hydrate(ctx context.Context, ids []DocumentID, lazy bool) ([]HydratedSymbol, error) {
 	if len(ids) == 0 {
 		return []HydratedSymbol{}, nil
 	}
@@ -39,7 +40,7 @@ func (m *MEBStore) Hydrate(ctx context.Context, ids []DocumentID) ([]HydratedSym
 	for i, id := range ids {
 		i, id := i, id
 		g.Go(func() error {
-			sym, err := m.hydrateOne(ctx, id)
+			sym, err := m.hydrateOne(ctx, id, lazy)
 			if err != nil {
 				return err
 			}
@@ -58,9 +59,17 @@ func (m *MEBStore) Hydrate(ctx context.Context, ids []DocumentID) ([]HydratedSym
 }
 
 // hydrateOne hydrates a single symbol and its children recursively.
-func (m *MEBStore) hydrateOne(ctx context.Context, id DocumentID) (HydratedSymbol, error) {
-	// 1. Fetch from DocStore
-	doc, err := m.GetDocument(id)
+func (m *MEBStore) hydrateOne(ctx context.Context, id DocumentID, lazy bool) (HydratedSymbol, error) {
+	// 1. Fetch details
+	var doc *Document
+	var err error
+
+	if lazy {
+		doc, err = m.GetDocumentMetadata(id)
+	} else {
+		doc, err = m.GetDocument(id)
+	}
+
 	if err != nil {
 		// If document missing, we might still want to return partial info if it exists in graph?
 		// For now, fail as before.
@@ -84,7 +93,7 @@ func (m *MEBStore) hydrateOne(ctx context.Context, id DocumentID) (HydratedSymbo
 			// Check for cycles? "defines" implies strict hierarchy usually.
 			// To be safe we could pass a visited map, but for now assuming DAG.
 			// Recursive call
-			childSym, err := m.hydrateOne(ctx, DocumentID(childIDStr))
+			childSym, err := m.hydrateOne(ctx, DocumentID(childIDStr), lazy)
 			if err != nil {
 				// Log warning? Or fail?
 				// If a child fails to hydrate (defines a symbol that has no doc?), maybe skip it.
@@ -94,10 +103,15 @@ func (m *MEBStore) hydrateOne(ctx context.Context, id DocumentID) (HydratedSymbo
 		}
 	}
 
+	content := ""
+	if doc.Content != nil {
+		content = string(doc.Content)
+	}
+
 	return HydratedSymbol{
 		ID:       id,
 		Kind:     kind,
-		Content:  string(doc.Content),
+		Content:  content,
 		Metadata: doc.Metadata,
 		Children: children,
 	}, nil

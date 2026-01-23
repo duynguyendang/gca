@@ -37,15 +37,15 @@ func (s *Server) handleQuery(c *gin.Context) {
 	}
 
 	projectID := c.Query("project")
+	lazy := c.Query("lazy") == "true"
 
 	// Delegate to service
-	graph, err := s.graphService.ExportGraph(c.Request.Context(), projectID, req.Query, true)
+	graph, err := s.graphService.ExportGraph(c.Request.Context(), projectID, req.Query, true, lazy)
 	if err != nil {
 		handleError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, graph)
 	c.JSON(http.StatusOK, graph)
 }
 
@@ -214,6 +214,81 @@ func (s *Server) handleFiles(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"files": files})
+}
+
+// handleGraphMap returns a high-level view of file dependencies.
+func (s *Server) handleGraphMap(c *gin.Context) {
+	projectID := c.Query("project")
+	if projectID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+		return
+	}
+
+	graph, err := s.graphService.GetProjectMap(c.Request.Context(), projectID)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, graph)
+}
+
+// handleFileDetails returns detailed internal symbols for a file.
+func (s *Server) handleFileDetails(c *gin.Context) {
+	projectID := c.Query("project")
+	fileID := c.Query("file")
+
+	if projectID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+		return
+	}
+	if fileID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing file ID", nil))
+		return
+	}
+
+	graph, err := s.graphService.GetFileDetails(c.Request.Context(), projectID, fileID)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, graph)
+}
+
+// handleHydrate returns the full hydrated symbol for a given ID.
+func (s *Server) handleHydrate(c *gin.Context) {
+	projectID := c.Query("project")
+	id := c.Query("id")
+	if id == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing id parameter", nil))
+		return
+	}
+
+	symbol, err := s.graphService.GetSymbol(c.Request.Context(), projectID, id)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, symbol)
+}
+
+// handleGraphBackbone returns a filtered graph showing only cross-file dependencies.
+func (s *Server) handleGraphBackbone(c *gin.Context) {
+	projectID := c.Query("project")
+	if projectID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+		return
+	}
+
+	graph, err := s.graphService.GetBackboneGraph(c.Request.Context(), projectID)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, graph)
 }
 
 // handleError helper

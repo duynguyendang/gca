@@ -20,6 +20,7 @@ type D3Node struct {
 	Group    string   `json:"group,omitempty"`    // Grouping for visualization (uses Language)
 	Code     string   `json:"code,omitempty"`     // Source code snippet
 	Children []D3Node `json:"children,omitempty"` // Recursive children
+	ParentID string   `json:"parentId,omitempty"` // ID of the parent file (for drilling down)
 }
 
 // D3Link represents a link/edge in the D3 force-directed graph.

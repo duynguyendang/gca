@@ -60,6 +60,8 @@ func NewFact(subject DocumentID, predicate string, object any) Fact {
 		Predicate: predicate,
 		Object:    object,
 		Graph:     "default",
+		Weight:    1.0,
+		Source:    "ast",
 	}
 }
 
@@ -70,6 +72,8 @@ func NewFactInGraph(subject DocumentID, predicate string, object any, graph stri
 		Predicate: predicate,
 		Object:    object,
 		Graph:     graph,
+		Weight:    1.0,
+		Source:    "ast",
 	}
 }
 

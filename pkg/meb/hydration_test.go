@@ -112,7 +112,7 @@ func TestHydration(t *testing.T) {
 
 	// 3. Test Hydrate
 	ctx := context.Background()
-	results, err := s.Hydrate(ctx, []DocumentID{docID})
+	results, err := s.Hydrate(ctx, []DocumentID{docID}, false)
 	if err != nil {
 		t.Fatalf("Hydrate failed: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestRecursiveHydration(t *testing.T) {
 
 	// 4. Hydrate Parent
 	ctx := context.Background()
-	results, err := s.Hydrate(ctx, []DocumentID{parentID})
+	results, err := s.Hydrate(ctx, []DocumentID{parentID}, false)
 	if err != nil {
 		t.Fatalf("Hydrate failed: %v", err)
 	}
