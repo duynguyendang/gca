@@ -383,8 +383,9 @@ func (s *GraphService) GetFileGraph(ctx context.Context, projectID, fileID strin
 		return nil, fmt.Errorf("failed to get imports: %w", err)
 	}
 
-	// 3. Calls: triples(?s, "calls", ?t), triples("file", "defines", ?s)
-	// This finds calls originating from symbols defined in this file.
+	// 3. All Calls from file symbols: triples(?s, "calls", ?t), triples("file", "defines", ?s)
+	// This finds ALL calls originating from symbols defined in this file.
+	// Includes both internal calls and calls to imported/external symbols.
 	q3 := fmt.Sprintf("triples(?s, \"calls\", ?t), triples(%s, \"defines\", ?s)", quotedFileID)
 	if err := merge(q3); err != nil {
 		return nil, fmt.Errorf("failed to get calls: %w", err)
