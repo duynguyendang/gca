@@ -625,7 +625,7 @@ func (s *GraphService) GetFileDetails(ctx context.Context, projectID, fileID str
 }
 
 // GetBackboneGraph returns a graph containing only cross-file dependencies.
-func (s *GraphService) GetBackboneGraph(ctx context.Context, projectID string) (*export.D3Graph, error) {
+func (s *GraphService) GetBackboneGraph(ctx context.Context, projectID string, aggregate bool) (*export.D3Graph, error) {
 	// Query all calls
 	query := `triples(?s, "calls", ?o)`
 	store, err := s.getStore(projectID)
@@ -665,33 +665,84 @@ func (s *GraphService) GetBackboneGraph(ctx context.Context, projectID string) (
 		tgtFile := tgtParts[0]
 
 		if srcFile != tgtFile {
-			// This is a cross-file call
-			backbone.Links = append(backbone.Links, export.D3Link{
-				Source:   srcID,
-				Target:   tgtID,
-				Relation: "calls",
-			})
+			if aggregate {
+				// Aggregate by File
+				// Deduplicate Link Key
+				linkKey := srcFile + "->" + tgtFile
+				if !nodeSet[linkKey] { // Reuse nodeSet for link keys temporarily or use new map
+					backbone.Links = append(backbone.Links, export.D3Link{
+						Source:   srcFile,
+						Target:   tgtFile,
+						Relation: "calls",
+						Weight:   1, // Could sum weights for frequency
+					})
+					// Note: ideally we track this in a separate map to avoid collision with node IDs if they overlap,
+					// but here we just need to ensure we don't add duplicate edges with same relation.
+					// Existing nodeSet is for nodes. Let's make a linkSet.
+				}
 
-			// Add nodes if not present
-			if !nodeSet[srcID] {
-				backbone.Nodes = append(backbone.Nodes, export.D3Node{
-					ID:       srcID,
-					Name:     srcParts[1], // Ideally we'd parse name better but this is fine for ID strategy
-					Kind:     "gateway",   // Temporary kind, or we could hydrate to get real kind
-					ParentID: srcFile,
+				// Add File Nodes
+				if !nodeSet[srcFile] {
+					backbone.Nodes = append(backbone.Nodes, export.D3Node{
+						ID:   srcFile,
+						Name: getNodeName(srcFile),
+						Kind: "file",
+					})
+					nodeSet[srcFile] = true
+				}
+				if !nodeSet[tgtFile] {
+					backbone.Nodes = append(backbone.Nodes, export.D3Node{
+						ID:   tgtFile,
+						Name: getNodeName(tgtFile),
+						Kind: "file",
+					})
+					nodeSet[tgtFile] = true
+				}
+
+			} else {
+				// Original Detailed View
+				// This is a cross-file call
+				backbone.Links = append(backbone.Links, export.D3Link{
+					Source:   srcID,
+					Target:   tgtID,
+					Relation: "calls",
 				})
-				nodeSet[srcID] = true
-			}
-			if !nodeSet[tgtID] {
-				backbone.Nodes = append(backbone.Nodes, export.D3Node{
-					ID:       tgtID,
-					Name:     tgtParts[1],
-					Kind:     "gateway",
-					ParentID: tgtFile,
-				})
-				nodeSet[tgtID] = true
+
+				// Add nodes if not present
+				if !nodeSet[srcID] {
+					backbone.Nodes = append(backbone.Nodes, export.D3Node{
+						ID:       srcID,
+						Name:     srcParts[1], // Ideally we'd parse name better but this is fine for ID strategy
+						Kind:     "gateway",   // Temporary kind, or we could hydrate to get real kind
+						ParentID: srcFile,
+					})
+					nodeSet[srcID] = true
+				}
+				if !nodeSet[tgtID] {
+					backbone.Nodes = append(backbone.Nodes, export.D3Node{
+						ID:       tgtID,
+						Name:     tgtParts[1],
+						Kind:     "gateway",
+						ParentID: tgtFile,
+					})
+					nodeSet[tgtID] = true
+				}
 			}
 		}
+	}
+
+	// Dedup links for aggregate mode (since we couldn't easily check duplication in loop efficiently without map)
+	if aggregate {
+		uniqueLinks := make([]export.D3Link, 0)
+		linkSeen := make(map[string]bool)
+		for _, l := range backbone.Links {
+			key := fmt.Sprintf("%s->%s", l.Source, l.Target)
+			if !linkSeen[key] {
+				uniqueLinks = append(uniqueLinks, l)
+				linkSeen[key] = true
+			}
+		}
+		backbone.Links = uniqueLinks
 	}
 
 	// Optional: Hydrate these nodes to get their real kind (func, method)?
@@ -709,4 +760,13 @@ func (s *GraphService) GetBackboneGraph(ctx context.Context, projectID string) (
 	}
 
 	return backbone, nil
+}
+
+// Helper for node name from path
+func getNodeName(path string) string {
+	parts := strings.Split(path, "/")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return path
 }

@@ -283,7 +283,8 @@ func (s *Server) handleGraphBackbone(c *gin.Context) {
 		return
 	}
 
-	graph, err := s.graphService.GetBackboneGraph(c.Request.Context(), projectID)
+	aggregate := c.Query("aggregate") == "true"
+	graph, err := s.graphService.GetBackboneGraph(c.Request.Context(), projectID, aggregate)
 	if err != nil {
 		handleError(c, err)
 		return
