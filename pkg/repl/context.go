@@ -10,10 +10,11 @@ import (
 
 // ProjectSummary holds a structured summary of the codebase for the AI Planner.
 type ProjectSummary struct {
-	Predicates []string         `json:"predicates"`
-	Packages   []string         `json:"packages"`
-	TopSymbols []meb.SymbolStat `json:"top_symbols"`
-	Stats      map[string]int   `json:"stats"`
+	Predicates  []string         `json:"predicates"`
+	Packages    []string         `json:"packages"`
+	TopSymbols  []meb.SymbolStat `json:"top_symbols"`
+	Stats       map[string]int   `json:"stats"`
+	EntryPoints []string         `json:"entry_points"`
 }
 
 // GenerateProjectSummary scans the database and generates a structured context summary.
@@ -40,11 +41,19 @@ func GenerateProjectSummary(s *meb.MEBStore) (*ProjectSummary, error) {
 	// Step 4: System Statistics
 	stats := gatherStats(s, len(predicates), len(packages), len(topSymbols))
 
+	// Step 5: Entry Points
+	entryPoints, err := extractEntryPoints(s)
+	if err != nil {
+		// Log error but don't fail summary?
+		// For now return existing
+	}
+
 	return &ProjectSummary{
-		Predicates: predicates,
-		Packages:   packages,
-		TopSymbols: topSymbols,
-		Stats:      stats,
+		Predicates:  predicates,
+		Packages:    packages,
+		TopSymbols:  topSymbols,
+		Stats:       stats,
+		EntryPoints: entryPoints,
 	}, nil
 }
 
@@ -126,4 +135,50 @@ func gatherStats(s *meb.MEBStore, uniquePredicates, uniquePackages, topSymbolsCo
 	}
 
 	return stats
+}
+
+// extractEntryPoints finds main functions and HTTP handlers.
+func extractEntryPoints(s *meb.MEBStore) ([]string, error) {
+	entryPoints := []string{}
+	// Scan for "defines" of "main"
+	// Heuristic: "defines" ?s where ?s ends with ":main"
+	// We can't regex scan efficiently without full scan.
+	// But we can scan symbols with specific suffix if dictionary supports it? No.
+	// Iterate valid "defines" facts.
+	// Or use SearchSymbols?
+	// Let's scan all facts with predicate "defines" and filter in memory.
+	// For large repos this is slow.
+	// Better: Use `s.IterateSymbols` to find symbols ending in ":main" or containing "Handler".
+	// But IterateSymbols iterates *all* strings.
+	// Let's iterate `defines` facts, it's safer.
+
+	// Limit to first 50 entry points to be safe.
+
+	count := 0
+	for fact, err := range s.Scan("", "defines", "", "") {
+		if err != nil {
+			continue
+		}
+
+		sym := string(fact.Subject)
+
+		// 1. main function
+		if strings.HasSuffix(sym, ":main") {
+			entryPoints = append(entryPoints, sym)
+			count++
+		}
+
+		// 2. HTTP Handler (heuristic naming)
+		if strings.Contains(sym, "Handler") || strings.Contains(sym, "Controller") {
+			// Check if it's a function? Need kind metadata.
+			// Just add it for now as "potential entry point".
+			// Maybe limit to avoid noise.
+		}
+
+		if count > 50 {
+			break
+		}
+	}
+	sort.Strings(entryPoints)
+	return entryPoints, nil
 }

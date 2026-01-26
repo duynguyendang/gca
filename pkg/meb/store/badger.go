@@ -139,6 +139,12 @@ func buildBadgerOptions(cfg *Config) badger.Options {
 
 	// === Profile Specific Settings ===
 	switch cfg.Profile {
+	case "Cloud-Run-LowMem":
+		// Optimized for extremely low RAM (Cloud Run 512MB-1GB)
+		opts.ValueLogFileSize = 32 << 20 // 32MB
+		opts.NumCompactors = 2           // Reduced compactors
+		opts.IndexCacheSize = 64 << 20   // Small index cache
+
 	case "Safe-Serving":
 		// Optimized for Low RAM / WSL / Cloud Run (1GB - 2GB Env)
 

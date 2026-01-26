@@ -53,6 +53,7 @@ func (s *Server) handleQuery(c *gin.Context) {
 func (s *Server) handleGraph(c *gin.Context) {
 	projectID := c.Query("project")
 	fileID := c.Query("file")
+	lazy := c.Query("lazy") == "true"
 
 	if projectID == "" {
 		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
@@ -63,7 +64,7 @@ func (s *Server) handleGraph(c *gin.Context) {
 		return
 	}
 
-	graph, err := s.graphService.GetFileGraph(c.Request.Context(), projectID, fileID)
+	graph, err := s.graphService.GetFileGraph(c.Request.Context(), projectID, fileID, lazy)
 	if err != nil {
 		handleError(c, err)
 		return

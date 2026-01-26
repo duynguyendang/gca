@@ -29,6 +29,7 @@ type D3Link struct {
 	Target           string  `json:"target"`
 	Relation         string  `json:"relation"`
 	Weight           float64 `json:"weight,omitempty"`
+	Type             string  `json:"type"`                 // "ast" or "virtual"
 	SourceProvenance string  `json:"provenance,omitempty"` // Renamed to avoid collision with Source field
 }
 
@@ -143,11 +144,17 @@ func (t *D3Transformer) Transform(ctx context.Context, query string, results []m
 		}
 
 		// Add Link
+		linkType := "ast"
+		if provenance == "virtual" || provenance == "inference" {
+			linkType = "virtual"
+		}
+
 		links = append(links, D3Link{
 			Source:           sVal,
 			Target:           oVal,
 			Relation:         pVal,
 			Weight:           weight,
+			Type:             linkType,
 			SourceProvenance: provenance,
 		})
 	}

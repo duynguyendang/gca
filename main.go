@@ -90,10 +90,10 @@ func main() {
 	// 1. MEB Store Initialization
 	cfg := store.DefaultConfig(dataDir)
 	cfg.SyncWrites = true
-	// Optimize for dev/test environment
-	cfg.Profile = "Safe-Serving"   // Reduces ValueLog size to 64MB (lowers VSZ)
-	cfg.BlockCacheSize = 256 << 20 // 256 MB
-	cfg.IndexCacheSize = 256 << 20 // 256 MB
+	// Optimize for resource awareness
+	cfg.Profile = "Cloud-Run-LowMem"
+	cfg.BlockCacheSize = 128 << 20 // 128 MB
+	cfg.IndexCacheSize = 128 << 20 // 128 MB
 
 	if readOnly {
 		cfg.ReadOnly = true
