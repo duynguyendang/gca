@@ -611,6 +611,11 @@ func (m *MEBStore) SearchSymbols(query string, limit int, predicateFilter string
 			strBytes := key[3:] // Skip prefix + 2 length bytes
 			s := string(strBytes)
 
+			// Skip comments and potentially noisy symbols
+			if strings.HasPrefix(s, "//") || strings.HasPrefix(s, "/*") {
+				continue
+			}
+
 			// Check case-insensitive substring match
 			if strings.Contains(strings.ToLower(s), strings.ToLower(query)) {
 
