@@ -173,6 +173,10 @@ func (t *D3Transformer) Transform(ctx context.Context, query string, results []m
 
 // createNode builds a D3Node with enriched metadata.
 func (t *D3Transformer) createNode(id string) D3Node {
+	// Debug logging for node creation
+	if strings.Contains(id, "_test.go") {
+		fmt.Printf("[D3Transformer] Creating node for test file: %s\n", id)
+	}
 	displayName := t.generateDisplayName(id)
 	kind, language, code := t.getMetadata(id)
 

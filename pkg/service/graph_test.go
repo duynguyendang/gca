@@ -115,3 +115,62 @@ func TestGetFileGraph_Lazy(t *testing.T) {
 		t.Errorf("Expected defines in lazy graph, found none")
 	}
 }
+
+func TestGetFlowPath(t *testing.T) {
+	// 1. Setup Store
+	tmpDir, err := os.MkdirTemp("", "graph_flow_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := store.DefaultConfig(tmpDir)
+	cfg.BypassLockGuard = true // For testing
+	s, err := meb.Open(tmpDir, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// 2. Add Data: fileA -> fileB -> fileC
+	if err := s.AddFact(meb.Fact{Subject: "fileA", Predicate: "calls", Object: "fileB", Graph: "default"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddFact(meb.Fact{Subject: "fileB", Predicate: "calls", Object: "fileC", Graph: "default"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddFact(meb.Fact{Subject: "fileA", Predicate: "calls", Object: "fileD", Graph: "default"}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewGraphService(&MockStoreManager{store: s})
+
+	// 3. Test Path fileA -> fileC
+	g, err := svc.GetFlowPath(context.Background(), "test", "fileA", "fileC")
+	if err != nil {
+		t.Fatalf("GetFlowPath failed: %v", err)
+	}
+
+	// Expect 3 nodes: fileA, fileB, fileC
+	if len(g.Nodes) != 3 {
+		t.Logf("Nodes: %+v", g.Nodes)
+		t.Logf("Links: %+v", g.Links)
+		t.Errorf("Expected 3 nodes, got %d", len(g.Nodes))
+	}
+
+	// Expect path: fileA->fileB, fileB->fileC
+	// Check links
+	hasAB := false
+	hasBC := false
+	for _, l := range g.Links {
+		if l.Source == "fileA" && l.Target == "fileB" {
+			hasAB = true
+		}
+		if l.Source == "fileB" && l.Target == "fileC" {
+			hasBC = true
+		}
+	}
+	if !hasAB || !hasBC {
+		t.Errorf("Path incomplete. hasAB=%v, hasBC=%v", hasAB, hasBC)
+	}
+}

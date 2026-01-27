@@ -293,8 +293,63 @@ func (s *Server) handleGraphBackbone(c *gin.Context) {
 	c.JSON(http.StatusOK, graph)
 }
 
+// handleFileCalls returns a recursive file-to-file call graph.
+func (s *Server) handleFileCalls(c *gin.Context) {
+	projectID := c.Query("project")
+	id := c.Query("id")
+	depthStr := c.Query("depth")
+
+	if projectID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+		return
+	}
+	if id == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing id parameter", nil))
+		return
+	}
+
+	depth := 3
+	if depthStr != "" {
+		if d, err := strconv.Atoi(depthStr); err == nil {
+			depth = d
+		}
+	}
+
+	graph, err := s.graphService.GetFileCalls(c.Request.Context(), projectID, id, depth)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, graph)
+}
+
 // handleError helper
 func handleError(c *gin.Context, err error) {
 	appErr := errors.MapError(err)
 	c.JSON(appErr.Code, gin.H{"error": appErr.Message})
+}
+
+// handleFlowPath returns the shortest call graph path between two symbols/files.
+func (s *Server) handleFlowPath(c *gin.Context) {
+	projectID := c.Query("project")
+	from := c.Query("from")
+	to := c.Query("to")
+
+	if projectID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+		return
+	}
+	if from == "" || to == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing from/to parameters", nil))
+		return
+	}
+
+	graph, err := s.graphService.GetFlowPath(c.Request.Context(), projectID, from, to)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, graph)
 }

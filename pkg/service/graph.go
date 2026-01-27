@@ -579,7 +579,8 @@ func (s *GraphService) GetFileDetails(ctx context.Context, projectID, fileID str
 	// Our Parse logic handles list of atoms. Store.Query handles efficient join.
 	// So we can try one query:
 	// triples(File, "defines", ?s), triples(File, "defines", ?o), triples(?s, "calls", ?o)
-	q2 := fmt.Sprintf(`triples(%s, "defines", ?s), triples(%s, "defines", ?o), triples(?s, "calls", ?o)`, quotedFileID, quotedFileID)
+	// triples(?s, "calls", ?o), triples(File, "defines", ?s), triples(File, "defines", ?o)
+	q2 := fmt.Sprintf(`triples(?s, "calls", ?o), triples(%s, "defines", ?s), triples(%s, "defines", ?o)`, quotedFileID, quotedFileID)
 
 	// Also maybe "type" relationships?
 	// triples(?s, "type", ?o) ...
@@ -593,8 +594,11 @@ func (s *GraphService) GetFileDetails(ctx context.Context, projectID, fileID str
 	// Run q1
 	g1, err := s.ExportGraph(ctx, projectID, q1, true, true) // Lazy hydration
 	if err == nil {
+		fmt.Printf("[GetFileDetails] Q1 (Defines) returned %d nodes, %d links\n", len(g1.Nodes), len(g1.Links))
 		mergedGraph.Nodes = append(mergedGraph.Nodes, g1.Nodes...)
 		mergedGraph.Links = append(mergedGraph.Links, g1.Links...)
+	} else {
+		fmt.Printf("[GetFileDetails] Q1 Error: %v\n", err)
 	}
 
 	// Run q2
@@ -602,6 +606,7 @@ func (s *GraphService) GetFileDetails(ctx context.Context, projectID, fileID str
 	g2, err := s.ExportGraph(ctx, projectID, q2, false, true) // No need to hydrate here if nodes match q1?
 	// Actually we should just merge results.
 	if err == nil {
+		fmt.Printf("[GetFileDetails] Q2 (Calls) returned %d nodes, %d links\n", len(g2.Nodes), len(g2.Links))
 		// Dedup nodes
 		nodeMap := make(map[string]bool)
 		for _, n := range mergedGraph.Nodes {
@@ -769,4 +774,257 @@ func getNodeName(path string) string {
 		return parts[len(parts)-1]
 	}
 	return path
+}
+
+// GetFileCalls returns a recursive file-to-file call graph starting from a specific file.
+func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID string, depth int) (*export.D3Graph, error) {
+	if depth <= 0 {
+		depth = 3 // Default depth
+	}
+	if depth > 5 {
+		depth = 5 // Max depth safety
+	}
+
+	store, err := s.getStore(projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Result structures
+	nodesMap := make(map[string]export.D3Node)
+	linksMap := make(map[string]export.D3Link)
+
+	// Queue for BFS: fileID, currentDepth
+	type queueItem struct {
+		file  string
+		depth int
+	}
+	queue := []queueItem{{file: strings.Trim(fileID, "\""), depth: 0}}
+	visited := make(map[string]bool)
+	visited[strings.Trim(fileID, "\"")] = true
+
+	// Add start node immediately
+	startFile := strings.Trim(fileID, "\"")
+	nodesMap[startFile] = export.D3Node{
+		ID:   startFile,
+		Name: getNodeName(startFile),
+		Kind: "file",
+	}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if current.depth >= depth {
+			continue
+		}
+
+		cleanCurrentFile := current.file
+		quotedCurrentFile := fmt.Sprintf("\"%s\"", cleanCurrentFile)
+
+		// 1. Find all symbols defined in this file
+		// query: triples(currentFile, "defines", ?s)
+		qDefines := fmt.Sprintf("triples(%s, \"defines\", ?s)", quotedCurrentFile)
+		resDefines, err := store.Query(ctx, qDefines)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query definitions for %s: %w", cleanCurrentFile, err)
+		}
+
+		if len(resDefines) == 0 {
+			continue
+		}
+
+		// 2. Find all calls FROM these symbols
+		// We can do this in batch or loop. Datalog might support join?
+		// query: triples(?s, "calls", ?o) WHERE ?s in defined_symbols
+		// To optimize, we can construct a large query or iterate.
+		// Constructing a large OR query might be slow or hit limits.
+		// Let's try to query calls from specific symbols.
+		// Or better: triples(?s, "calls", ?o), triples(CurrentFile, "defines", ?s)
+		// This joins inside the engine.
+		qCalls := fmt.Sprintf("triples(?s, \"calls\", ?o), triples(%s, \"defines\", ?s)", quotedCurrentFile)
+		resCalls, err := store.Query(ctx, qCalls)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query calls for %s: %w", cleanCurrentFile, err)
+		}
+
+		// 3. Process calls to find target files
+		// We need to resolve ?o to its file.
+		// We don't have a direct "defined_in" predicate easily accessible unless we query backwards?
+		// triples(?targetFile, "defines", ?o)
+		// Doing this for every ?o is N queries.
+		// Optimization: "triples(?targetFile, "defines", ?o)" where ?o is in our list.
+		// OR: The ID of ?o might contain the file path if valid convention used (path:symbol).
+		// We will rely on ID convention first for speed (Goal: <150ms).
+
+		filesToVisit := make(map[string]bool)
+
+		for _, row := range resCalls {
+			targetSymbol, ok := row["?o"].(string)
+			if !ok {
+				continue
+			}
+
+			// Parse file path from targetSymbol
+			// Format assumption: "path/to/file.go:Symbol" or "path/to/file.go:Type.Method"
+			parts := strings.SplitN(targetSymbol, ":", 2)
+			if len(parts) < 2 {
+				// Try to look up? For now skip if generic.
+				continue
+			}
+			targetFile := parts[0]
+
+			// Skip self-referential file calls (internal calls)
+			if targetFile == cleanCurrentFile {
+				continue
+			}
+
+			// Add Link
+			linkKey := fmt.Sprintf("%s->%s", cleanCurrentFile, targetFile)
+			if _, exists := linksMap[linkKey]; !exists {
+				linksMap[linkKey] = export.D3Link{
+					Source:   cleanCurrentFile,
+					Target:   targetFile,
+					Relation: "calls_file",
+					Weight:   1,
+				}
+			} else {
+				// Increment weight?
+				l := linksMap[linkKey]
+				l.Weight++
+				linksMap[linkKey] = l
+			}
+
+			// Add Target Node
+			if _, exists := nodesMap[targetFile]; !exists {
+				nodesMap[targetFile] = export.D3Node{
+					ID:   targetFile,
+					Name: getNodeName(targetFile),
+					Kind: "file",
+				}
+			}
+
+			// Queue for next depth
+			if !visited[targetFile] {
+				visited[targetFile] = true
+				filesToVisit[targetFile] = true
+			}
+		}
+
+		for f := range filesToVisit {
+			queue = append(queue, queueItem{file: f, depth: current.depth + 1})
+		}
+	}
+
+	// Convert maps to slices
+	nodes := make([]export.D3Node, 0, len(nodesMap))
+	for _, n := range nodesMap {
+		nodes = append(nodes, n)
+	}
+	links := make([]export.D3Link, 0, len(linksMap))
+	for _, l := range linksMap {
+		links = append(links, l)
+	}
+
+	return &export.D3Graph{Nodes: nodes, Links: links}, nil
+}
+
+// GetFlowPath returns the shortest call graph path between two nodes (files or symbols).
+func (s *GraphService) GetFlowPath(ctx context.Context, projectID, fromID, toID string) (*export.D3Graph, error) {
+	store, err := s.getStore(projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	fromID = strings.Trim(fromID, "\"")
+	toID = strings.Trim(toID, "\"")
+
+	// Standard BFS/Shortest Path
+	maxDepth := 10
+	type pathNode struct {
+		id   string
+		path []string // IDs in path including self
+	}
+
+	queue := []pathNode{{id: fromID, path: []string{fromID}}}
+	visited := make(map[string]bool)
+	visited[fromID] = true
+
+	var foundPath []string
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if current.id == toID {
+			foundPath = current.path
+			break
+		}
+
+		if len(current.path) >= maxDepth {
+			continue
+		}
+
+		// Get neighbors: triples(current.id, "calls", ?next)
+		cleanCurrentID := strings.Trim(current.id, "\"")
+		q := fmt.Sprintf("triples(\"%s\", \"calls\", ?next)", cleanCurrentID)
+		results, err := store.Query(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, r := range results {
+			next, ok := r["?next"].(string)
+			if !ok {
+				continue
+			}
+			next = strings.Trim(next, "\"")
+
+			if !visited[next] {
+				visited[next] = true
+				newPath := make([]string, len(current.path))
+				copy(newPath, current.path)
+				newPath = append(newPath, next)
+				queue = append(queue, pathNode{id: next, path: newPath})
+			}
+		}
+	}
+
+	if foundPath == nil {
+		// No path found
+		return &export.D3Graph{Nodes: []export.D3Node{}, Links: []export.D3Link{}}, nil
+	}
+
+	// Construct Graph from Path
+	nodes := []export.D3Node{}
+	links := []export.D3Link{}
+	nodeSet := make(map[string]bool)
+
+	for i := 0; i < len(foundPath); i++ {
+		id := foundPath[i]
+		if !nodeSet[id] {
+			nodes = append(nodes, export.D3Node{
+				ID:   id,
+				Name: getNodeName(id),
+				Kind: "symbol",
+			})
+			nodeSet[id] = true
+		}
+
+		if i < len(foundPath)-1 {
+			links = append(links, export.D3Link{
+				Source:   foundPath[i],
+				Target:   foundPath[i+1],
+				Relation: "calls",
+				Weight:   1,
+			})
+		}
+	}
+
+	// Enrich nodes
+	if len(nodes) > 0 {
+		_ = s.enrichNodes(ctx, store, &export.D3Graph{Nodes: nodes}, true)
+	}
+
+	return &export.D3Graph{Nodes: nodes, Links: links}, nil
 }

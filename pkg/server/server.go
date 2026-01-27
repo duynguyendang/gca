@@ -44,6 +44,7 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/v1/graph", s.handleGraph)
 	s.router.GET("/v1/graph/map", s.handleGraphMap)
 	s.router.GET("/v1/graph/file-details", s.handleFileDetails)
+	s.router.GET("/v1/graph/file-calls", s.handleFileCalls)
 	s.router.GET("/v1/graph/backbone", s.handleGraphBackbone)
 	s.router.GET("/v1/hydrate", s.handleHydrate)
 	s.router.POST("/v1/query", s.handleQuery)
@@ -52,6 +53,7 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/v1/predicates", s.handlePredicates)
 	s.router.GET("/v1/symbols", s.handleSymbols)
 	s.router.GET("/v1/files", s.handleFiles)
+	s.router.GET("/v1/search/flow", s.handleFlowPath)
 }
 
 // Health check
