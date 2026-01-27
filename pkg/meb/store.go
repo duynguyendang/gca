@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -610,8 +611,8 @@ func (m *MEBStore) SearchSymbols(query string, limit int, predicateFilter string
 			strBytes := key[3:] // Skip prefix + 2 length bytes
 			s := string(strBytes)
 
-			// Check prefix match on string content
-			if len(s) >= len(query) && s[:len(query)] == query {
+			// Check case-insensitive substring match
+			if strings.Contains(strings.ToLower(s), strings.ToLower(query)) {
 
 				// If filtering by predicate, check OPS index
 				if filterByID {
