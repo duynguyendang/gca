@@ -46,6 +46,7 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/v1/graph/file-details", s.handleFileDetails)
 	s.router.GET("/v1/graph/file-calls", s.handleFileCalls)
 	s.router.GET("/v1/graph/backbone", s.handleGraphBackbone)
+	s.router.GET("/v1/graph/file-backbone", s.handleFileBackbone)
 	s.router.GET("/v1/hydrate", s.handleHydrate)
 	s.router.POST("/v1/query", s.handleQuery)
 	s.router.GET("/v1/source", s.handleSource)
