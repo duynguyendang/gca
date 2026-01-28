@@ -56,6 +56,7 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/v1/symbols", s.handleSymbols)
 	s.router.GET("/v1/files", s.handleFiles)
 	s.router.GET("/v1/search/flow", s.handleFlowPath)
+	s.router.GET("/v1/graph/path", s.handleGraphPath)
 }
 
 // Health check

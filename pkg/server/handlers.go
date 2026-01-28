@@ -370,3 +370,27 @@ func (s *Server) handleFlowPath(c *gin.Context) {
 
 	c.JSON(http.StatusOK, graph)
 }
+
+// handleGraphPath returns the shortest interaction path between two symbols using BFS.
+func (s *Server) handleGraphPath(c *gin.Context) {
+	projectID := c.Query("project")
+	source := c.Query("source")
+	target := c.Query("target")
+
+	if projectID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+		return
+	}
+	if source == "" || target == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing source/target parameters", nil))
+		return
+	}
+
+	graph, err := s.graphService.FindShortestPath(c.Request.Context(), projectID, source, target)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, graph)
+}
