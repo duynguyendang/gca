@@ -612,7 +612,11 @@ func (m *MEBStore) SearchSymbols(query string, limit int, predicateFilter string
 			s := string(strBytes)
 
 			// Skip comments and potentially noisy symbols
-			if strings.HasPrefix(s, "//") || strings.HasPrefix(s, "/*") {
+			trimmed := strings.TrimSpace(s)
+			// Filter out:
+			// 1. Comments (//, /*, *)
+			// 2. Extremely long strings which are likely doc blocks or string literals (> 150 chars)
+			if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") || strings.HasPrefix(trimmed, "*") || len(trimmed) > 150 {
 				continue
 			}
 

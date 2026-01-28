@@ -108,6 +108,7 @@ func (e *TreeSitterExtractor) ExtractSymbols(filename string, content []byte, re
 				nameNode := child.ChildByFieldName("name")
 				if nameNode != nil {
 					pkgName = clean(nameNode.Utf8Text(content))
+					// If package name is empty (e.g. comment), defaults to "" which is fine
 				}
 				break
 			}
@@ -282,18 +283,22 @@ func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relP
 		nameNode := n.ChildByFieldName("name")
 		if nameNode != nil {
 			funcName := clean(nameNode.Utf8Text(content))
-			nextScope = fmt.Sprintf("%s:%s", relPath, funcName)
+			if funcName != "" {
+				nextScope = fmt.Sprintf("%s:%s", relPath, funcName)
+			}
 		}
 	case "method_declaration":
 		nameNode := n.ChildByFieldName("name")
 		receiverNode := n.ChildByFieldName("receiver")
 		if nameNode != nil && receiverNode != nil {
 			methodName := clean(nameNode.Utf8Text(content))
-			receiverType := e.getReceiverType(receiverNode, content)
-			if receiverType != "" {
-				nextScope = fmt.Sprintf("%s:%s.%s", relPath, receiverType, methodName)
-			} else {
-				nextScope = fmt.Sprintf("%s:.%s", relPath, methodName)
+			if methodName != "" {
+				receiverType := e.getReceiverType(receiverNode, content)
+				if receiverType != "" {
+					nextScope = fmt.Sprintf("%s:%s.%s", relPath, receiverType, methodName)
+				} else {
+					nextScope = fmt.Sprintf("%s:.%s", relPath, methodName)
+				}
 			}
 		}
 	case "call_expression":
@@ -301,7 +306,7 @@ func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relP
 			funcNode := n.ChildByFieldName("function")
 			if funcNode != nil {
 				callee := clean(funcNode.Utf8Text(content))
-				if !isStdLibCall(callee, "go") {
+				if callee != "" && !isStdLibCall(callee, "go") {
 					*refs = append(*refs, Reference{
 						Subject:   currentScope,
 						Predicate: meb.PredCalls,
@@ -582,6 +587,9 @@ func (e *TreeSitterExtractor) extractFunction(n *sitter.Node, content []byte, re
 	if nameNode != nil {
 		name = clean(nameNode.Utf8Text(content))
 	}
+	if name == "" {
+		return Symbol{}
+	}
 
 	id := fmt.Sprintf("%s:%s", relPath, name)
 	doc := e.getDocComment(n, content)
@@ -605,6 +613,9 @@ func (e *TreeSitterExtractor) extractMethod(n *sitter.Node, content []byte, relP
 	name := ""
 	if nameNode != nil {
 		name = clean(nameNode.Utf8Text(content))
+	}
+	if name == "" {
+		return Symbol{}
 	}
 
 	receiverNode := n.ChildByFieldName("receiver")
@@ -636,6 +647,9 @@ func (e *TreeSitterExtractor) extractType(spec *sitter.Node, decl *sitter.Node, 
 	name := ""
 	if nameNode != nil {
 		name = clean(nameNode.Utf8Text(content))
+	}
+	if name == "" {
+		return Symbol{}
 	}
 
 	typeNode := spec.ChildByFieldName("type")

@@ -42,6 +42,7 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/health", s.healthCheck)
 	s.router.GET("/v1/projects", s.handleProjects)
 	s.router.GET("/v1/graph", s.handleGraph)
+	s.router.GET("/v1/graph/manifest", s.handleGraphManifest)
 	s.router.GET("/v1/graph/map", s.handleGraphMap)
 	s.router.GET("/v1/graph/file-details", s.handleFileDetails)
 	s.router.GET("/v1/graph/file-calls", s.handleFileCalls)

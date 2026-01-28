@@ -242,7 +242,11 @@ func processFile(s *meb.MEBStore, ext Extractor, path string, sourceRoot string)
 }
 
 func clean(s string) string {
-	return strings.TrimSpace(strings.ReplaceAll(s, "\"", ""))
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\"", ""))
+	if strings.HasPrefix(s, "//") || strings.HasPrefix(s, "/*") || strings.HasPrefix(s, "*") {
+		return ""
+	}
+	return s
 }
 
 func calculateHash(path string) (string, error) {

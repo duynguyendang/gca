@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/duynguyendang/gca/internal/manager"
@@ -83,6 +84,83 @@ func (s *GraphService) ExportGraph(ctx context.Context, projectID, query string,
 	}
 
 	return graph, nil
+}
+
+// GetManifest returns a compressed project manifest for the AI.
+func (s *GraphService) GetManifest(ctx context.Context, projectID string) (map[string]interface{}, error) {
+	// Check cache
+	// TODO: Add proper caching. For now, we regenerate or rely on simple in-memory cache if added to struct.
+	// Since FactStore is efficient, let's measure first.
+
+	store, err := s.manager.GetStore(projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Data structures for compressed manifest
+	// F: { "1": "path/file.go" }
+	// S: { "SymbolName": 1 } (where 1 is file ID)
+	fileMap := make(map[string]string)
+	symbolMap := make(map[string]int)
+
+	// Keep track of file IDs
+	fileToID := make(map[string]string)
+	nextFileID := 1
+
+	// Iterate over all "defines" facts to find symbols and their files
+	// Query: triples(?file, "defines", ?symbol)
+	// We use Scan directly for efficiency vs Query engine
+	for fact, err := range store.Scan("", "defines", "", "") {
+		if err != nil {
+			return nil, fmt.Errorf("scan failed: %w", err)
+		}
+
+		filePath := string(fact.Subject)
+		symbolName, ok := fact.Object.(string)
+		if !ok {
+			// Skip if object is not a string (should not happen for "defines")
+			continue
+		}
+
+		// Normalize file path (remove project root if needed, but simplistic for now)
+		// Assign simplified integer ID to file if not exists
+		fID, exists := fileToID[filePath]
+		if !exists {
+			fID = fmt.Sprintf("%d", nextFileID)
+			nextFileID++
+			fileToID[filePath] = fID
+			fileMap[fID] = filePath
+		}
+
+		// Map symbol to file ID
+		// S: { "MyFunc": 1 }
+		// Note: Symbol names might collide (e.g. "init", "main").
+		// If collision, we might need a list or just overwrite (last one wins)
+		// or use distinct map for collisions.
+		// For AI context, "Symbol" -> "File" is the goal.
+		// If "main" exists in 5 files, maybe we skip common names or store as array?
+		// Compressed format limitation: S:{"Main": 2}
+		// Let's assume most symbols are unique enough or package qualified?
+		// No, Object is just "Main".
+		// Let's handle collision by NOT storing simple names if they are too common?
+		// Or assume the AI can handle "Main" by context?
+		// Let's just overwrite for now, or maybe only store exported/Capitalized ones?
+		// The prompt says: "NEVER use the search_symbols tool if a symbol name is found in the manifest."
+		// So if "Main" is in manifest pointing to file 1, and user means file 2, we have a problem.
+		// Maybe key should be Package.Symbol? But we don't have package here easily without another lookup.
+		// Let's stick to the requested format: S:{"ValidateToken":1}
+		symbolMap[symbolName] = mustAtoi(fID)
+	}
+
+	return map[string]interface{}{
+		"F": fileMap,
+		"S": symbolMap,
+	}, nil
+}
+
+func mustAtoi(s string) int {
+	i, _ := strconv.Atoi(s)
+	return i
 }
 
 // enrichNodes populates node content and kind from the store.

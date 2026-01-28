@@ -234,6 +234,23 @@ func (s *Server) handleGraphMap(c *gin.Context) {
 	c.JSON(http.StatusOK, graph)
 }
 
+// handleGraphManifest returns a compressed project manifest for the AI.
+func (s *Server) handleGraphManifest(c *gin.Context) {
+	projectID := c.Query("project")
+	if projectID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+		return
+	}
+
+	manifest, err := s.graphService.GetManifest(c.Request.Context(), projectID)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, manifest)
+}
+
 // handleFileDetails returns detailed internal symbols for a file.
 func (s *Server) handleFileDetails(c *gin.Context) {
 	projectID := c.Query("project")
