@@ -19,6 +19,7 @@ import (
 )
 
 var symbolTable = make(map[string]string)
+var fileIndex = make(map[string]bool) // Index of all source files for import resolution
 
 const MaxWorkers = 8 // Default max workers, can be tuned or runtime.NumCPU()
 
@@ -28,10 +29,11 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 	ext := NewTreeSitterExtractor()
 	testDir := sourceDir
 
-	// Pass 1: Collect Symbols (Sequential for now, to ensure map is populated safely)
-	fmt.Println("Pass 1: Collecting symbols...")
-	// Reset symbol table
+	// Pass 1: Collect Symbols and File Index (Sequential for safety)
+	fmt.Println("Pass 1: Collecting symbols and file index...")
+	// Reset tables
 	symbolTable = make(map[string]string)
+	fileIndex = make(map[string]bool)
 	var pass1Errors []error
 
 	err := filepath.WalkDir(testDir, func(path string, d fs.DirEntry, err error) error {
@@ -39,15 +41,19 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 			return err
 		}
 		if !d.IsDir() && isSupportedFile(path) {
+			relPath, _ := filepath.Rel(testDir, path)
+			// Add to file index for import resolution
+			fileIndex[relPath] = true
+
 			content, err := os.ReadFile(path)
 			if err != nil {
-				return err
+				pass1Errors = append(pass1Errors, fmt.Errorf("%s: %w", path, err))
+				return nil // Continue processing other files
 			}
-			relPath, _ := filepath.Rel(testDir, path)
 			symbols, err := ext.ExtractSymbols(path, content, relPath)
 			if err != nil {
-				// Don't logspam, just collect
-				pass1Errors = append(pass1Errors, fmt.Errorf("%s: %w", path, err))
+				// Log but don't fail - continue processing
+				log.Printf("Warning: failed to extract symbols from %s: %v", path, err)
 			} else {
 				for _, sym := range symbols {
 					symbolTable[sym.Name] = sym.ID
@@ -64,9 +70,9 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 	}
 
 	if len(pass1Errors) > 0 {
-		return fmt.Errorf("pass 1 failed with %d errors (first error: %v)", len(pass1Errors), pass1Errors[0])
+		log.Printf("Pass 1 completed with %d read errors", len(pass1Errors))
 	}
-	fmt.Printf("Collected %d symbols\n", len(symbolTable))
+	fmt.Printf("Collected %d symbols, indexed %d files\n", len(symbolTable), len(fileIndex))
 
 	// Pass 2: Process Files Concurrent
 	fmt.Println("Pass 2: Processing files (Concurrent)...")
@@ -242,7 +248,7 @@ func processFile(s *meb.MEBStore, ext Extractor, path string, sourceRoot string)
 }
 
 func clean(s string) string {
-	s = strings.TrimSpace(strings.ReplaceAll(s, "\"", ""))
+	s = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(s, "\"", ""), "'", ""))
 	if strings.HasPrefix(s, "//") || strings.HasPrefix(s, "/*") || strings.HasPrefix(s, "*") {
 		return ""
 	}

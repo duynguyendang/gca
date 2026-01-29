@@ -617,7 +617,87 @@ func (s *GraphService) GetFileGraph(ctx context.Context, projectID, fileID strin
 	// This expands package nodes (like "github.com/google/mangle/ast") to their actual files
 	s.resolvePackageImportsToFiles(ctx, store, mergedGraph, cleanFileID)
 
+	// 6. Filter to file-level nodes only (remove function nodes, aggregate links)
+	s.filterToFilesOnly(mergedGraph)
+
 	return mergedGraph, nil
+}
+
+// filterToFilesOnly removes function-level nodes and aggregates links to file level
+func (s *GraphService) filterToFilesOnly(graph *export.D3Graph) {
+	// Build a set of file nodes and a map of symbol -> file
+	fileNodes := make(map[string]export.D3Node)
+	symbolToFile := make(map[string]string)
+
+	for _, n := range graph.Nodes {
+		// A file node doesn't contain ':' in its ID
+		if !strings.Contains(n.ID, ":") {
+			fileNodes[n.ID] = n
+		} else {
+			// A symbol node - extract its parent file
+			parts := strings.SplitN(n.ID, ":", 2)
+			filePath := parts[0]
+			symbolToFile[n.ID] = filePath
+
+			// Ensure the file node exists
+			if _, exists := fileNodes[filePath]; !exists {
+				fileName := filePath
+				if idx := strings.LastIndex(filePath, "/"); idx != -1 {
+					fileName = filePath[idx+1:]
+				}
+				isInternal := true
+				fileNodes[filePath] = export.D3Node{
+					ID:         filePath,
+					Name:       fileName,
+					Kind:       "file",
+					IsInternal: &isInternal,
+				}
+			}
+		}
+	}
+
+	// Build file-level links with deduplication
+	linkSet := make(map[string]bool)
+	var newLinks []export.D3Link
+
+	for _, l := range graph.Links {
+		sourceFile := l.Source
+		targetFile := l.Target
+
+		// Resolve symbols to their parent files
+		if sf, ok := symbolToFile[l.Source]; ok {
+			sourceFile = sf
+		}
+		if tf, ok := symbolToFile[l.Target]; ok {
+			targetFile = tf
+		}
+
+		// Skip self-links
+		if sourceFile == targetFile {
+			continue
+		}
+
+		// Deduplicate
+		linkKey := sourceFile + "->" + targetFile
+		if !linkSet[linkKey] {
+			linkSet[linkKey] = true
+			newLinks = append(newLinks, export.D3Link{
+				Source:   sourceFile,
+				Target:   targetFile,
+				Relation: l.Relation,
+				Type:     l.Type,
+			})
+		}
+	}
+
+	// Convert file nodes to slice
+	var newNodes []export.D3Node
+	for _, n := range fileNodes {
+		newNodes = append(newNodes, n)
+	}
+
+	graph.Nodes = newNodes
+	graph.Links = newLinks
 }
 
 // resolvePackageImportsToFiles expands package import nodes to show actual files

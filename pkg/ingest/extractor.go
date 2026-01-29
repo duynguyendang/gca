@@ -116,24 +116,29 @@ func (e *TreeSitterExtractor) ExtractSymbols(filename string, content []byte, re
 	}
 
 	// Walk the tree
-	var walk func(n *sitter.Node)
-	walk = func(n *sitter.Node) {
+	var walk func(n *sitter.Node, currentScope string)
+	walk = func(n *sitter.Node, currentScope string) {
+		nextScope := currentScope
 		switch ext {
 		case ".go":
 			e.extractGoNode(n, content, relPath, pkgName, &symbols)
 		case ".py":
-			e.extractPythonNode(n, content, relPath, &symbols)
+			if s := e.extractPythonNode(n, content, relPath, currentScope, &symbols); s != "" {
+				nextScope = s
+			}
 		case ".js", ".jsx", ".ts", ".tsx":
-			e.extractJSNode(n, content, relPath, &symbols)
+			if s := e.extractJSNode(n, content, relPath, currentScope, &symbols); s != "" {
+				nextScope = s
+			}
 		}
 
 		// Recurse
 		for i := uint(0); i < uint(n.ChildCount()); i++ {
-			walk(n.Child(i))
+			walk(n.Child(i), nextScope)
 		}
 	}
 
-	walk(root)
+	walk(root, "")
 	return symbols, nil
 }
 
@@ -169,7 +174,6 @@ func (e *TreeSitterExtractor) ExtractReferences(filename string, content []byte,
 		}
 	}
 
-	walk(root, "")
 	walk(root, "")
 	return refs, nil
 }
@@ -322,13 +326,20 @@ func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relP
 
 // --- Python Extraction ---
 
-func (e *TreeSitterExtractor) extractPythonNode(n *sitter.Node, content []byte, relPath string, symbols *[]Symbol) {
+func (e *TreeSitterExtractor) extractPythonNode(n *sitter.Node, content []byte, relPath, parentScope string, symbols *[]Symbol) string {
+	newScope := ""
 	switch n.Kind() {
 	case "function_definition":
 		nameNode := n.ChildByFieldName("name")
 		if nameNode != nil {
 			name := clean(nameNode.Utf8Text(content))
-			id := fmt.Sprintf("%s:%s", relPath, name)
+			id := ""
+			if parentScope == "" {
+				id = fmt.Sprintf("%s:%s", relPath, name)
+			} else {
+				id = fmt.Sprintf("%s.%s", parentScope, name)
+			}
+			newScope = id
 			doc := e.getPythonDocString(n, content)
 			sig := e.getSignature(n, content)
 			*symbols = append(*symbols, Symbol{
@@ -346,7 +357,13 @@ func (e *TreeSitterExtractor) extractPythonNode(n *sitter.Node, content []byte, 
 		nameNode := n.ChildByFieldName("name")
 		if nameNode != nil {
 			name := clean(nameNode.Utf8Text(content))
-			id := fmt.Sprintf("%s:%s", relPath, name)
+			id := ""
+			if parentScope == "" {
+				id = fmt.Sprintf("%s:%s", relPath, name)
+			} else {
+				id = fmt.Sprintf("%s.%s", parentScope, name)
+			}
+			newScope = id
 			doc := e.getPythonDocString(n, content)
 			sig := e.getSignature(n, content)
 			*symbols = append(*symbols, Symbol{
@@ -361,6 +378,7 @@ func (e *TreeSitterExtractor) extractPythonNode(n *sitter.Node, content []byte, 
 			})
 		}
 	}
+	return newScope
 }
 
 func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, relPath, currentScope string, refs *[]Reference) string {
@@ -370,12 +388,11 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 		nameNode := n.ChildByFieldName("name")
 		if nameNode != nil {
 			name := clean(nameNode.Utf8Text(content))
-			nextScope = fmt.Sprintf("%s:%s", relPath, name)
-			// Handle nested scopes? For now simple scope calc:
-			// If we are already in a scope (e.g. class methods), append?
-			// Python ID strategy: we usually use `file:Function` or `file:Class`.
-			// Nested: `file:Class.Method` or `file:Function.Inner`.
-			// Keeping it simple for now to match `extractPythonNode`.
+			if currentScope == "" {
+				nextScope = fmt.Sprintf("%s:%s", relPath, name)
+			} else {
+				nextScope = fmt.Sprintf("%s.%s", currentScope, name)
+			}
 		}
 	case "import_statement":
 		// import X
@@ -383,20 +400,22 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 			child := n.Child(i)
 			if child.Kind() == "dotted_name" {
 				imp := clean(child.Utf8Text(content))
+				resolvedImp := resolveImportPath(relPath, imp)
 				*refs = append(*refs, Reference{
 					Subject:   relPath,
 					Predicate: meb.PredImports,
-					Object:    imp,
+					Object:    resolvedImp,
 					Line:      lineFromOffset(content, n.StartByte()),
 				})
 			} else if child.Kind() == "aliased_import" {
 				name := child.ChildByFieldName("name")
 				if name != nil {
 					imp := clean(name.Utf8Text(content))
+					resolvedImp := resolveImportPath(relPath, imp)
 					*refs = append(*refs, Reference{
 						Subject:   relPath,
 						Predicate: meb.PredImports,
-						Object:    imp,
+						Object:    resolvedImp,
 						Line:      lineFromOffset(content, n.StartByte()),
 					})
 				}
@@ -407,10 +426,11 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 		modNameNode := n.ChildByFieldName("module_name")
 		if modNameNode != nil {
 			modName := clean(modNameNode.Utf8Text(content))
+			resolvedMod := resolveImportPath(relPath, modName)
 			*refs = append(*refs, Reference{
 				Subject:   relPath,
 				Predicate: meb.PredImports,
-				Object:    modName,
+				Object:    resolvedMod,
 				Line:      lineFromOffset(content, n.StartByte()),
 			})
 		}
@@ -449,10 +469,11 @@ func (e *TreeSitterExtractor) getPythonDocString(n *sitter.Node, content []byte)
 
 // --- JS/TS Extraction ---
 
-func (e *TreeSitterExtractor) extractJSNode(n *sitter.Node, content []byte, relPath string, symbols *[]Symbol) {
+func (e *TreeSitterExtractor) extractJSNode(n *sitter.Node, content []byte, relPath, parentScope string, symbols *[]Symbol) string {
 	kind := n.Kind()
 	var name, symType string
 	var receiver string
+	newScope := ""
 
 	switch kind {
 	case "function_declaration":
@@ -466,19 +487,6 @@ func (e *TreeSitterExtractor) extractJSNode(n *sitter.Node, content []byte, relP
 		if nameNode != nil {
 			name = clean(nameNode.Utf8Text(content))
 			symType = TypeMethod
-			// Try to find parent class name?
-			// Need parent hierarchy traversal or pass parent name down.
-			// Complex. For now, ID is `file:MethodName` which might collide if multiple classes.
-			// Ideally we want `file:Class.Method`.
-			// Let's rely on recursion logic if we were building full tree, but here we scan.
-			// Actually `walk` doesn't pass state for parent class.
-			// Let's just use `file:MethodName` for simplicity or try to peek parent.
-			if p := n.Parent(); p != nil && p.Parent() != nil && (p.Parent().Kind() == "class_declaration" || p.Parent().Kind() == "class_definition") {
-				cname := p.Parent().ChildByFieldName("name")
-				if cname != nil {
-					receiver = clean(cname.Utf8Text(content))
-				}
-			}
 		}
 	case "class_declaration", "class_definition":
 		nameNode := n.ChildByFieldName("name")
@@ -492,27 +500,63 @@ func (e *TreeSitterExtractor) extractJSNode(n *sitter.Node, content []byte, relP
 			name = clean(nameNode.Utf8Text(content))
 			symType = TypeInterface
 		}
+	case "lexical_declaration", "variable_declaration":
+		// const x = ..., let y = ...
+		for i := uint(0); i < uint(n.ChildCount()); i++ {
+			child := n.Child(i)
+			if child.Kind() == "variable_declarator" {
+				nameNode := child.ChildByFieldName("name")
+				valNode := child.ChildByFieldName("value")
+				if nameNode != nil {
+					name = clean(nameNode.Utf8Text(content))
+					// Check if it's an arrow function or function expression
+					if valNode != nil && (valNode.Kind() == "arrow_function" || valNode.Kind() == "function_expression") {
+						symType = TypeFunction
+						e.addGenericSymbol(name, symType, receiver, n, content, relPath, parentScope, symbols)
+						name = "" // reset
+					} else {
+						if n.Parent().Kind() == "program" || n.Parent().Kind() == "export_statement" {
+							symType = TypeVariable
+							e.addGenericSymbol(name, symType, "variable", n, content, relPath, parentScope, symbols)
+							name = ""
+						}
+					}
+				}
+			}
+		}
 	}
 
 	if name != "" {
-		id := fmt.Sprintf("%s:%s", relPath, name)
-		if receiver != "" {
-			id = fmt.Sprintf("%s:%s.%s", relPath, receiver, name)
-		}
-		doc := e.getDocComment(n, content) // JS uses comments preceding
-		sig := e.getSignature(n, content)
-		*symbols = append(*symbols, Symbol{
-			ID:         id,
-			Name:       name,
-			Type:       symType,
-			Receiver:   receiver,
-			Signature:  sig,
-			DocComment: doc,
-			Content:    n.Utf8Text(content),
-			StartLine:  lineFromOffset(content, n.StartByte()),
-			EndLine:    lineFromOffset(content, n.EndByte()),
-		})
+		newScope = e.addGenericSymbol(name, symType, receiver, n, content, relPath, parentScope, symbols)
 	}
+	return newScope
+}
+
+func (e *TreeSitterExtractor) addGenericSymbol(name, symType, receiver string, n *sitter.Node, content []byte, relPath, parentScope string, symbols *[]Symbol) string {
+	if name == "" {
+		return ""
+	}
+	id := ""
+	if parentScope == "" {
+		id = fmt.Sprintf("%s:%s", relPath, name)
+	} else {
+		id = fmt.Sprintf("%s.%s", parentScope, name)
+	}
+
+	doc := e.getDocComment(n, content)
+	sig := e.getSignature(n, content)
+	*symbols = append(*symbols, Symbol{
+		ID:         id,
+		Name:       name,
+		Type:       symType,
+		Receiver:   receiver,
+		Signature:  sig,
+		DocComment: doc,
+		Content:    n.Utf8Text(content),
+		StartLine:  lineFromOffset(content, n.StartByte()),
+		EndLine:    lineFromOffset(content, n.EndByte()),
+	})
+	return id
 }
 
 func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relPath, currentScope string, refs *[]Reference) string {
@@ -525,17 +569,22 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 		nameNode := n.ChildByFieldName("name")
 		if nameNode != nil {
 			name := clean(nameNode.Utf8Text(content))
-			nextScope = fmt.Sprintf("%s:%s", relPath, name)
+			if currentScope == "" {
+				nextScope = fmt.Sprintf("%s:%s", relPath, name)
+			} else {
+				nextScope = fmt.Sprintf("%s.%s", currentScope, name)
+			}
 		}
 	case "import_statement":
 		// import { X } from 'Y'; or import X from 'Y';
 		sourceNode := n.ChildByFieldName("source")
 		if sourceNode != nil {
 			src := clean(sourceNode.Utf8Text(content))
+			resolvedSrc := resolveImportPath(relPath, src)
 			*refs = append(*refs, Reference{
 				Subject:   relPath,
 				Predicate: meb.PredImports,
-				Object:    src,
+				Object:    resolvedSrc,
 				Line:      lineFromOffset(content, n.StartByte()),
 			})
 		}
@@ -724,4 +773,37 @@ func (e *TreeSitterExtractor) getReceiverType(n *sitter.Node, content []byte) st
 		}
 	}
 	return ""
+}
+
+func resolveImportPath(relPath, importPath string) string {
+	if !strings.HasPrefix(importPath, ".") {
+		return importPath
+	}
+
+	dir := filepath.Dir(relPath)
+	basePath := filepath.Clean(filepath.Join(dir, importPath))
+
+	// 1. Exact match
+	if fileIndex[basePath] {
+		return basePath
+	}
+
+	// 2. Try extensions
+	extensions := []string{".ts", ".tsx", ".js", ".jsx", ".py", ".go"}
+	for _, ext := range extensions {
+		candidate := basePath + ext
+		if fileIndex[candidate] {
+			return candidate
+		}
+	}
+
+	// 3. Try index files
+	for _, ext := range extensions {
+		candidate := filepath.Join(basePath, "index"+ext)
+		if fileIndex[candidate] {
+			return candidate
+		}
+	}
+
+	return basePath
 }
