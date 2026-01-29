@@ -56,6 +56,8 @@ func NewD3Transformer(store *meb.MEBStore) *D3Transformer {
 			"line_number": true,
 			"start_line":  true,
 			"end_line":    true,
+			"has_doc":     true, // Do not visualize comments as nodes
+			"has_comment": true,
 		},
 		Store:            store,
 		InternalPrefixes: []string{},
@@ -159,6 +161,11 @@ func (t *D3Transformer) Transform(ctx context.Context, query string, results []m
 			if strings.Contains(sVal, "_test.go") || strings.Contains(oVal, "_test.go") {
 				continue
 			}
+		}
+
+		// SAFETY: Skip literal text nodes (newlines or very long strings)
+		if strings.Contains(sVal, "\n") || len(sVal) > 200 || strings.Contains(oVal, "\n") || len(oVal) > 200 {
+			continue
 		}
 
 		// Add Subject Node
