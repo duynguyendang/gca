@@ -13,15 +13,16 @@ import (
 
 // D3Node represents a node in the D3 force-directed graph.
 type D3Node struct {
-	ID         string   `json:"id"`                    // Full absolute path (unique identifier)
-	Name       string   `json:"name"`                  // Display name (filename:symbol)
-	Kind       string   `json:"kind,omitempty"`        // e.g. "func", "struct", "interface"
-	Language   string   `json:"language,omitempty"`    // e.g. "go", "typescript"
-	Group      string   `json:"group,omitempty"`       // Grouping for visualization (uses Language)
-	Code       string   `json:"code,omitempty"`        // Source code snippet
-	Children   []D3Node `json:"children,omitempty"`    // Recursive children
-	ParentID   string   `json:"parentId,omitempty"`    // ID of the parent file (for drilling down)
-	IsInternal *bool    `json:"is_internal,omitempty"` // True if node is internal to the project
+	ID         string            `json:"id"`                    // Full absolute path (unique identifier)
+	Name       string            `json:"name"`                  // Display name (filename:symbol)
+	Kind       string            `json:"kind,omitempty"`        // e.g. "func", "struct", "interface"
+	Language   string            `json:"language,omitempty"`    // e.g. "go", "typescript"
+	Group      string            `json:"group,omitempty"`       // Grouping for visualization (uses Language)
+	Code       string            `json:"code,omitempty"`        // Source code snippet
+	Children   []D3Node          `json:"children,omitempty"`    // Recursive children
+	ParentID   string            `json:"parentId,omitempty"`    // ID of the parent file (for drilling down)
+	IsInternal *bool             `json:"is_internal,omitempty"` // True if node is internal to the project
+	Metadata   map[string]string `json:"metadata,omitempty"`    // Extra data (e.g. docs)
 }
 
 // D3Link represents a link/edge in the D3 force-directed graph.
@@ -56,8 +57,6 @@ func NewD3Transformer(store *meb.MEBStore) *D3Transformer {
 			"line_number": true,
 			"start_line":  true,
 			"end_line":    true,
-			"has_doc":     true, // Do not visualize comments as nodes
-			"has_comment": true,
 		},
 		Store:            store,
 		InternalPrefixes: []string{},
@@ -163,7 +162,24 @@ func (t *D3Transformer) Transform(ctx context.Context, query string, results []m
 			}
 		}
 
-		// SAFETY: Skip literal text nodes (newlines or very long strings)
+		// Metadata Handling (Docs, Comments)
+		// Instead of creating nodes for these, attach them to the Subject Node's Metadata
+		if pVal == "has_doc" || pVal == "has_comment" {
+			// Ensure Subject exists
+			if _, exists := nodesMap[sVal]; !exists {
+				nodesMap[sVal] = t.createNode(sVal)
+			}
+			node := nodesMap[sVal]
+			if node.Metadata == nil {
+				node.Metadata = make(map[string]string)
+			}
+			// Use predicate as key (e.g. "has_doc")
+			node.Metadata[pVal] = oVal
+			nodesMap[sVal] = node // Update map struct copy
+			continue              // Skip creating Object Node and Link
+		}
+
+		// SAFETY: Skip literal text nodes (newlines or very long strings) if they weren't caught above
 		if strings.Contains(sVal, "\n") || len(sVal) > 200 || strings.Contains(oVal, "\n") || len(oVal) > 200 {
 			continue
 		}

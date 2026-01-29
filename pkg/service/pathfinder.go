@@ -4,12 +4,20 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/duynguyendang/gca/pkg/meb"
 )
 
-// FindShortestPath implements BFS to find the shortest path between two symbols.
+type Direction int
+
+const (
+	DirectionForward Direction = iota
+	DirectionBackward
+)
+
+// FindShortestPath implements Bidirectional BFS to find the shortest path between two symbols.
 func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID, endID string) (*export.D3Graph, error) {
 	store, err := s.getStore(projectID)
 	if err != nil {
@@ -19,147 +27,242 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 	cleanStart := strings.Trim(startID, "\"")
 	cleanEnd := strings.Trim(endID, "\"")
 
-	fmt.Printf("[Pathfinder] BFS %s -> %s\n", cleanStart, cleanEnd)
-
-	// Standard BFS
-	queue := [][]string{{cleanStart}}
-	visited := make(map[string]bool)
-	visited[cleanStart] = true
-
-	maxDepth := 50 // Increased depth
-	var foundPath []string
-
-	for len(queue) > 0 {
-		path := queue[0]
-		queue = queue[1:]
-		current := path[len(path)-1]
-
-		if len(visited) > 2000 {
-			fmt.Println("[Pathfinder] BFS limit reached (2000 nodes)")
-			break
-		}
-
-		fmt.Printf("Visiting %s (depth %d)\n", current, len(path))
-
-		if current == cleanEnd {
-			foundPath = path
-			break
-		}
-
-		if len(path) >= maxDepth {
-			continue
-		}
-
-		neighbors, err := s.getNeighbors(ctx, store, current)
-		if err != nil {
-			continue
-		}
-		fmt.Printf("Neighbors of %s: %d found\n", current, len(neighbors))
-
-		for _, n := range neighbors {
-			if !visited[n] {
-				visited[n] = true
-				newPath := make([]string, len(path))
-				copy(newPath, path)
-				newPath = append(newPath, n)
-				queue = append(queue, newPath)
-			}
-		}
-	}
-
-	if len(foundPath) == 0 {
-		fmt.Printf("[Pathfinder] Path not found.\n")
+	if cleanStart == cleanEnd {
 		return &export.D3Graph{Nodes: []export.D3Node{}, Links: []export.D3Link{}}, nil
 	}
 
-	return s.buildGraphFromPath(ctx, store, foundPath)
-}
+	fmt.Printf("[Pathfinder] Bidirectional BFS %s <-> %s\n", cleanStart, cleanEnd)
 
-func (s *GraphService) getNeighbors(ctx context.Context, store *meb.MEBStore, nodeID string) ([]string, error) {
-	quoteID := fmt.Sprintf("\"%s\"", nodeID)
-	// Query OUTBOUND calls/imports
-	q := fmt.Sprintf(`triples(%s, ?p, ?o)`, quoteID)
-	results, err := store.Query(ctx, q)
-	if err != nil {
-		return nil, err
+	// Queues
+	qStart := []string{cleanStart}
+	qEnd := []string{cleanEnd}
+
+	// Visited Maps (Node -> Parent)
+	// For Start: Parent is the node closer to Start
+	// For End: Parent is the node closer to End
+	visitedStart := make(map[string]string)
+	visitedEnd := make(map[string]string)
+
+	visitedStart[cleanStart] = ""
+	visitedEnd[cleanEnd] = ""
+
+	maxDepth := 10 // Bidirectional search goes deep fast, 10 is plenty (path len 20)
+	depth := 0
+
+	for len(qStart) > 0 && len(qEnd) > 0 {
+		if depth > maxDepth {
+			break
+		}
+		depth++
+
+		// Always expand the smaller frontier to balance search
+		if len(qStart) <= len(qEnd) {
+			intersection := expandFrontier(ctx, s, store, &qStart, visitedStart, visitedEnd, DirectionForward)
+			if intersection != "" {
+				return s.constructBidirectionalPath(ctx, store, intersection, visitedStart, visitedEnd)
+			}
+		} else {
+			intersection := expandFrontier(ctx, s, store, &qEnd, visitedEnd, visitedStart, DirectionBackward)
+			if intersection != "" {
+				return s.constructBidirectionalPath(ctx, store, intersection, visitedStart, visitedEnd)
+			}
+		}
 	}
 
-	neighbors := make([]string, 0)
-	for _, res := range results {
-		pred, _ := res["?p"].(string)
-		obj, _ := res["?o"].(string)
+	fmt.Printf("[Pathfinder] Path not found.\n")
+	return &export.D3Graph{Nodes: []export.D3Node{}, Links: []export.D3Link{}}, nil
+}
 
-		// Heuristic: Follow 'calls' strongly, 'imports' weakly, and 'defines' to drill down
-		if pred == "calls" || pred == "imports" || pred == "defines" {
-			// Debug Log
-			fmt.Printf("Neighbor candidate: %s (pred: %s)\n", obj, pred)
-			neighbors = append(neighbors, obj)
+func expandFrontier(ctx context.Context, s *GraphService, store *meb.MEBStore, queue *[]string, visitedMy map[string]string, visitedOther map[string]string, dir Direction) string {
+	currentLevelSize := len(*queue)
+	for i := 0; i < currentLevelSize; i++ {
+		current := (*queue)[0]
+		*queue = (*queue)[1:]
 
-			// Attempt to resolve package.Symbol to canonical ID
-			// If the ID doesn't look like a file path (no /), it's likely a semantic ID
-			if !strings.Contains(obj, "/") {
-				// Search for the symbol to find its canonical file-based ID
-				matches, err := store.SearchSymbols(obj, 20, "")
+		neighbors, err := s.getNeighbors(ctx, store, current, dir)
+		if err != nil {
+			fmt.Printf("Error getting neighbors for %s: %v\n", current, err)
+			continue
+		}
 
-				// Check if we found any canonical ID (containing /)
-				foundCanonical := false
-				if err == nil {
-					for _, m := range matches {
-						if strings.Contains(m, "/") {
-							foundCanonical = true
-							break
-						}
-					}
-				}
+		for _, n := range neighbors {
+			if _, seen := visitedMy[n]; !seen {
+				visitedMy[n] = current
+				*queue = append(*queue, n)
 
-				if (!foundCanonical) && strings.Contains(obj, ".") {
-					// Fallback: Try searching for just the symbol name suffix
-					parts := strings.Split(obj, ".")
-					symbolOnly := parts[len(parts)-1]
-
-					// Optimization: Skip common generic method names to avoid graph explosion
-					switch symbolOnly {
-					case "Add", "Get", "Set", "String", "Hash", "Equals", "Len", "Cap", "Close", "Errorf", "Fatal", "Fatalf", "Log", "Print", "Printf":
-						continue
-					}
-
-					matchesFallback, errFallback := store.SearchSymbols(symbolOnly, 50, "")
-					fmt.Printf("Resolved fallback %s -> %s (matches: %d, err: %v)\n", obj, symbolOnly, len(matchesFallback), errFallback)
-
-					if errFallback == nil {
-						for _, m := range matchesFallback {
-							neighbors = append(neighbors, m)
-						}
-					}
-				}
-
-				// Add original matches too (if any)
-				if err == nil {
-					for _, m := range matches {
-						neighbors = append(neighbors, m)
-					}
+				// Check intersection
+				if _, hit := visitedOther[n]; hit {
+					fmt.Printf("[Pathfinder] Intersection met at: %s\n", n)
+					return n
 				}
 			}
 		}
 	}
-	// Query INCOMING defines (Parent lookup)
-	qIn := fmt.Sprintf(`triples(?s, "defines", %s)`, quoteID)
-	resultsIn, errIn := store.Query(ctx, qIn)
-	if errIn == nil {
-		for _, res := range resultsIn {
-			parent, _ := res["?s"].(string)
-			fmt.Printf("Neighbor candidate (Parent): %s\n", parent)
-			neighbors = append(neighbors, parent)
+	return ""
+}
+
+func (s *GraphService) constructBidirectionalPath(ctx context.Context, store *meb.MEBStore, intersection string, visitedStart map[string]string, visitedEnd map[string]string) (*export.D3Graph, error) {
+	path := []string{}
+
+	// Trace back to Start
+	curr := intersection
+	for curr != "" {
+		path = append([]string{curr}, path...) // Prepend
+		curr = visitedStart[curr]
+	}
+
+	// Trace forward to End
+	curr = visitedEnd[intersection]
+	for curr != "" {
+		path = append(path, curr)
+		curr = visitedEnd[curr]
+	}
+
+	return s.buildGraphFromPath(ctx, store, path)
+}
+
+func (s *GraphService) getNeighbors(ctx context.Context, store *meb.MEBStore, nodeID string, dir Direction) ([]string, error) {
+	neighbors := make([]string, 0)
+	quoteID := fmt.Sprintf("\"%s\"", nodeID)
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	add := func(list []string) {
+		mu.Lock()
+		defer mu.Unlock()
+		neighbors = append(neighbors, list...)
+	}
+
+	// Helper helper to query logic
+	runQuery := func(q string, isOutbound bool) {
+		defer wg.Done()
+		results, err := store.Query(ctx, q)
+		if err != nil {
+			return
+		}
+
+		localNeighbors := make([]string, 0)
+		for _, res := range results {
+			var obj string
+			if isOutbound {
+				obj, _ = res["?o"].(string)
+			} else {
+				obj, _ = res["?s"].(string)
+			}
+
+			// Resolve Candidates logic
+			candidates := s.resolveCandidates(ctx, store, obj)
+			localNeighbors = append(localNeighbors, candidates...)
+		}
+		add(localNeighbors)
+	}
+
+	wg.Add(2)
+
+	if dir == DirectionForward {
+		// Forward: Outbound (calls, imports, defines-children)
+		// + Inbound defines (parents)
+		go runQuery(fmt.Sprintf(`triples(%s, ?p, ?o)`, quoteID), true) // ?p check inside? Simplification: get all outbound and filter later?
+		// Actually for speed, let's be specific or filter.
+		// The generic query captures calls, imports, defines.
+
+		// Inbound defines (Parent)
+		go runQuery(fmt.Sprintf(`triples(?s, "defines", %s)`, quoteID), false)
+
+	} else {
+		// Backward: Inbound (calls, imports, defines-children => wait, defines-parent?)
+		// Logic: If A calls B. Fwd: A->B. Bwd: B->A.
+		// Query: triples(?s, "calls", B).
+
+		// Inbound calls/imports
+		go runQuery(fmt.Sprintf(`triples(?s, ?p, %s)`, quoteID), false)
+
+		// Outbound defines (Parent -> Child relation reversed is Child -> Parent? No.)
+		// If A defines B. Fwd: A -> B.
+		// Bwd: B -> A.
+		// So checking "who defines B" is the reverse edge.
+		// triples(?s, "defines", B) -> returns A.
+		// Wait, Fwd traversal usually allows going from Files to Symbols (Defines).
+		// So Backward traversal must allow Symbols to Files (Defined By).
+		// That is Inbound Defines.
+
+		// What about Child -> Parent in Forward?
+		// If Fwd allows Symbol -> File (Parent), then Bwd must allow File -> Symbol (Children).
+		// Use triples(B, "defines", ?o).
+		go runQuery(fmt.Sprintf(`triples(%s, "defines", ?o)`, quoteID), true)
+	}
+
+	wg.Wait()
+
+	// Dedup
+	unique := make(map[string]bool)
+	final := make([]string, 0)
+	for _, n := range neighbors {
+		// Filter out predicates if we used wildcard
+		// But here we rely on the fact that most links are calls/imports/defines.
+		// We should technically filter logic, but for now assuming all links are relevant for pathfinding
+		// is safer for connectivity.
+		if n != nodeID && !unique[n] {
+			unique[n] = true
+			final = append(final, n)
 		}
 	}
 
-	// Optimization: Cap neighbors to prevent explosion
-	if len(neighbors) > 50 {
-		fmt.Printf("[Pathfinder] Capping neighbors for %s (%d -> 50)\n", nodeID, len(neighbors))
-		neighbors = neighbors[:50]
+	// Cap neighbor count for safety (though bidirectional makes this less critical)
+	if len(final) > 1000 {
+		return final[:1000], nil
 	}
 
-	return neighbors, nil
+	return final, nil
+}
+
+// Helper to resolve logical IDs to Canonical IDs
+func (s *GraphService) resolveCandidates(ctx context.Context, store *meb.MEBStore, obj string) []string {
+	ids := []string{obj}
+	if !strings.Contains(obj, "/") {
+		// Search for the symbol to find its canonical file-based ID
+		matches, err := store.SearchSymbols(obj, 20, "")
+
+		// Check if we found any canonical ID (containing /)
+		foundCanonical := false
+		if err == nil {
+			for _, m := range matches {
+				if strings.Contains(m, "/") {
+					foundCanonical = true
+					break
+				}
+			}
+		}
+
+		if (!foundCanonical) && strings.Contains(obj, ".") {
+			// Fallback: Try searching for just the symbol name suffix
+			parts := strings.Split(obj, ".")
+			symbolOnly := parts[len(parts)-1]
+
+			// Optimization: Skip common generic method names
+			switch symbolOnly {
+			case "Add", "Get", "Set", "String", "Hash", "Equals", "Len", "Cap", "Close", "Errorf", "Fatal", "Fatalf", "Log", "Print", "Printf":
+				return ids
+			}
+
+			matchesFallback, errFallback := store.SearchSymbols(symbolOnly, 50, "")
+
+			if errFallback == nil {
+				for _, m := range matchesFallback {
+					ids = append(ids, m)
+				}
+			}
+		}
+
+		// Add original matches too (if any)
+		if err == nil {
+			for _, m := range matches {
+				ids = append(ids, m)
+			}
+		}
+	}
+	return ids
 }
 
 func (s *GraphService) buildGraphFromPath(ctx context.Context, store *meb.MEBStore, path []string) (*export.D3Graph, error) {
@@ -183,9 +286,6 @@ func (s *GraphService) buildGraphFromPath(ctx context.Context, store *meb.MEBSto
 		h, ok := hMap[id]
 		name, kind := id, "unknown"
 		if ok {
-			// HydratedSymbol apparently doesn't have Name in this version?
-			// Let's rely on ID parsing or check struct definition again.
-			// Actually, let's just parse ID for safety to fix compilation.
 			parts := strings.Split(string(h.ID), "/")
 			name = parts[len(parts)-1]
 			kind = h.Kind
@@ -200,7 +300,7 @@ func (s *GraphService) buildGraphFromPath(ctx context.Context, store *meb.MEBSto
 	for i := 0; i < len(path)-1; i++ {
 		src, dst := path[i], path[i+1]
 		graph.Links = append(graph.Links, export.D3Link{
-			Source: src, Target: dst, Relation: "calls",
+			Source: src, Target: dst, Relation: "related", // Generic relation for path
 		})
 	}
 	return graph, nil
