@@ -200,8 +200,10 @@ func (s *Server) handleSymbols(c *gin.Context) {
 }
 
 // handleFiles returns a list of all ingested files for the project.
+// Optional: ?prefix=path/to/package to filter files by prefix
 func (s *Server) handleFiles(c *gin.Context) {
 	projectID := c.Query("project")
+	prefix := c.Query("prefix")
 
 	if projectID == "" {
 		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
@@ -214,7 +216,27 @@ func (s *Server) handleFiles(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"files": files})
+	// Filter by prefix if provided
+	if prefix != "" {
+		// Extract the package suffix (last segment) for matching
+		// e.g., "github.com/google/mangle/ast" -> "ast"
+		pkgSuffix := prefix
+		if idx := strings.LastIndex(prefix, "/"); idx != -1 {
+			pkgSuffix = prefix[idx+1:]
+		}
+		dirPrefix := pkgSuffix + "/"
+
+		var filtered []string
+		for _, f := range files {
+			// Match either full prefix OR directory prefix
+			if strings.HasPrefix(f, prefix) || strings.HasPrefix(f, dirPrefix) {
+				filtered = append(filtered, f)
+			}
+		}
+		files = filtered
+	}
+
+	c.JSON(http.StatusOK, files)
 }
 
 // handleGraphMap returns a high-level view of file dependencies.

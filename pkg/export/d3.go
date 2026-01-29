@@ -13,14 +13,15 @@ import (
 
 // D3Node represents a node in the D3 force-directed graph.
 type D3Node struct {
-	ID       string   `json:"id"`                 // Full absolute path (unique identifier)
-	Name     string   `json:"name"`               // Display name (filename:symbol)
-	Kind     string   `json:"kind,omitempty"`     // e.g. "func", "struct", "interface"
-	Language string   `json:"language,omitempty"` // e.g. "go", "typescript"
-	Group    string   `json:"group,omitempty"`    // Grouping for visualization (uses Language)
-	Code     string   `json:"code,omitempty"`     // Source code snippet
-	Children []D3Node `json:"children,omitempty"` // Recursive children
-	ParentID string   `json:"parentId,omitempty"` // ID of the parent file (for drilling down)
+	ID         string   `json:"id"`                    // Full absolute path (unique identifier)
+	Name       string   `json:"name"`                  // Display name (filename:symbol)
+	Kind       string   `json:"kind,omitempty"`        // e.g. "func", "struct", "interface"
+	Language   string   `json:"language,omitempty"`    // e.g. "go", "typescript"
+	Group      string   `json:"group,omitempty"`       // Grouping for visualization (uses Language)
+	Code       string   `json:"code,omitempty"`        // Source code snippet
+	Children   []D3Node `json:"children,omitempty"`    // Recursive children
+	ParentID   string   `json:"parentId,omitempty"`    // ID of the parent file (for drilling down)
+	IsInternal *bool    `json:"is_internal,omitempty"` // True if node is internal to the project
 }
 
 // D3Link represents a link/edge in the D3 force-directed graph.
@@ -44,18 +45,56 @@ type D3Transformer struct {
 	IgnoredPredicates map[string]bool
 	Store             *meb.MEBStore
 	ExcludeTestFiles  bool
+	InternalPrefixes  []string // Prefixes that identify internal project files
 }
 
 // NewD3Transformer creates a new transformer with reference to the store.
 func NewD3Transformer(store *meb.MEBStore) *D3Transformer {
-	return &D3Transformer{
+	t := &D3Transformer{
 		IgnoredPredicates: map[string]bool{
 			"source_code": true,
 			"line_number": true,
 			"start_line":  true,
 			"end_line":    true,
 		},
-		Store: store,
+		Store:            store,
+		InternalPrefixes: []string{},
+	}
+
+	// Try to detect internal prefixes from the store
+	// For Go projects, we look for files that have been ingested
+	// All ingested files are considered internal
+	t.detectInternalPrefixes()
+
+	return t
+}
+
+// detectInternalPrefixes identifies internal module/package prefixes from ingested files
+func (t *D3Transformer) detectInternalPrefixes() {
+	// Scan for files with hash (ingested files)
+	// These are all internal to the project
+	prefixSet := make(map[string]bool)
+
+	for fact, _ := range t.Store.Scan("", meb.PredHash, "", "") {
+		filePath := string(fact.Subject)
+
+		// Extract package prefix (first part before colon if symbol, or directory)
+		parts := strings.SplitN(filePath, ":", 2)
+		basePath := parts[0]
+
+		// Add the file path itself
+		prefixSet[basePath] = true
+
+		// Add parent directories as prefixes too
+		for i := len(basePath) - 1; i >= 0; i-- {
+			if basePath[i] == '/' {
+				prefixSet[basePath[:i]] = true
+			}
+		}
+	}
+
+	for prefix := range prefixSet {
+		t.InternalPrefixes = append(t.InternalPrefixes, prefix)
 	}
 }
 
@@ -186,14 +225,50 @@ func (t *D3Transformer) createNode(id string) D3Node {
 		group = "unknown"
 	}
 
+	// Determine if this node is internal to the project
+	isInternal := t.isInternalNode(id)
+
 	return D3Node{
-		ID:       id,
-		Name:     displayName,
-		Kind:     kind,
-		Language: language,
-		Group:    group,
-		Code:     code,
+		ID:         id,
+		Name:       displayName,
+		Kind:       kind,
+		Language:   language,
+		Group:      group,
+		Code:       code,
+		IsInternal: &isInternal,
 	}
+}
+
+// isInternalNode checks if a node ID belongs to the internal project
+func (t *D3Transformer) isInternalNode(id string) bool {
+	// Extract the file path part (before colon if symbol)
+	parts := strings.SplitN(id, ":", 2)
+	basePath := parts[0]
+
+	// Check if the file exists in the store (was ingested)
+	// This is the most reliable way to detect internal files
+	doc, err := t.Store.GetDocument(meb.DocumentID(basePath))
+	if err == nil && len(doc.Content) > 0 {
+		return true
+	}
+
+	// Check against known internal prefixes
+	for _, prefix := range t.InternalPrefixes {
+		if strings.HasPrefix(basePath, prefix) || basePath == prefix {
+			return true
+		}
+	}
+
+	// External indicators:
+	// - Go stdlib (no dots, no slashes in package name for simple cases like "fmt")
+	// - Looks like external import path but NOT in our project
+	if !strings.Contains(basePath, "/") && !strings.Contains(basePath, ".") {
+		// Simple name like "fmt", "strings", "errors" = stdlib
+		return false
+	}
+
+	// If we can't determine, assume external (safer for the frontend)
+	return false
 }
 
 // generateDisplayName creates a human-readable label (filename:symbol).

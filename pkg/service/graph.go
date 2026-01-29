@@ -613,7 +613,133 @@ func (s *GraphService) GetFileGraph(ctx context.Context, projectID, fileID strin
 		}
 	}
 
+	// 5. Resolve package imports to files
+	// This expands package nodes (like "github.com/google/mangle/ast") to their actual files
+	s.resolvePackageImportsToFiles(ctx, store, mergedGraph, cleanFileID)
+
 	return mergedGraph, nil
+}
+
+// resolvePackageImportsToFiles expands package import nodes to show actual files
+func (s *GraphService) resolvePackageImportsToFiles(ctx context.Context, store *meb.MEBStore, graph *export.D3Graph, sourceFileID string) {
+	// Find package nodes (nodes that look like package paths, not file paths)
+	packagesToResolve := make(map[string]bool)
+
+	for _, n := range graph.Nodes {
+		// A package node has no file extension and contains slashes (like github.com/google/mangle/ast)
+		// but is not a symbol (doesn't contain ':')
+		if !strings.Contains(n.ID, ":") && strings.Contains(n.ID, "/") && !strings.Contains(n.ID, ".go") {
+			packagesToResolve[n.ID] = true
+		}
+	}
+
+	if len(packagesToResolve) == 0 {
+		return
+	}
+
+	// For each package, find files that match the prefix
+	for pkgPath := range packagesToResolve {
+		// Query for files that start with this package path
+		// We look for files that have been ingested and match the prefix
+		files := s.findFilesWithPrefix(store, pkgPath)
+
+		if len(files) == 0 {
+			// No files found - this is likely an external package, keep the package node
+			continue
+		}
+
+		// Update Links: replace package target with file targets
+		var newLinks []export.D3Link
+		for _, l := range graph.Links {
+			if l.Target == pkgPath {
+				// Replace with links to each file in the package
+				for _, f := range files {
+					newLinks = append(newLinks, export.D3Link{
+						Source:   l.Source,
+						Target:   f,
+						Relation: l.Relation,
+						Type:     l.Type,
+					})
+				}
+			} else {
+				newLinks = append(newLinks, l)
+			}
+		}
+		graph.Links = newLinks
+
+		// Update Nodes: replace package node with file nodes
+		var newNodes []export.D3Node
+		for _, n := range graph.Nodes {
+			if n.ID == pkgPath {
+				// Replace with file nodes
+				for _, f := range files {
+					fileName := f
+					if idx := strings.LastIndex(f, "/"); idx != -1 {
+						fileName = f[idx+1:]
+					}
+					isInternal := true
+					newNodes = append(newNodes, export.D3Node{
+						ID:         f,
+						Name:       fileName,
+						Kind:       "file",
+						IsInternal: &isInternal,
+					})
+				}
+			} else {
+				newNodes = append(newNodes, n)
+			}
+		}
+		graph.Nodes = newNodes
+	}
+}
+
+// findFilesWithPrefix finds all ingested files that match a package path.
+// For Go imports like "github.com/google/mangle/ast", we try:
+// 1. Direct prefix match (if files were ingested with full path)
+// 2. Suffix match using the package name (e.g., "ast/") for relative paths
+func (s *GraphService) findFilesWithPrefix(store *meb.MEBStore, prefix string) []string {
+	var files []string
+	seen := make(map[string]bool)
+
+	// Extract the package suffix (last segment) for matching
+	// e.g., "github.com/google/mangle/ast" -> "ast"
+	pkgSuffix := prefix
+	if idx := strings.LastIndex(prefix, "/"); idx != -1 {
+		pkgSuffix = prefix[idx+1:]
+	}
+
+	// Prefix to match: "ast/" (directory prefix)
+	dirPrefix := pkgSuffix + "/"
+
+	// Scan for files with hash (ingested files)
+	for fact, _ := range store.Scan("", meb.PredHash, "", "") {
+		filePath := string(fact.Subject)
+
+		// Skip test files
+		if strings.Contains(filePath, "_test.go") {
+			continue
+		}
+
+		// Match either full prefix OR directory prefix
+		matched := false
+		if strings.HasPrefix(filePath, prefix) && strings.HasSuffix(filePath, ".go") {
+			matched = true
+		} else if strings.HasPrefix(filePath, dirPrefix) && strings.HasSuffix(filePath, ".go") {
+			matched = true
+		}
+
+		if matched && !seen[filePath] {
+			seen[filePath] = true
+			files = append(files, filePath)
+		}
+	}
+
+	// Limit to first 5 files to prevent explosion
+	if len(files) > 5 {
+		files = files[:5]
+	}
+
+	return files
 }
 
 // GetProjectMap returns a high-level view of file dependencies (imports only).
