@@ -13,35 +13,33 @@ import (
 func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	ctx := context.Background()
 
-	// 1. Discover Route Mappings dynamically from server.go
+	// 1. Discover BE/FE Sets
+	feSet := make(map[string]bool)
+	beSet := make(map[string]bool)
+
+	resFE, _ := s.Query(ctx, `triples(?s, "has_tag", "frontend")`)
+	for _, r := range resFE {
+		id, _ := r["?s"].(string)
+		feSet[id] = true
+	}
+	resBE, _ := s.Query(ctx, `triples(?s, "has_tag", "backend")`)
+	for _, r := range resBE {
+		id, _ := r["?s"].(string)
+		beSet[id] = true
+	}
+	// 2. Discover Route Mappings dynamically from router files
 	routeMap := make(map[string]string)
-
-	// Pre-index symbols in the server package for fast lookup
 	symbolLookup := make(map[string]string)
-	// Query all defined symbols in server package, not just "type" which might be missing
-	// Or better: iterate all symbols in pkg/server
-	// But "triples" with wildcard predicate?
-	// Let's use the query that worked for Defines in Internal Linker
-	// Actually, just listing all functions/methods is safer if we fix the type issue.
-	// But since type might be missing, let's look at "defines" in server files if possible.
-	// For now, let's stick to generic query but handle dot.
 
-	// Issue: handleGraphPath missed "type" predicate.
-	// So iteration via "type" missed it.
-	// We MUST iterate via "defines" for robust discovery.
-
-	// Helper to scan a file's definitions
 	scanFileDefs := func(fileID string) {
 		qDef := fmt.Sprintf(`triples("%s", "defines", ?s)`, fileID)
 		res, err := s.Query(ctx, qDef)
 		if err == nil {
 			for _, r := range res {
 				id, _ := r["?s"].(string)
-				// Extract name
 				parts := strings.Split(id, ":")
 				if len(parts) > 1 {
 					name := parts[len(parts)-1]
-					// Handle Receiver.Method or .Method
 					if idx := strings.LastIndex(name, "."); idx != -1 {
 						name = name[idx+1:]
 					}
@@ -51,29 +49,23 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		}
 	}
 
-	// 0. Discover BE Prefix (to handle different ingestion folder structures)
-	bePrefix := "gca/"
-	resP, _ := s.Query(ctx, `triples(?s, "type", "file")`)
-	for _, r := range resP {
-		id, _ := r["?s"].(string)
-		if strings.HasSuffix(id, "pkg/server/server.go") {
-			bePrefix = id[:len(id)-len("pkg/server/server.go")]
-			break
+	for id := range beSet {
+		doc, err := s.GetDocument(meb.DocumentID(id))
+		if err != nil {
+			continue
 		}
-	}
-	fmt.Printf("[Virtual] Using discovered BE prefix: %s\n", bePrefix)
+		content := string(doc.Content)
+		if !strings.Contains(content, ".router.") {
+			continue
+		}
 
-	// Scan key server files
-	scanFileDefs(bePrefix + "pkg/server/server.go")
-	scanFileDefs(bePrefix + "pkg/server/handlers.go")
+		fmt.Printf("[Virtual] Scanning router file: %s\n", id)
+		scanFileDefs(id) // Pre-index this file's symbols
 
-	serverDoc, err := s.GetDocument(meb.DocumentID(bePrefix + "pkg/server/server.go"))
-	if err == nil {
-		content := string(serverDoc.Content)
 		lines := strings.Split(content, "\n")
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
-			if !strings.Contains(line, "s.router.") {
+			if !strings.Contains(line, ".router.") {
 				continue
 			}
 			// Extract route: between the first dual-quotes
@@ -88,12 +80,23 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 			}
 			route := rest[:endQuoteIdx]
 
-			// Extract handler: after the last comma and "s."
+			// Extract handler: after the last comma or "s."
+			var handler string
 			sIdx := strings.LastIndex(line, "s.")
-			if sIdx == -1 {
+			if sIdx != -1 {
+				handler = line[sIdx+2:]
+			} else {
+				// Fallback to last segment after comma
+				commaIdx := strings.LastIndex(line, ",")
+				if commaIdx != -1 {
+					handler = strings.TrimSpace(line[commaIdx+1:])
+				}
+			}
+
+			if handler == "" {
 				continue
 			}
-			handler := line[sIdx+2:]
+
 			// Strip trailing characters like )
 			handlerParts := strings.FieldsFunc(handler, func(r rune) bool {
 				return r == ')' || r == ',' || r == ' ' || r == ';'
@@ -101,26 +104,30 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 			if len(handlerParts) == 0 {
 				continue
 			}
-			handler = handlerParts[0]
+			handlerToken := handlerParts[0]
 
-			if id, ok := symbolLookup[handler]; ok {
-				routeMap[route] = id
+			// Try to find the handler symbol
+			if targetID, ok := symbolLookup[handlerToken]; ok {
+				routeMap[route] = targetID
+				fmt.Printf("[Virtual] Linked %s --(handled_by)--> %s\n", route, targetID)
+				s.AddFact(meb.Fact{
+					Subject:   meb.DocumentID(route),
+					Predicate: "handled_by",
+					Object:    targetID,
+					Graph:     "virtual",
+				})
 			}
 		}
 	}
 
-	// Fallback/Hardcoded defaults if discovery failed
 	if len(routeMap) == 0 {
-		routeMap = map[string]string{
-			"/v1/graph/path": bePrefix + "pkg/server/handlers.go:handleGraphPath",
-			"/v1/query":      bePrefix + "pkg/server/handlers.go:handleQuery",
-		}
+		fmt.Printf("[Virtual] WARNING: No routes discovered. FE-BE bridging will be limited.\n")
 	}
 
-	fmt.Printf("[Virtual] Discovered %d routes from server.go\n", len(routeMap))
+	fmt.Printf("[Virtual] Discovered %d routes.\n", len(routeMap))
 
 	// 2. Scan Frontend Services for fetch calls
-	// We look for any symbol in 'gca-fe/services' that contains 'fetch' keyworks
+	// We look for any symbol in frontend files that contains 'fetch' keywords
 	q := `triples(?s, "type", "function")`
 	results, err := s.Query(ctx, q)
 	if err != nil {
@@ -132,7 +139,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 
 	for _, res := range results {
 		sID, ok := res["?s"].(string)
-		if !ok || !strings.Contains(sID, "gca-fe/services") {
+		if !ok || !feSet[sID] {
 			continue
 		}
 
@@ -147,23 +154,21 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		// or fetch(..., "/v1/...")
 		content := string(doc.Content)
 
-		for route, handlerID := range routeMap {
+		for route := range routeMap {
 			// Check if content mentions specific route
 			// We check for the precise string path "/v1/..."
 			if strings.Contains(content, route) {
 				// Create Virtual Edge
-				fmt.Printf("[Virtual] Linked %s -> %s (via %s)\n", sID, handlerID, route)
+				fmt.Printf("[Virtual] Linked %s --(calls_api)--> %s\n", sID, route)
 
-				// Add 'calls' edge
+				// Add 'calls_api' edge
 				s.AddFact(meb.Fact{
-					Subject:   meb.DocumentID(sID), // meb.DocumentID is alias for string? No, Fact.Subject is DocumentID.
-					Predicate: "calls",
-					Object:    handlerID,
+					Subject:   meb.DocumentID(sID),
+					Predicate: "calls_api",
+					Object:    route,
 					Graph:     "virtual",
 				})
 
-				// Add 'http_route' edge for metadata?
-				// Maybe later.
 				count++
 			}
 		}
@@ -172,32 +177,43 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	// 3. Internal Service Linker (Backend -> Backend)
 	// Heuristic: Link `s.graphService.Method` in handlers to `pkg/service` methods
 
-	// A. Gather all Handler functions in pkg/server/handlers.go
+	// A. Gather all Handler candidates from backend files
 	type HandlerInfo struct {
 		ID      string
 		Content string
 	}
 	var handlers []HandlerInfo
 
-	// Use "defines" to find symbols in handlers.go
-	// Note: We need the full ID "gca/pkg/server/handlers.go"
-	qHandlersDef := fmt.Sprintf(`triples("%spkg/server/handlers.go", "defines", ?s)`, bePrefix)
-	resHandlersDef, err := s.Query(ctx, qHandlersDef)
-	if err == nil {
-		for _, r := range resHandlersDef {
-			id, _ := r["?s"].(string)
-			// Optional: verify it's a function or method?
-			// We can just try to get content. faster.
-			doc, err := s.GetDocument(meb.DocumentID(id))
+	for id := range beSet {
+		// Only scan files, not symbols
+		if strings.Contains(id, ":") {
+			continue
+		}
+
+		doc, err := s.GetDocument(meb.DocumentID(id))
+		if err != nil {
+			continue
+		}
+		content := string(doc.Content)
+
+		// If it looks like it contains handler-to-service calls
+		if strings.Contains(content, "s.graphService.") {
+			// Find all symbols defined in this file
+			qDef := fmt.Sprintf(`triples("%s", "defines", ?s)`, id)
+			res, err := s.Query(ctx, qDef)
 			if err == nil {
-				handlers = append(handlers, HandlerInfo{
-					ID:      id,
-					Content: string(doc.Content),
-				})
+				for _, r := range res {
+					sID, _ := r["?s"].(string)
+					// We use the same content for all symbols in the file for linking
+					handlers = append(handlers, HandlerInfo{
+						ID:      sID,
+						Content: content,
+					})
+				}
 			}
 		}
 	}
-	fmt.Printf("[Virtual] Found %d handlers to scan via defines.\n", len(handlers))
+	fmt.Printf("[Virtual] Found %d handler symbols to scan across backend files.\n", len(handlers))
 
 	// B. Gather all Service method candidates (Functions AND Methods)
 	var serviceMethods []string
@@ -208,7 +224,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	if err == nil {
 		for _, r := range resMethods {
 			id, _ := r["?s"].(string)
-			if strings.Contains(id, "pkg/service/") {
+			if beSet[id] {
 				serviceMethods = append(serviceMethods, id)
 			}
 		}
@@ -219,7 +235,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	if err == nil {
 		for _, r := range resFuncs {
 			id, _ := r["?s"].(string)
-			if strings.Contains(id, "pkg/service/") {
+			if beSet[id] {
 				serviceMethods = append(serviceMethods, id)
 			}
 		}
@@ -254,6 +270,48 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		}
 	}
 
-	fmt.Printf("[Virtual] Injected internal service links.\n")
+	// 4. Scan for internal FE calls (Symbol to Symbol)
+	fmt.Printf("[Virtual] Scanning for internal FE-FE calls...\n")
+	feSymbols := make(map[string]string) // ShortName -> FullID
+	for _, res := range results {
+		sID, _ := res["?s"].(string)
+		if feSet[sID] {
+			parts := strings.Split(sID, ":")
+			if len(parts) > 1 {
+				short := parts[len(parts)-1]
+				feSymbols[short] = sID
+			}
+		}
+	}
+
+	for _, res := range results {
+		sID, ok := res["?s"].(string)
+		if !ok || !feSet[sID] {
+			continue
+		}
+
+		doc, err := s.GetDocument(meb.DocumentID(sID))
+		if err != nil {
+			continue
+		}
+
+		for short, targetID := range feSymbols {
+			if sID == targetID {
+				continue
+			}
+			// Simple greedy check for function call
+			if strings.Contains(string(doc.Content), short+"(") {
+				s.AddFact(meb.Fact{
+					Subject:   meb.DocumentID(sID),
+					Predicate: "calls",
+					Object:    targetID,
+					Graph:     "virtual",
+				})
+				count++
+			}
+		}
+	}
+
+	fmt.Printf("[Virtual] Added %d total virtual edges.\n", count)
 	return nil
 }
