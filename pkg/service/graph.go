@@ -98,58 +98,47 @@ func (s *GraphService) GetManifest(ctx context.Context, projectID string) (map[s
 	}
 
 	// Data structures for compressed manifest
-	// F: { "1": "path/file.go" }
-	// S: { "SymbolName": 1 } (where 1 is file ID)
+	// F: { "path/file.go": "path/file.go" } (Or simplified ID if needed, but path is best for ID)
+	// S: { "SymbolName": "path/file:Symbol" } (Direct mapping to Full ID)
 	fileMap := make(map[string]string)
-	symbolMap := make(map[string]int)
-
-	// Keep track of file IDs
-	fileToID := make(map[string]string)
-	nextFileID := 1
+	symbolMap := make(map[string]string)
 
 	// Iterate over all "defines" facts to find symbols and their files
 	// Query: triples(?file, "defines", ?symbol)
-	// We use Scan directly for efficiency vs Query engine
 	for fact, err := range store.Scan("", "defines", "", "") {
 		if err != nil {
 			return nil, fmt.Errorf("scan failed: %w", err)
 		}
 
 		filePath := string(fact.Subject)
-		symbolName, ok := fact.Object.(string)
+		fullID, ok := fact.Object.(string)
 		if !ok {
-			// Skip if object is not a string (should not happen for "defines")
 			continue
 		}
 
-		// Normalize file path (remove project root if needed, but simplistic for now)
-		// Assign simplified integer ID to file if not exists
-		fID, exists := fileToID[filePath]
-		if !exists {
-			fID = fmt.Sprintf("%d", nextFileID)
-			nextFileID++
-			fileToID[filePath] = fID
-			fileMap[fID] = filePath
+		// Map File: just use path as ID for simplicity and directness
+		// Using an integer ID was an optimization that caused confusion.
+		fileMap[filePath] = filePath
+
+		// Map Symbol: ShortName -> FullID
+		// Extract short name from FullID
+		// ID format: "path/file:Symbol" or "path/file:Receiver.Method" or "path/file:.Method"
+		shortName := fullID
+		parts := strings.Split(fullID, ":")
+		if len(parts) > 1 {
+			shortName = parts[len(parts)-1]
+		}
+		// Remove . prefix or receiver prefix if meaningful (but simplistic extraction is better for matching)
+		// If "handlers.go:.handleGraphPath", shortName=".handleGraphPath".
+		// We want "handleGraphPath".
+		if idx := strings.LastIndex(shortName, "."); idx != -1 && idx < len(shortName)-1 {
+			shortName = shortName[idx+1:]
 		}
 
-		// Map symbol to file ID
-		// S: { "MyFunc": 1 }
-		// Note: Symbol names might collide (e.g. "init", "main").
-		// If collision, we might need a list or just overwrite (last one wins)
-		// or use distinct map for collisions.
-		// For AI context, "Symbol" -> "File" is the goal.
-		// If "main" exists in 5 files, maybe we skip common names or store as array?
-		// Compressed format limitation: S:{"Main": 2}
-		// Let's assume most symbols are unique enough or package qualified?
-		// No, Object is just "Main".
-		// Let's handle collision by NOT storing simple names if they are too common?
-		// Or assume the AI can handle "Main" by context?
-		// Let's just overwrite for now, or maybe only store exported/Capitalized ones?
-		// The prompt says: "NEVER use the search_symbols tool if a symbol name is found in the manifest."
-		// So if "Main" is in manifest pointing to file 1, and user means file 2, we have a problem.
-		// Maybe key should be Package.Symbol? But we don't have package here easily without another lookup.
-		// Let's stick to the requested format: S:{"ValidateToken":1}
-		symbolMap[symbolName] = mustAtoi(fID)
+		// Store in map
+		// Note: Collisions (e.g. "main") will be overwritten.
+		// For a hackathon/demo, this is acceptable.
+		symbolMap[shortName] = fullID
 	}
 
 	return map[string]interface{}{
@@ -222,6 +211,28 @@ func (s *GraphService) enrichNodes(ctx context.Context, store *meb.MEBStore, gra
 			if len(h.Children) > 0 {
 				n.Children = s.mapChildren(h.Children)
 			}
+
+			// Copy Metadata (Package, Tags)
+			if n.Metadata == nil {
+				n.Metadata = make(map[string]string)
+			}
+			if pkg, ok := h.Metadata["package"].(string); ok {
+				n.Metadata["package"] = pkg
+			}
+			if tags, ok := h.Metadata["tags"].([]string); ok {
+				n.Metadata["tags"] = strings.Join(tags, ",")
+			} else if tags, ok := h.Metadata["tags"].([]interface{}); ok {
+				// Handle JSON unmarshal result
+				var strTags []string
+				for _, t := range tags {
+					if s, ok := t.(string); ok {
+						strTags = append(strTags, s)
+					}
+				}
+				n.Metadata["tags"] = strings.Join(strTags, ",")
+			} else if tags, ok := h.Metadata["tags"].(string); ok {
+				n.Metadata["tags"] = tags
+			}
 		}
 	}
 	return nil
@@ -249,6 +260,27 @@ func (s *GraphService) mapChildren(hydrated []meb.HydratedSymbol) []export.D3Nod
 		if lang, ok := h.Metadata["language"].(string); ok {
 			nodes[i].Language = lang
 			nodes[i].Group = lang
+		}
+
+		// Map extended metadata
+		if nodes[i].Metadata == nil {
+			nodes[i].Metadata = make(map[string]string)
+		}
+		if pkg, ok := h.Metadata["package"].(string); ok {
+			nodes[i].Metadata["package"] = pkg
+		}
+		if tags, ok := h.Metadata["tags"].([]string); ok {
+			nodes[i].Metadata["tags"] = strings.Join(tags, ",")
+		} else if tags, ok := h.Metadata["tags"].([]interface{}); ok {
+			var strTags []string
+			for _, t := range tags {
+				if s, ok := t.(string); ok {
+					strTags = append(strTags, s)
+				}
+			}
+			nodes[i].Metadata["tags"] = strings.Join(strTags, ",")
+		} else if tags, ok := h.Metadata["tags"].(string); ok {
+			nodes[i].Metadata["tags"] = tags
 		}
 	}
 	return nodes

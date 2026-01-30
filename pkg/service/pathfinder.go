@@ -217,47 +217,18 @@ func (s *GraphService) getNeighbors(ctx context.Context, store *meb.MEBStore, no
 	return final, nil
 }
 
-// Helper to resolve logical IDs to Canonical IDs
+// resolveCandidates resolves logical IDs to Canonical IDs.
+// Optimization: Skips expensive fuzzy search for full path IDs.
 func (s *GraphService) resolveCandidates(ctx context.Context, store *meb.MEBStore, obj string) []string {
+	if strings.Contains(obj, "/") {
+		return []string{obj}
+	}
+
 	ids := []string{obj}
-	if !strings.Contains(obj, "/") {
-		// Search for the symbol to find its canonical file-based ID
-		matches, err := store.SearchSymbols(obj, 20, "")
-
-		// Check if we found any canonical ID (containing /)
-		foundCanonical := false
-		if err == nil {
-			for _, m := range matches {
-				if strings.Contains(m, "/") {
-					foundCanonical = true
-					break
-				}
-			}
-		}
-
-		if (!foundCanonical) && strings.Contains(obj, ".") {
-			// Fallback: Try searching for just the symbol name suffix
-			parts := strings.Split(obj, ".")
-			symbolOnly := parts[len(parts)-1]
-
-			// Optimization: Skip common generic method names
-			switch symbolOnly {
-			case "Add", "Get", "Set", "String", "Hash", "Equals", "Len", "Cap", "Close", "Errorf", "Fatal", "Fatalf", "Log", "Print", "Printf":
-				return ids
-			}
-
-			matchesFallback, errFallback := store.SearchSymbols(symbolOnly, 50, "")
-
-			if errFallback == nil {
-				for _, m := range matchesFallback {
-					ids = append(ids, m)
-				}
-			}
-		}
-
-		// Add original matches too (if any)
-		if err == nil {
-			for _, m := range matches {
+	matches, err := store.SearchSymbols(obj, 20, "")
+	if err == nil {
+		for _, m := range matches {
+			if m != obj {
 				ids = append(ids, m)
 			}
 		}

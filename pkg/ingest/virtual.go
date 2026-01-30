@@ -51,11 +51,23 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		}
 	}
 
-	// Scan key server files
-	scanFileDefs("gca/pkg/server/server.go")
-	scanFileDefs("gca/pkg/server/handlers.go")
+	// 0. Discover BE Prefix (to handle different ingestion folder structures)
+	bePrefix := "gca/"
+	resP, _ := s.Query(ctx, `triples(?s, "type", "file")`)
+	for _, r := range resP {
+		id, _ := r["?s"].(string)
+		if strings.HasSuffix(id, "pkg/server/server.go") {
+			bePrefix = id[:len(id)-len("pkg/server/server.go")]
+			break
+		}
+	}
+	fmt.Printf("[Virtual] Using discovered BE prefix: %s\n", bePrefix)
 
-	serverDoc, err := s.GetDocument("gca/pkg/server/server.go")
+	// Scan key server files
+	scanFileDefs(bePrefix + "pkg/server/server.go")
+	scanFileDefs(bePrefix + "pkg/server/handlers.go")
+
+	serverDoc, err := s.GetDocument(meb.DocumentID(bePrefix + "pkg/server/server.go"))
 	if err == nil {
 		content := string(serverDoc.Content)
 		lines := strings.Split(content, "\n")
@@ -100,8 +112,8 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	// Fallback/Hardcoded defaults if discovery failed
 	if len(routeMap) == 0 {
 		routeMap = map[string]string{
-			"/v1/graph/path": "gca/pkg/server/handlers.go:handleGraphPath",
-			"/v1/query":      "gca/pkg/server/handlers.go:handleQuery",
+			"/v1/graph/path": bePrefix + "pkg/server/handlers.go:handleGraphPath",
+			"/v1/query":      bePrefix + "pkg/server/handlers.go:handleQuery",
 		}
 	}
 
@@ -169,7 +181,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 
 	// Use "defines" to find symbols in handlers.go
 	// Note: We need the full ID "gca/pkg/server/handlers.go"
-	qHandlersDef := `triples("gca/pkg/server/handlers.go", "defines", ?s)`
+	qHandlersDef := fmt.Sprintf(`triples("%spkg/server/handlers.go", "defines", ?s)`, bePrefix)
 	resHandlersDef, err := s.Query(ctx, qHandlersDef)
 	if err == nil {
 		for _, r := range resHandlersDef {

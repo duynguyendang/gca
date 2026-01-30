@@ -192,6 +192,31 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 	}
 
 	// Process Symbols
+	var filePackage string
+	if len(symbols) > 0 && symbols[0].Package != "" {
+		filePackage = symbols[0].Package
+	} else {
+		filePackage = e.derivePackage(relPath)
+	}
+
+	// Emit File-Level Facts (once)
+	bundle.Facts = append(bundle.Facts, meb.Fact{
+		Subject:   meb.DocumentID(relPath),
+		Predicate: meb.PredInPackage,
+		Object:    filePackage,
+		Graph:     "default",
+	})
+
+	tags := e.deriveTags(relPath)
+	for _, tag := range tags {
+		bundle.Facts = append(bundle.Facts, meb.Fact{
+			Subject:   meb.DocumentID(relPath),
+			Predicate: meb.PredHasTag,
+			Object:    tag,
+			Graph:     "default",
+		})
+	}
+
 	for _, sym := range symbols {
 		// Create Document
 		doc := meb.Document{
@@ -201,7 +226,8 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 				"file":       relPath,
 				"start_line": sym.StartLine,
 				"end_line":   sym.EndLine,
-				"package":    sym.Package,
+				"package":    filePackage,
+				"tags":       tags, // Add tags to metadata
 			},
 		}
 		bundle.Documents = append(bundle.Documents, doc)
@@ -240,6 +266,68 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 	}
 
 	return bundle, nil
+}
+
+// derivePackage guesses the package name from the file path if not explicitly declared.
+func (e *TreeSitterExtractor) derivePackage(relPath string) string {
+	dir := filepath.Dir(relPath)
+	if dir == "." || dir == "/" {
+		return "root"
+	}
+	// Sanitize path to look like a package (e.g. pkg/ingest -> pkg.ingest)
+	return strings.ReplaceAll(dir, string(filepath.Separator), ".")
+}
+
+// deriveTags generates architectural tags based on file path and extension.
+func (e *TreeSitterExtractor) deriveTags(relPath string) []string {
+	var tags []string
+	lower := strings.ToLower(relPath)
+
+	// Directory-based tags
+	if strings.Contains(lower, "cmd/") {
+		tags = append(tags, "cmd")
+	}
+	if strings.Contains(lower, "pkg/") {
+		tags = append(tags, "pkg")
+	}
+	if strings.Contains(lower, "internal/") {
+		tags = append(tags, "internal")
+	}
+	if strings.Contains(lower, "service") {
+		tags = append(tags, "service")
+	}
+	if strings.Contains(lower, "component") {
+		tags = append(tags, "component")
+	}
+	if strings.Contains(lower, "hook") {
+		tags = append(tags, "hook")
+	}
+	if strings.Contains(lower, "util") {
+		tags = append(tags, "util")
+	}
+	if strings.Contains(lower, "context") {
+		tags = append(tags, "context")
+	}
+
+	// Extension-based tags
+	if strings.Contains(lower, "test") || strings.HasSuffix(lower, "_test.go") || strings.HasSuffix(lower, ".test.ts") {
+		tags = append(tags, "test")
+	}
+
+	// Layer tags
+	if strings.HasSuffix(lower, ".tsx") || strings.HasSuffix(lower, ".jsx") {
+		tags = append(tags, "frontend", "ui")
+	} else if strings.HasSuffix(lower, ".ts") || strings.HasSuffix(lower, ".js") {
+		tags = append(tags, "frontend") // loosely assummed unless node backend
+	}
+	if strings.HasSuffix(lower, ".go") {
+		tags = append(tags, "backend")
+	}
+	if strings.HasSuffix(lower, ".py") {
+		tags = append(tags, "backend", "python")
+	}
+
+	return tags
 }
 
 // --- Go Extraction ---

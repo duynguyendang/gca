@@ -8,6 +8,8 @@ const (
 	PredType       = "type"       // Categorization
 	PredImplements = "implements" // Interface fulfillment
 	PredHasDoc     = "has_doc"    // Documentation
+	PredInPackage  = "in_package" // Logical module/package
+	PredHasTag     = "has_tag"    // Architectural tag
 )
 
 // System/Whitelisted Predicates
@@ -32,4 +34,6 @@ var SystemPredicates = map[string]PredicateMetadata{
 	PredHasDoc:        {"Association with documentation", "triples('AddDocument', 'has_doc', 'Adds a doc...')"},
 	PredHasSourceCode: {"Symbol contains raw code", "triples(S, 'has_source_code', C)"},
 	PredHash:          {"File content hash", "triples(F, 'hash_sha256', H)"},
+	PredInPackage:     {"Logical package membership", "triples('file.go', 'in_package', 'main')"},
+	PredHasTag:        {"Architectural tag", "triples('file.go', 'has_tag', 'service')"},
 }
