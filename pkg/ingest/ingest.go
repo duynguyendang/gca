@@ -41,7 +41,7 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 			return err
 		}
 		if d.IsDir() {
-			if d.Name() == "test-code" || d.Name() == "node_modules" || d.Name() == ".git" {
+			if d.Name() == "test-code" || d.Name() == "node_modules" || d.Name() == ".git" || d.Name() == "dist" || d.Name() == "build" || d.Name() == ".next" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -118,7 +118,7 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 			return err
 		}
 		if d.IsDir() {
-			if d.Name() == "test-code" || d.Name() == "node_modules" || d.Name() == ".git" {
+			if d.Name() == "test-code" || d.Name() == "node_modules" || d.Name() == ".git" || d.Name() == "dist" || d.Name() == "build" || d.Name() == ".next" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -152,6 +152,12 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 	fmt.Println("Pass 4: Injecting Virtual Triples...")
 	if err := EnhanceVirtualTriples(s); err != nil {
 		log.Printf("Warning: virtual triple injection failed: %v", err)
+	}
+
+	// Pass 5: Role Tagging (Entry Points)
+	fmt.Println("Pass 5: Tagging Roles...")
+	if err := TagRoles(s); err != nil {
+		log.Printf("Warning: role tagging failed: %v", err)
 	}
 
 	return nil
@@ -251,7 +257,14 @@ func processFile(s *meb.MEBStore, ext Extractor, path string, sourceRoot string)
 		if f.Predicate == meb.PredCalls {
 			if objStr, ok := f.Object.(string); ok {
 				if resolved, ok := symbolTable[objStr]; ok {
-					f.Object = resolved
+					// CROSS-STACK PROTECTION:
+					// Only resolve if subject and target are in the same layer.
+					// Heuristic: check first segment of path (e.g. gca-fe vs gca-be)
+					subParts := strings.Split(string(f.Subject), "/")
+					resParts := strings.Split(resolved, "/")
+					if len(subParts) > 0 && len(resParts) > 0 && subParts[0] == resParts[0] {
+						f.Object = resolved
+					}
 				}
 			}
 		}
@@ -286,6 +299,28 @@ func calculateHash(path string) (string, error) {
 	}
 
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func TagRoles(s *meb.MEBStore) error {
+	ctx := context.Background()
+	// Entry Points: targets of handled_by
+	resHandlers, err := s.Query(ctx, fmt.Sprintf(`triples(?url, "%s", ?handler)`, meb.PredHandledBy))
+	if err != nil {
+		return err
+	}
+	count := 0
+	for _, r := range resHandlers {
+		handler, _ := r["?handler"].(string)
+		s.AddFact(meb.Fact{
+			Subject:   meb.DocumentID(handler),
+			Predicate: meb.PredHasRole,
+			Object:    "entry_point",
+			Graph:     "virtual",
+		})
+		count++
+	}
+	fmt.Printf("[Tagging] tagged %d entry points\n", count)
+	return nil
 }
 
 func isSupportedFile(path string) bool {

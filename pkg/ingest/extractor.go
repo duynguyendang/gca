@@ -238,6 +238,26 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 			meb.Fact{Subject: meb.DocumentID(relPath), Predicate: meb.PredDefines, Object: sym.ID, Graph: "default"},
 		)
 
+		// Role Tagging
+		if sym.Type == TypeStruct || sym.Type == TypeInterface || sym.Type == TypeClass {
+			bundle.Facts = append(bundle.Facts, meb.Fact{
+				Subject:   meb.DocumentID(sym.ID),
+				Predicate: meb.PredHasRole,
+				Object:    "data_model",
+				Graph:     "default",
+			})
+		}
+
+		lowerPkg := strings.ToLower(filePackage)
+		if strings.Contains(lowerPkg, "util") || strings.Contains(lowerPkg, "helper") {
+			bundle.Facts = append(bundle.Facts, meb.Fact{
+				Subject:   meb.DocumentID(sym.ID),
+				Predicate: meb.PredHasRole,
+				Object:    "utility",
+				Graph:     "default",
+			})
+		}
+
 		if sym.DocComment != "" {
 			bundle.Facts = append(bundle.Facts, meb.Fact{
 				Subject:   meb.DocumentID(sym.ID),

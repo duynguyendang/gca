@@ -397,21 +397,13 @@ func (m *MEBStore) Query(ctx context.Context, query string) ([]map[string]any, e
 				}
 			}
 
-			// Graph context (defaulting to all graphs or specific if we add that support)
-			// For now, let's scan all known graphs or default.
-			// The original implementation scanned specific graphs.
-			// Let's iterate a set of "common" graphs for now as per original code behavior?
-			// Or better: The original Scan(g="") implementation might not strict enough if we don't have GSPO index support for wildcard graph.
-			// User request didn't specify graph handling changes, but "Scan" supports iterating if g is empty IF we have proper indexing.
-			// Let's stick to scanning "default" plus others if needed.
-			// Ideally, we should scan all graphs.
-			// For this implementation, we'll iterate known graphs like in main.go example to be safe, or just "default".
-			// Let's assume "default" for now to keep it simple, or iterate a fixed list.
-			scanGraphs := []string{"default", "doc1", "doc2"} // TODO: Discover graphs dynamically
+			// Graph context defaults to "default" for now since we are using a Triple Store (SPO)
+			// which doesn't partition by graph in the index.
+			// Scanning multiple graphs artificially duplicates the results.
+			g := "default"
 
-			for _, g := range scanGraphs {
-				// Scan: Use the partially-bound Atom
-				for fact, err := range m.Scan(scanArgs[0], scanArgs[1], scanArgs[2], g) {
+			// Scan: Use the partially-bound Atom
+			for fact, err := range m.Scan(scanArgs[0], scanArgs[1], scanArgs[2], g) {
 					if err != nil {
 						// Error scanning (e.g. not found), skip
 						continue

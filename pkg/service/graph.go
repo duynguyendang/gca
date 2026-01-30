@@ -535,13 +535,18 @@ func (s *GraphService) ListFiles(projectID string) ([]string, error) {
 		return nil, fmt.Errorf("%w: %v", errors.ErrInternal, err)
 	}
 
+	// Deduplicate files
+	seen := make(map[string]bool)
 	files := make([]string, 0, len(results))
 	for _, res := range results {
 		if f, ok := res["?f"].(string); ok {
 			// clean quotes if any (datalog sometimes returns quoted strings if not careful,
 			// but here they should be DocumentIDs which are strings)
 			f = strings.Trim(f, "\"")
-			files = append(files, f)
+			if !seen[f] {
+				seen[f] = true
+				files = append(files, f)
+			}
 		}
 	}
 	// Sort for consistent output

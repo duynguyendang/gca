@@ -17,19 +17,45 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	feSet := make(map[string]bool)
 	beSet := make(map[string]bool)
 
-	resFE, _ := s.Query(ctx, `triples(?s, "has_tag", "frontend")`)
+	resFE, _ := s.Query(ctx, `triples(?f, "has_tag", "frontend"), triples(?f, "defines", ?s)`)
 	for _, r := range resFE {
 		id, _ := r["?s"].(string)
 		feSet[id] = true
 	}
-	resBE, _ := s.Query(ctx, `triples(?s, "has_tag", "backend")`)
+	resBE, _ := s.Query(ctx, `triples(?f, "has_tag", "backend"), triples(?f, "defines", ?s)`)
 	for _, r := range resBE {
 		id, _ := r["?s"].(string)
+		beSet[id] = true
+	}
+
+	// Also include the files themselves in the sets for content scanning
+	resFEFiles, _ := s.Query(ctx, `triples(?f, "has_tag", "frontend")`)
+	for _, r := range resFEFiles {
+		id, _ := r["?f"].(string)
+		feSet[id] = true
+	}
+	resBEFiles, _ := s.Query(ctx, `triples(?f, "has_tag", "backend")`)
+	for _, r := range resBEFiles {
+		id, _ := r["?f"].(string)
 		beSet[id] = true
 	}
 	// 2. Discover Route Mappings dynamically from router files
 	routeMap := make(map[string]string)
 	symbolLookup := make(map[string]string)
+
+	isTagged := func(id string, set map[string]bool) bool {
+		if set[id] {
+			return true // Direct match (symbol or file)
+		}
+		// Fallback: Check file part
+		parts := strings.Split(id, ":")
+		if len(parts) > 1 {
+			return set[parts[0]]
+		}
+		return false
+	}
+
+	fmt.Printf("[Virtual] feSet size: %d, beSet size: %d\n", len(feSet), len(beSet))
 
 	scanFileDefs := func(fileID string) {
 		qDef := fmt.Sprintf(`triples("%s", "defines", ?s)`, fileID)
@@ -50,6 +76,17 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	}
 
 	for id := range beSet {
+		// Only scan symbol definitions, not the files themselves
+		if !strings.Contains(id, ":") {
+			scanFileDefs(id)
+		}
+	}
+
+	for id := range beSet {
+		// Only scan files for router logic
+		if strings.Contains(id, ":") {
+			continue
+		}
 		doc, err := s.GetDocument(meb.DocumentID(id))
 		if err != nil {
 			continue
@@ -60,7 +97,6 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		}
 
 		fmt.Printf("[Virtual] Scanning router file: %s\n", id)
-		scanFileDefs(id) // Pre-index this file's symbols
 
 		lines := strings.Split(content, "\n")
 		for _, line := range lines {
@@ -112,8 +148,14 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 				fmt.Printf("[Virtual] Linked %s --(handled_by)--> %s\n", route, targetID)
 				s.AddFact(meb.Fact{
 					Subject:   meb.DocumentID(route),
-					Predicate: "handled_by",
+					Predicate: meb.PredHandledBy,
 					Object:    targetID,
+					Graph:     "virtual",
+				})
+				s.AddFact(meb.Fact{
+					Subject:   meb.DocumentID(route),
+					Predicate: meb.PredType,
+					Object:    "api_route",
 					Graph:     "virtual",
 				})
 			}
@@ -164,7 +206,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 				// Add 'calls_api' edge
 				s.AddFact(meb.Fact{
 					Subject:   meb.DocumentID(sID),
-					Predicate: "calls_api",
+					Predicate: meb.PredCallsAPI,
 					Object:    route,
 					Graph:     "virtual",
 				})
@@ -224,7 +266,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	if err == nil {
 		for _, r := range resMethods {
 			id, _ := r["?s"].(string)
-			if beSet[id] {
+			if isTagged(id, beSet) {
 				serviceMethods = append(serviceMethods, id)
 			}
 		}
@@ -235,7 +277,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	if err == nil {
 		for _, r := range resFuncs {
 			id, _ := r["?s"].(string)
-			if beSet[id] {
+			if isTagged(id, beSet) {
 				serviceMethods = append(serviceMethods, id)
 			}
 		}
@@ -271,22 +313,30 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	}
 
 	// 4. Scan for internal FE calls (Symbol to Symbol)
-	fmt.Printf("[Virtual] Scanning for internal FE-FE calls...\n")
-	feSymbols := make(map[string]string) // ShortName -> FullID
+	fmt.Printf("[Virtual] Scanning for internal FE-FE calls (Optimized)...\n")
+	feIndex := make(map[string][]string) // ShortName -> []FullID
+
+	// Build index locally to handle potential name collisions
 	for _, res := range results {
-		sID, _ := res["?s"].(string)
-		if feSet[sID] {
-			parts := strings.Split(sID, ":")
-			if len(parts) > 1 {
-				short := parts[len(parts)-1]
-				feSymbols[short] = sID
-			}
+		sID, ok := res["?s"].(string)
+		if !ok || !isTagged(sID, feSet) {
+			continue
 		}
+		parts := strings.Split(sID, ":")
+		if len(parts) > 1 {
+			short := parts[len(parts)-1]
+			feIndex[short] = append(feIndex[short], sID)
+		}
+	}
+
+	// Helper to check byte for symbol character (A-Z, a-z, 0-9, _, $)
+	isSymbolChar := func(b byte) bool {
+		return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '$'
 	}
 
 	for _, res := range results {
 		sID, ok := res["?s"].(string)
-		if !ok || !feSet[sID] {
+		if !ok || !isTagged(sID, feSet) {
 			continue
 		}
 
@@ -295,20 +345,48 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 			continue
 		}
 
-		for short, targetID := range feSymbols {
-			if sID == targetID {
+		content := string(doc.Content)
+		n := len(content)
+
+		// Scan content once
+		for i := 0; i < n; i++ {
+			// Find start of symbol
+			if !isSymbolChar(content[i]) {
 				continue
 			}
-			// Simple greedy check for function call
-			if strings.Contains(string(doc.Content), short+"(") {
-				s.AddFact(meb.Fact{
-					Subject:   meb.DocumentID(sID),
-					Predicate: "calls",
-					Object:    targetID,
-					Graph:     "virtual",
-				})
-				count++
+			start := i
+			// Consume symbol
+			for i < n && isSymbolChar(content[i]) {
+				i++
 			}
+			token := content[start:i]
+
+			// Check index
+			if targets, exists := feIndex[token]; exists {
+				// Check for call pattern: token followed by '(' (ignoring whitespace?)
+				// Original logic was strict short+"("
+				// We'll stick to strict for now to match behavior, but token scanning naturally isolates token.
+				// Actually, strict short+"(" implies token IS followed by (.
+
+				// Peek ahead for (
+				if i < n && content[i] == '(' {
+					for _, targetID := range targets {
+						if sID == targetID {
+							continue
+						}
+						s.AddFact(meb.Fact{
+							Subject:   meb.DocumentID(sID),
+							Predicate: "calls",
+							Object:    targetID,
+							Graph:     "virtual",
+						})
+						count++
+					}
+				}
+			}
+			// Don't skip back, i is at end of token. Loop will increment i?
+			// Wait, loop has i++. I need to decrement i or change loop.
+			i-- // Adjust for loop increment
 		}
 	}
 

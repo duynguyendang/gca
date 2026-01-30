@@ -10,6 +10,9 @@ const (
 	PredHasDoc     = "has_doc"    // Documentation
 	PredInPackage  = "in_package" // Logical module/package
 	PredHasTag     = "has_tag"    // Architectural tag
+	PredHasRole    = "has_role"   // Universal Role (entry_point, data_model, utility)
+	PredCallsAPI   = "calls_api"  // FE -> Virtual URI
+	PredHandledBy  = "handled_by" // Virtual URI -> BE Handler
 )
 
 // System/Whitelisted Predicates
@@ -36,4 +39,7 @@ var SystemPredicates = map[string]PredicateMetadata{
 	PredHash:          {"File content hash", "triples(F, 'hash_sha256', H)"},
 	PredInPackage:     {"Logical package membership", "triples('file.go', 'in_package', 'main')"},
 	PredHasTag:        {"Architectural tag", "triples('file.go', 'has_tag', 'service')"},
+	PredHasRole:       {"Universal Role", "triples('Login', 'has_role', 'entry_point')"},
+	PredCallsAPI:      {"Frontend request to URI", "triples('GetUsers', 'calls_api', '/v1/users')"},
+	PredHandledBy:     {"Route handled by backend symbol", "triples('/v1/users', 'handled_by', 'HandleGetUsers')"},
 }

@@ -53,7 +53,7 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 
 	// API Bridge Portals: Pre-compute URL -> Handler map for O(1) jump
 	portals := make(map[string]string)
-	resPortals, _ := store.Query(ctx, `triples(?url, "handled_by", ?handler)`)
+	resPortals, _ := store.Query(ctx, fmt.Sprintf(`triples(?url, "%s", ?handler)`, meb.PredHandledBy))
 	for _, r := range resPortals {
 		url, _ := r["?url"].(string)
 		handler, _ := r["?handler"].(string)
@@ -207,12 +207,12 @@ func (s *GraphService) getNeighbors(ctx context.Context, store *meb.MEBStore, no
 
 	// Predicate priority ordering
 	priorityOrder := map[string]int{
-		"calls":      1,
-		"calls_api":  1,
-		"handled_by": 1,
-		"imports":    2,
-		"defines":    3,
-		"in_package": 3,
+		meb.PredCalls:     1,
+		meb.PredCallsAPI:  1,
+		meb.PredHandledBy: 1,
+		meb.PredImports:   2,
+		meb.PredDefines:   3,
+		meb.PredInPackage: 3,
 	}
 
 	for _, res := range results {
