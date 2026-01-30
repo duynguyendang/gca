@@ -404,39 +404,38 @@ func (m *MEBStore) Query(ctx context.Context, query string) ([]map[string]any, e
 
 			// Scan: Use the partially-bound Atom
 			for fact, err := range m.Scan(scanArgs[0], scanArgs[1], scanArgs[2], g) {
-					if err != nil {
-						// Error scanning (e.g. not found), skip
-						continue
-					}
-
-					// Expand: Create new binding
-					newBinding := make(map[string]any)
-					// Copy existing bindings
-					for k, v := range binding {
-						newBinding[k] = v
-					}
-
-					// Extract new bindings from fact
-					row := []string{string(fact.Subject), fact.Predicate, ""}
-					// Object type handling
-					if s, ok := fact.Object.(string); ok {
-						row[2] = s
-					} else {
-						row[2] = fmt.Sprintf("%v", fact.Object)
-					}
-
-					for idx, varName := range vars {
-						if varName != "_" {
-							newBinding[varName] = row[idx]
-						}
-					}
-
-					// Inject Metadata (Weight/Source) into hidden fields
-					newBinding["_weight"] = fact.Weight
-					newBinding["_source"] = fact.Source
-
-					nextBindings = append(nextBindings, newBinding)
+				if err != nil {
+					// Error scanning (e.g. not found), skip
+					continue
 				}
+
+				// Expand: Create new binding
+				newBinding := make(map[string]any)
+				// Copy existing bindings
+				for k, v := range binding {
+					newBinding[k] = v
+				}
+
+				// Extract new bindings from fact
+				row := []string{string(fact.Subject), fact.Predicate, ""}
+				// Object type handling
+				if s, ok := fact.Object.(string); ok {
+					row[2] = s
+				} else {
+					row[2] = fmt.Sprintf("%v", fact.Object)
+				}
+
+				for idx, varName := range vars {
+					if varName != "_" {
+						newBinding[varName] = row[idx]
+					}
+				}
+
+				// Inject Metadata (Weight/Source) into hidden fields
+				newBinding["_weight"] = fact.Weight
+				newBinding["_source"] = fact.Source
+
+				nextBindings = append(nextBindings, newBinding)
 			}
 		}
 		// Move to next stage

@@ -109,7 +109,7 @@ func main() {
 	defer s.Close()
 
 	if *ingestMode {
-		if err := ingest.Run(s, sourceDir); err != nil {
+		if err := ingest.Run(s, "gca-be", "."); err != nil {
 			s.Close()
 			log.Fatalf("Ingestion failed: %v", err)
 		}

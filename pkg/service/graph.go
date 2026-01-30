@@ -526,10 +526,8 @@ func (s *GraphService) ListFiles(projectID string) ([]string, error) {
 		return nil, err
 	}
 
-	// Query for all files that have a hash
-	// Use explicit predicate string to avoid depending on meb package details here if possible,
-	// but meb.PredHash is cleaner.
-	q := fmt.Sprintf("triples(?f, \"%s\", ?h)", meb.PredHash)
+	// Query for all files using type=file (more reliable than hash which relies on PSO index)
+	q := fmt.Sprintf("triples(?f, \"%s\", \"file\")", meb.PredType)
 	results, err := store.Query(context.Background(), q)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errors.ErrInternal, err)

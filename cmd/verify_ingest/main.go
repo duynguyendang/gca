@@ -89,7 +89,7 @@ class TSGreeter implements Greeter {
 	// But `ingest.Run` usually includes embedding.
 	// Let's assume dev env has key or mocks it.
 	fmt.Println("Running ingestion...")
-	if err := ingest.Run(s, srcDir); err != nil {
+	if err := ingest.Run(s, "gca-be", srcDir); err != nil {
 		log.Fatalf("Ingestion failed: %v", err)
 	}
 

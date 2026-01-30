@@ -20,7 +20,7 @@ type ShardedEncoder struct {
 	db *badger.DB
 
 	// Shards for concurrent access
-	shards []*encoderShard
+	shards    []*encoderShard
 	numShards int
 
 	// Next ID allocation (atomic)
@@ -68,10 +68,10 @@ func NewShardedEncoder(db *badger.DB, cacheSize int, numShards int) (*ShardedEnc
 	}
 
 	enc := &ShardedEncoder{
-		db:         db,
-		shards:     shards,
-		numShards:  numShards,
-		nextID:     1, // Start from ID 1 (ID 0 reserved)
+		db:        db,
+		shards:    shards,
+		numShards: numShards,
+		nextID:    1, // Start from ID 1 (ID 0 reserved)
 	}
 
 	// Load the next ID from BadgerDB
@@ -92,6 +92,11 @@ func (e *ShardedEncoder) getShard(s string) int {
 // GetOrCreateID gets the ID for a string, creating a new ID if it doesn't exist.
 // Thread-safe for concurrent access with minimal contention.
 func (e *ShardedEncoder) GetOrCreateID(s string) (uint64, error) {
+	// Truncate if too long to prevent BadgerDB key limit errors
+	if len(s) > MaxStringLength {
+		s = s[:MaxStringLength]
+	}
+
 	shardIdx := e.getShard(s)
 	shard := e.shards[shardIdx]
 
@@ -183,6 +188,12 @@ func (e *ShardedEncoder) GetOrCreateID(s string) (uint64, error) {
 // This is more efficient than calling GetOrCreateID multiple times.
 // Keys are grouped by shard to minimize lock contention.
 func (e *ShardedEncoder) GetIDs(keys []string) ([]uint64, error) {
+	// Pre-process keys to truncate long ones
+	for i, key := range keys {
+		if len(key) > MaxStringLength {
+			keys[i] = key[:MaxStringLength]
+		}
+	}
 	results := make([]uint64, len(keys))
 
 	// Track misses grouped by shard: shardID -> []{index, key}
@@ -444,10 +455,10 @@ func (e *ShardedEncoder) Stats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"num_shards":        e.numShards,
-		"next_id":           atomic.LoadUint64(&e.nextID),
+		"num_shards":          e.numShards,
+		"next_id":             atomic.LoadUint64(&e.nextID),
 		"total_cache_entries": totalForwardSize + totalReverseSize,
-		"forward_cache_len":  totalForwardSize,
-		"reverse_cache_len":  totalReverseSize,
+		"forward_cache_len":   totalForwardSize,
+		"reverse_cache_len":   totalReverseSize,
 	}
 }

@@ -18,6 +18,10 @@ var (
 const (
 	dictForwardPrefix = byte(0x80) // String -> ID
 	dictReversePrefix = byte(0x81) // ID -> String
+
+	// MaxStringLength is the maximum length of a string that can be indexed in the dictionary.
+	// This is limited by the uint16 length field in the key (65535 bytes).
+	MaxStringLength = 65535
 )
 
 // Encoder implements bi-directional String <-> Uint64 mapping with LRU cache.
@@ -111,6 +115,11 @@ func (e *Encoder) GetOrCreateID(s string) (uint64, error) {
 		return 0, err
 	}
 
+	// Truncate if too long to prevent BadgerDB key limit errors
+	if len(s) > MaxStringLength {
+		s = s[:MaxStringLength]
+	}
+
 	// 3. Not in DB. Allocate new ID.
 	return e.allocateNewID(s)
 }
@@ -164,6 +173,12 @@ func (e *Encoder) allocateNewID(s string) (uint64, error) {
 // GetIDs gets IDs for multiple strings in a batch, creating new IDs as needed.
 // This is more efficient than calling GetOrCreateID multiple times.
 func (e *Encoder) GetIDs(keys []string) ([]uint64, error) {
+	// Pre-process keys to truncate long ones
+	for i, key := range keys {
+		if len(key) > MaxStringLength {
+			keys[i] = key[:MaxStringLength]
+		}
+	}
 	results := make([]uint64, len(keys))
 
 	// Track misses: index -> key

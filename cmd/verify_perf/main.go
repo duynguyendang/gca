@@ -42,7 +42,7 @@ func main() {
 
 	// 2. First Ingestion
 	start := time.Now()
-	if err := ingest.Run(s, srcDir); err != nil {
+	if err := ingest.Run(s, "gca-be", srcDir); err != nil {
 		log.Fatal(err)
 	}
 	duration := time.Since(start)
@@ -50,7 +50,7 @@ func main() {
 
 	// 3. Second Ingestion (No Changes)
 	start = time.Now()
-	if err := ingest.Run(s, srcDir); err != nil {
+	if err := ingest.Run(s, "gca-be", srcDir); err != nil {
 		log.Fatal(err)
 	}
 	duration = time.Since(start)
@@ -62,7 +62,7 @@ func main() {
 
 	// 5. Third Ingestion (1 Change)
 	start = time.Now()
-	if err := ingest.Run(s, srcDir); err != nil {
+	if err := ingest.Run(s, "gca-be", srcDir); err != nil {
 		log.Fatal(err)
 	}
 	duration = time.Since(start)

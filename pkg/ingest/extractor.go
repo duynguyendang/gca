@@ -236,6 +236,7 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 		bundle.Facts = append(bundle.Facts,
 			meb.Fact{Subject: meb.DocumentID(sym.ID), Predicate: meb.PredType, Object: sym.Type, Graph: "default"},
 			meb.Fact{Subject: meb.DocumentID(relPath), Predicate: meb.PredDefines, Object: sym.ID, Graph: "default"},
+			meb.Fact{Subject: meb.DocumentID(sym.ID), Predicate: meb.PredInPackage, Object: filePackage, Graph: "default"},
 		)
 
 		// Role Tagging
@@ -243,13 +244,24 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 			bundle.Facts = append(bundle.Facts, meb.Fact{
 				Subject:   meb.DocumentID(sym.ID),
 				Predicate: meb.PredHasRole,
-				Object:    "data_model",
+				Object:    "data_contract",
+				Graph:     "default",
+			})
+		}
+
+		// API Handler Tagging
+		// Heuristic: Method starts with "handle"
+		if sym.Type == TypeMethod && strings.HasPrefix(sym.Name, "handle") {
+			bundle.Facts = append(bundle.Facts, meb.Fact{
+				Subject:   meb.DocumentID(sym.ID),
+				Predicate: meb.PredHasRole,
+				Object:    "api_handler",
 				Graph:     "default",
 			})
 		}
 
 		lowerPkg := strings.ToLower(filePackage)
-		if strings.Contains(lowerPkg, "util") || strings.Contains(lowerPkg, "helper") {
+		if strings.Contains(lowerPkg, "util") || strings.Contains(lowerPkg, "helper") || strings.Contains(strings.ToLower(sym.Name), "util") {
 			bundle.Facts = append(bundle.Facts, meb.Fact{
 				Subject:   meb.DocumentID(sym.ID),
 				Predicate: meb.PredHasRole,
@@ -276,16 +288,26 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 		return bundle, fmt.Errorf("failed to extract references: %w", err)
 	}
 
+	e.addFacts(bundle, relPath, refs)
+
+	return bundle, nil
+}
+
+// addFacts ensures the subject is never empty. If the current scope is empty, use the file's relative path.
+func (e *TreeSitterExtractor) addFacts(bundle *AnalysisBundle, relPath string, refs []Reference) {
 	for _, ref := range refs {
+		subj := ref.Subject
+		if subj == "" {
+			subj = relPath
+		}
 		bundle.Facts = append(bundle.Facts, meb.Fact{
-			Subject:   meb.DocumentID(ref.Subject),
+			Subject:   meb.DocumentID(subj),
 			Predicate: ref.Predicate,
 			Object:    ref.Object,
 			Graph:     "default",
+			Source:    fmt.Sprintf("%s:%d", relPath, ref.Line),
 		})
 	}
-
-	return bundle, nil
 }
 
 // derivePackage guesses the package name from the file path if not explicitly declared.
@@ -302,6 +324,13 @@ func (e *TreeSitterExtractor) derivePackage(relPath string) string {
 func (e *TreeSitterExtractor) deriveTags(relPath string) []string {
 	var tags []string
 	lower := strings.ToLower(relPath)
+	ext := filepath.Ext(lower)
+
+	if ext == ".go" {
+		tags = append(tags, "backend")
+	} else if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" {
+		tags = append(tags, "frontend")
+	}
 
 	// Directory-based tags
 	if strings.Contains(lower, "cmd/") {
@@ -427,6 +456,41 @@ func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relP
 					})
 				}
 			}
+		}
+	case "interpreted_string_literal", "raw_string_literal", "string_literal":
+		strVal := clean(n.Utf8Text(content))
+		// Heuristic: If string starts with "/" and looks like a path/route
+		if strings.HasPrefix(strVal, "/") && !strings.Contains(strVal, "\n") {
+			subj := currentScope
+			if subj == "" {
+				subj = relPath
+			}
+			*refs = append(*refs, Reference{
+				Subject:   subj,
+				Predicate: "references", // New predicate
+				Object:    strVal,       // The string value itself
+				Line:      lineFromOffset(content, n.StartByte()),
+			})
+		}
+	case "type_identifier":
+		name := clean(n.Utf8Text(content))
+		if currentScope != "" && !isGoBuiltIn(name) {
+			*refs = append(*refs, Reference{
+				Subject:   currentScope,
+				Predicate: "references",
+				Object:    name,
+				Line:      lineFromOffset(content, n.StartByte()),
+			})
+		}
+	case "qualified_type_identifier":
+		name := clean(n.Utf8Text(content))
+		if currentScope != "" {
+			*refs = append(*refs, Reference{
+				Subject:   currentScope,
+				Predicate: "references",
+				Object:    name,
+				Line:      lineFromOffset(content, n.StartByte()),
+			})
 		}
 	}
 	return nextScope
@@ -706,7 +770,7 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 			funcNode := n.ChildByFieldName("function")
 			if funcNode != nil {
 				callee := clean(funcNode.Utf8Text(content))
-				if !isStdLibCall(callee, "js") {
+				if len(callee) < 1024 && !isStdLibCall(callee, "js") {
 					*refs = append(*refs, Reference{
 						Subject:   currentScope,
 						Predicate: meb.PredCalls,
@@ -715,6 +779,20 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 					})
 				}
 			}
+		}
+	case "string", "template_string":
+		strVal := strings.Trim(n.Utf8Text(content), " \t\n\r\"'`")
+		if strings.HasPrefix(strVal, "/") && !strings.Contains(strVal, "\n") && len(strVal) < 1024 {
+			subj := currentScope
+			if subj == "" {
+				subj = relPath
+			}
+			*refs = append(*refs, Reference{
+				Subject:   subj,
+				Predicate: "references",
+				Object:    strVal,
+				Line:      lineFromOffset(content, n.StartByte()),
+			})
 		}
 	}
 
@@ -868,24 +946,21 @@ func (e *TreeSitterExtractor) getSignature(n *sitter.Node, content []byte) strin
 }
 
 func (e *TreeSitterExtractor) getReceiverType(n *sitter.Node, content []byte) string {
-	for i := uint(0); i < uint(n.ChildCount()); i++ {
-		child := n.Child(i)
-		if child.Kind() == "parameter_declaration" {
-			typeNode := child.ChildByFieldName("type")
-			if typeNode != nil {
-				t := clean(typeNode.Utf8Text(content))
-				return strings.TrimPrefix(t, "*")
-			}
-			for j := uint(0); j < uint(child.ChildCount()); j++ {
-				gc := child.Child(j)
-				if gc.Kind() == "type_identifier" || gc.Kind() == "pointer_type" {
-					t := clean(gc.Utf8Text(content))
-					return strings.TrimPrefix(t, "*")
-				}
+	// Recursive helper to find the first type_identifier
+	var findType func(node *sitter.Node) string
+	findType = func(node *sitter.Node) string {
+		if node.Kind() == "type_identifier" {
+			return clean(node.Utf8Text(content))
+		}
+		for i := uint(0); i < uint(node.ChildCount()); i++ {
+			if t := findType(node.Child(i)); t != "" {
+				return t
 			}
 		}
+		return ""
 	}
-	return ""
+
+	return findType(n)
 }
 
 func resolveImportPath(relPath, importPath string) string {
@@ -919,4 +994,28 @@ func resolveImportPath(relPath, importPath string) string {
 	}
 
 	return basePath
+}
+
+func isGoBuiltIn(name string) bool {
+	switch name {
+	case "string", "int", "int8", "int16", "int32", "int64":
+		return true
+	case "uint", "uint8", "uint16", "uint32", "uint64":
+		return true
+	case "float32", "float64", "complex64", "complex128":
+		return true
+	case "bool", "byte", "rune", "error", "nil", "uintptr":
+		return true
+	case "any", "comparable":
+		return true
+	}
+	return false
+}
+
+func clean(s string) string {
+	s = strings.Trim(s, " \t\n\r\"'`")
+	if len(s) > 1024 {
+		return s[:1024]
+	}
+	return s
 }

@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/meb"
@@ -28,26 +29,24 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		beSet[id] = true
 	}
 
-	// Also include the files themselves in the sets for content scanning
-	resFEFiles, _ := s.Query(ctx, `triples(?f, "has_tag", "frontend")`)
-	for _, r := range resFEFiles {
-		id, _ := r["?f"].(string)
-		feSet[id] = true
+	// Also include the files themselves in the sets
+	resFF, _ := s.Query(ctx, `triples(?f, "has_tag", "frontend")`)
+	for _, r := range resFF {
+		feSet[r["?f"].(string)] = true
 	}
-	resBEFiles, _ := s.Query(ctx, `triples(?f, "has_tag", "backend")`)
-	for _, r := range resBEFiles {
-		id, _ := r["?f"].(string)
-		beSet[id] = true
+	resBF, _ := s.Query(ctx, `triples(?f, "has_tag", "backend")`)
+	for _, r := range resBF {
+		beSet[r["?f"].(string)] = true
 	}
-	// 2. Discover Route Mappings dynamically from router files
+
+	// 2. Discover Route Mappings
 	routeMap := make(map[string]string)
 	symbolLookup := make(map[string]string)
 
 	isTagged := func(id string, set map[string]bool) bool {
 		if set[id] {
-			return true // Direct match (symbol or file)
+			return true
 		}
-		// Fallback: Check file part
 		parts := strings.Split(id, ":")
 		if len(parts) > 1 {
 			return set[parts[0]]
@@ -55,35 +54,28 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		return false
 	}
 
-	fmt.Printf("[Virtual] feSet size: %d, beSet size: %d\n", len(feSet), len(beSet))
-
-	scanFileDefs := func(fileID string) {
-		qDef := fmt.Sprintf(`triples("%s", "defines", ?s)`, fileID)
-		res, err := s.Query(ctx, qDef)
-		if err == nil {
-			for _, r := range res {
-				id, _ := r["?s"].(string)
-				parts := strings.Split(id, ":")
-				if len(parts) > 1 {
-					name := parts[len(parts)-1]
-					if idx := strings.LastIndex(name, "."); idx != -1 {
-						name = name[idx+1:]
-					}
-					symbolLookup[name] = id
+	// Build symbol lookup for BE
+	for id := range beSet {
+		if strings.Contains(id, ":") {
+			continue
+		}
+		qDef := fmt.Sprintf(`triples("%s", "defines", ?s)`, id)
+		resDef, _ := s.Query(ctx, qDef)
+		for _, r := range resDef {
+			sID := r["?s"].(string)
+			parts := strings.Split(sID, ":")
+			if len(parts) > 1 {
+				name := parts[len(parts)-1]
+				if idx := strings.LastIndex(name, "."); idx != -1 {
+					name = name[idx+1:]
 				}
+				symbolLookup[name] = sID
 			}
 		}
 	}
 
+	// Scan Router Files
 	for id := range beSet {
-		// Only scan symbol definitions, not the files themselves
-		if !strings.Contains(id, ":") {
-			scanFileDefs(id)
-		}
-	}
-
-	for id := range beSet {
-		// Only scan files for router logic
 		if strings.Contains(id, ":") {
 			continue
 		}
@@ -96,15 +88,11 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 			continue
 		}
 
-		fmt.Printf("[Virtual] Scanning router file: %s\n", id)
-
 		lines := strings.Split(content, "\n")
 		for _, line := range lines {
-			line = strings.TrimSpace(line)
 			if !strings.Contains(line, ".router.") {
 				continue
 			}
-			// Extract route: between the first dual-quotes
 			quoteIdx := strings.Index(line, "\"")
 			if quoteIdx == -1 {
 				continue
@@ -116,280 +104,130 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 			}
 			route := rest[:endQuoteIdx]
 
-			// Extract handler: after the last comma or "s."
 			var handler string
-			sIdx := strings.LastIndex(line, "s.")
-			if sIdx != -1 {
+			if sIdx := strings.LastIndex(line, "s."); sIdx != -1 {
 				handler = line[sIdx+2:]
-			} else {
-				// Fallback to last segment after comma
-				commaIdx := strings.LastIndex(line, ",")
-				if commaIdx != -1 {
-					handler = strings.TrimSpace(line[commaIdx+1:])
-				}
+			} else if commaIdx := strings.LastIndex(line, ","); commaIdx != -1 {
+				handler = strings.TrimSpace(line[commaIdx+1:])
 			}
 
 			if handler == "" {
 				continue
 			}
-
-			// Strip trailing characters like )
-			handlerParts := strings.FieldsFunc(handler, func(r rune) bool {
+			handlerToken := strings.FieldsFunc(handler, func(r rune) bool {
 				return r == ')' || r == ',' || r == ' ' || r == ';'
-			})
-			if len(handlerParts) == 0 {
-				continue
-			}
-			handlerToken := handlerParts[0]
+			})[0]
 
-			// Try to find the handler symbol
 			if targetID, ok := symbolLookup[handlerToken]; ok {
 				routeMap[route] = targetID
-				fmt.Printf("[Virtual] Linked %s --(handled_by)--> %s\n", route, targetID)
-				s.AddFact(meb.Fact{
-					Subject:   meb.DocumentID(route),
-					Predicate: meb.PredHandledBy,
-					Object:    targetID,
-					Graph:     "virtual",
-				})
-				s.AddFact(meb.Fact{
-					Subject:   meb.DocumentID(route),
-					Predicate: meb.PredType,
-					Object:    "api_route",
-					Graph:     "virtual",
-				})
+				s.AddFact(meb.Fact{Subject: meb.DocumentID(route), Predicate: "handled_by", Object: targetID, Graph: "virtual"})
 			}
 		}
 	}
 
-	if len(routeMap) == 0 {
-		fmt.Printf("[Virtual] WARNING: No routes discovered. FE-BE bridging will be limited.\n")
-	}
-
-	fmt.Printf("[Virtual] Discovered %d routes.\n", len(routeMap))
-
-	// 2. Scan Frontend Services for fetch calls
-	// We look for any symbol in frontend files that contains 'fetch' keywords
-	q := `triples(?s, "type", "function")`
-	results, err := s.Query(ctx, q)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("[Virtual] Scanning %d functions for API calls...\n", len(results))
-	count := 0
-
-	for _, res := range results {
-		sID, ok := res["?s"].(string)
-		if !ok || !feSet[sID] {
-			continue
+	// 3. Scan FE References for calls_api
+	qRefs := `triples(?s, "references", ?ref)`
+	resRefs, _ := s.Query(ctx, qRefs)
+	for _, res := range resRefs {
+		sID, _ := res["?s"].(string)
+		ref, _ := res["?ref"].(string)
+		cleanRef := ref
+		if idx := strings.Index(ref, "?"); idx != -1 {
+			cleanRef = ref[:idx]
 		}
-
-		// Get Content
-		doc, err := s.GetDocument(meb.DocumentID(sID))
-		if err != nil {
-			continue
-		}
-
-		// Regex to find url patterns
-		// Look for: url = `${cleanBase}/v1/graph/path...`
-		// or fetch(..., "/v1/...")
-		content := string(doc.Content)
-
-		for route := range routeMap {
-			// Check if content mentions specific route
-			// We check for the precise string path "/v1/..."
-			if strings.Contains(content, route) {
-				// Create Virtual Edge
-				fmt.Printf("[Virtual] Linked %s --(calls_api)--> %s\n", sID, route)
-
-				// Add 'calls_api' edge
-				s.AddFact(meb.Fact{
-					Subject:   meb.DocumentID(sID),
-					Predicate: meb.PredCallsAPI,
-					Object:    route,
-					Graph:     "virtual",
-				})
-
-				count++
-			}
+		if _, exists := routeMap[cleanRef]; exists {
+			s.AddFact(meb.Fact{Subject: meb.DocumentID(sID), Predicate: "calls_api", Object: cleanRef, Graph: "virtual"})
 		}
 	}
 
-	// 3. Internal Service Linker (Backend -> Backend)
-	// Heuristic: Link `s.graphService.Method` in handlers to `pkg/service` methods
-
-	// A. Gather all Handler candidates from backend files
+	// 4. Internal Service Linker (Optimized)
 	type HandlerInfo struct {
 		ID      string
 		Content string
 	}
 	var handlers []HandlerInfo
-
 	for id := range beSet {
-		// Only scan files, not symbols
 		if strings.Contains(id, ":") {
 			continue
 		}
-
 		doc, err := s.GetDocument(meb.DocumentID(id))
-		if err != nil {
-			continue
-		}
-		content := string(doc.Content)
-
-		// If it looks like it contains handler-to-service calls
-		if strings.Contains(content, "s.graphService.") {
-			// Find all symbols defined in this file
+		if err == nil {
+			content := string(doc.Content)
 			qDef := fmt.Sprintf(`triples("%s", "defines", ?s)`, id)
-			res, err := s.Query(ctx, qDef)
-			if err == nil {
-				for _, r := range res {
-					sID, _ := r["?s"].(string)
-					// We use the same content for all symbols in the file for linking
-					handlers = append(handlers, HandlerInfo{
-						ID:      sID,
-						Content: content,
-					})
-				}
+			resDef, _ := s.Query(ctx, qDef)
+			for _, r := range resDef {
+				handlers = append(handlers, HandlerInfo{ID: r["?s"].(string), Content: content})
 			}
 		}
 	}
-	fmt.Printf("[Virtual] Found %d handler symbols to scan across backend files.\n", len(handlers))
 
-	// B. Gather all Service method candidates (Functions AND Methods)
-	var serviceMethods []string
-
-	// Query Methods
+	methodIndex := make(map[string][]string)
 	qMethods := `triples(?s, "type", "method")`
-	resMethods, err := s.Query(ctx, qMethods)
-	if err == nil {
-		for _, r := range resMethods {
-			id, _ := r["?s"].(string)
-			if isTagged(id, beSet) {
-				serviceMethods = append(serviceMethods, id)
-			}
-		}
-	}
-	// Query Functions
-	qFuncs := `triples(?s, "type", "function")`
-	resFuncs, err := s.Query(ctx, qFuncs)
-	if err == nil {
-		for _, r := range resFuncs {
-			id, _ := r["?s"].(string)
-			if isTagged(id, beSet) {
-				serviceMethods = append(serviceMethods, id)
+	resMethods, _ := s.Query(ctx, qMethods)
+	for _, r := range resMethods {
+		id := r["?s"].(string)
+		if isTagged(id, beSet) {
+			parts := strings.Split(id, ":")
+			if len(parts) > 1 {
+				name := parts[1]
+				if idx := strings.LastIndex(name, "."); idx != -1 {
+					name = name[idx+1:]
+				}
+				methodIndex[name] = append(methodIndex[name], id)
 			}
 		}
 	}
 
-	for _, svcID := range serviceMethods {
-		// Extract method name
-		parts := strings.Split(svcID, ":")
-		if len(parts) < 2 {
-			continue
-		}
-		methodName := parts[1]
-		// Remove receiver part if present (e.g. *GraphService.FindShortestPath)
-		// Format could be: file.go:Receiver.Method or file.go:.Method
-		if idx := strings.LastIndex(methodName, "."); idx != -1 {
-			methodName = methodName[idx+1:]
-		}
-
-		// Check against all handlers
-		callPattern := "s.graphService." + methodName
-
-		for _, h := range handlers {
-			if strings.Contains(h.Content, callPattern) {
-				fmt.Printf("[Virtual] Internal Link: %s -> %s\n", h.ID, svcID)
-				s.AddFact(meb.Fact{
-					Subject:   meb.DocumentID(h.ID),
-					Predicate: "calls",
-					Object:    svcID,
-					Graph:     "virtual",
-				})
-			}
-		}
-	}
-
-	// 4. Scan for internal FE calls (Symbol to Symbol)
-	fmt.Printf("[Virtual] Scanning for internal FE-FE calls (Optimized)...\n")
-	feIndex := make(map[string][]string) // ShortName -> []FullID
-
-	// Build index locally to handle potential name collisions
-	for _, res := range results {
-		sID, ok := res["?s"].(string)
-		if !ok || !isTagged(sID, feSet) {
-			continue
-		}
-		parts := strings.Split(sID, ":")
-		if len(parts) > 1 {
-			short := parts[len(parts)-1]
-			feIndex[short] = append(feIndex[short], sID)
-		}
-	}
-
-	// Helper to check byte for symbol character (A-Z, a-z, 0-9, _, $)
-	isSymbolChar := func(b byte) bool {
-		return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '$'
-	}
-
-	for _, res := range results {
-		sID, ok := res["?s"].(string)
-		if !ok || !isTagged(sID, feSet) {
-			continue
-		}
-
-		doc, err := s.GetDocument(meb.DocumentID(sID))
-		if err != nil {
-			continue
-		}
-
-		content := string(doc.Content)
-		n := len(content)
-
-		// Scan content once
-		for i := 0; i < n; i++ {
-			// Find start of symbol
-			if !isSymbolChar(content[i]) {
-				continue
-			}
-			start := i
-			// Consume symbol
-			for i < n && isSymbolChar(content[i]) {
-				i++
-			}
-			token := content[start:i]
-
-			// Check index
-			if targets, exists := feIndex[token]; exists {
-				// Check for call pattern: token followed by '(' (ignoring whitespace?)
-				// Original logic was strict short+"("
-				// We'll stick to strict for now to match behavior, but token scanning naturally isolates token.
-				// Actually, strict short+"(" implies token IS followed by (.
-
-				// Peek ahead for (
-				if i < n && content[i] == '(' {
-					for _, targetID := range targets {
-						if sID == targetID {
-							continue
-						}
-						s.AddFact(meb.Fact{
-							Subject:   meb.DocumentID(sID),
-							Predicate: "calls",
-							Object:    targetID,
-							Graph:     "virtual",
-						})
-						count++
+	fmt.Println("[Virtual] Scanning internal BE calls...")
+	for _, h := range handlers {
+		for methodName, svcIDs := range methodIndex {
+			if strings.Contains(h.Content, "."+methodName+"(") {
+				for _, svcID := range svcIDs {
+					if h.ID != svcID {
+						s.AddFact(meb.Fact{Subject: meb.DocumentID(h.ID), Predicate: "calls", Object: svcID, Graph: "virtual"})
 					}
 				}
 			}
-			// Don't skip back, i is at end of token. Loop will increment i?
-			// Wait, loop has i++. I need to decrement i or change loop.
-			i-- // Adjust for loop increment
 		}
 	}
 
-	fmt.Printf("[Virtual] Added %d total virtual edges.\n", count)
+	// 5. Data Lineage (exposes_model)
+	contractMap := make(map[string][]string)
+	resContracts, _ := s.Query(ctx, `triples(?s, "has_role", "data_contract")`)
+	for _, r := range resContracts {
+		sID := r["?s"].(string)
+		parts := strings.Split(sID, ":")
+		if len(parts) > 1 {
+			name := parts[len(parts)-1]
+			contractMap[name] = append(contractMap[name], sID)
+		}
+	}
+	fmt.Println("[Virtual] Scanning for Data Lineage...")
+	for _, h := range handlers {
+		for modelName, targets := range contractMap {
+			if strings.Contains(h.Content, modelName) {
+				for _, tID := range targets {
+					s.AddFact(meb.Fact{Subject: meb.DocumentID(h.ID), Predicate: "exposes_model", Object: tID, Graph: "virtual"})
+				}
+			}
+		}
+	}
+
+	// 6. Logical Ownership (exports)
+	for id := range feSet {
+		if strings.Contains(id, ":") {
+			continue
+		}
+		base := strings.TrimSuffix(filepath.Base(id), filepath.Ext(id))
+		qDef := fmt.Sprintf(`triples("%s", "defines", ?s)`, id)
+		resDef, _ := s.Query(ctx, qDef)
+		for _, r := range resDef {
+			sID := r["?s"].(string)
+			if strings.EqualFold(filepath.Base(strings.Split(sID, ":")[1]), base) {
+				s.AddFact(meb.Fact{Subject: meb.DocumentID(id), Predicate: "exports", Object: sID, Graph: "virtual"})
+			}
+		}
+	}
+
 	return nil
 }

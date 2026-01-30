@@ -1,25 +1,18 @@
 package service
 
 import (
+	"container/heap"
 	"context"
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/duynguyendang/gca/pkg/meb"
 )
 
-type Direction int
-
-const (
-	DirectionForward Direction = iota
-	DirectionBackward
-)
-
-// FindShortestPath implements Bidirectional BFS to find the shortest path between two symbols.
+// FindShortestPath implements Dijkstra to find the shortest weighted path.
 func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID, endID string) (*export.D3Graph, error) {
 	store, err := s.getStore(projectID)
 	if err != nil {
@@ -33,23 +26,25 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 		return &export.D3Graph{Nodes: []export.D3Node{}, Links: []export.D3Link{}}, nil
 	}
 
-	fmt.Printf("[Pathfinder] Bidirectional BFS %s <-> %s\n", cleanStart, cleanEnd)
+	fmt.Printf("[Pathfinder] Dijkstra %s -> %s\n", cleanStart, cleanEnd)
 
-	// Queues
-	qStart := []string{cleanStart}
-	qEnd := []string{cleanEnd}
+	// Dijkstra State
+	pq := &PriorityQueue{}
+	heap.Init(pq)
 
-	// Visited Maps (Node -> Parent)
-	// For Start: Parent is the node closer to Start
-	// For End: Parent is the node closer to End
-	visitedStart := make(map[string]string)
-	visitedEnd := make(map[string]string)
+	// Distance map: NodeID -> Best Cost
+	dist := make(map[string]int)
+	// Parent map: NodeID -> ParentID (for reconstruction)
+	parent := make(map[string]string)
 
-	visitedStart[cleanStart] = ""
-	visitedEnd[cleanEnd] = ""
+	dist[cleanStart] = 0
+	heap.Push(pq, &Item{
+		Value:    cleanStart,
+		Priority: 0, // Min-Heap based on cost (priority)
+	})
 
-	maxDepth := 15 // Bidirectional search goes deep fast, 15 allows path len 30
-	depth := 0
+	found := false
+	processed := 0
 
 	// API Bridge Portals: Pre-compute URL -> Handler map for O(1) jump
 	portals := make(map[string]string)
@@ -60,251 +55,169 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 		portals[url] = handler
 	}
 
-	for len(qStart) > 0 && len(qEnd) > 0 {
-		if depth > maxDepth {
+	startT := time.Now()
+	neighborCache := make(map[string]map[string]string) // node -> neighbor -> predicate
+	depth := make(map[string]int)
+	edgePred := make(map[string]string) // curr -> predicate from parent
+	depth[cleanStart] = 0
+
+	fmt.Printf("[Pathfinder] Dijkstra START: %s -> %s\n", cleanStart, cleanEnd)
+
+	for pq.Len() > 0 {
+		item := heap.Pop(pq).(*Item)
+		curr := item.Value
+		cost := item.Priority
+
+		if cost > dist[curr] {
+			continue // Stale item
+		}
+
+		processed++
+		if curr == cleanEnd {
+			found = true
 			break
 		}
-		depth++
 
-		start := time.Now()
-		var intersection string
-		// Always expand the smaller frontier to balance search
-		if len(qStart) <= len(qEnd) {
-			intersection = expandFrontier(ctx, s, store, &qStart, visitedStart, visitedEnd, DirectionForward, portals, depth)
-		} else {
-			intersection = expandFrontier(ctx, s, store, &qEnd, visitedEnd, visitedStart, DirectionBackward, portals, depth)
+		if processed > 10000 { // Safety break
+			break
 		}
-		fmt.Printf("[Pathfinder] Level %d expanded in %v. Frontier sizes: L=%d, R=%d\n", depth, time.Since(start), len(qStart), len(qEnd))
 
-		if intersection != "" {
-			return s.constructBidirectionalPath(ctx, store, intersection, visitedStart, visitedEnd)
+		d := depth[curr]
+		if d >= 10 { // Depth limit
+			continue
+		}
+
+		// Get Neighbors with Predicates (Cached)
+		var neighbors map[string]string
+		if cached, ok := neighborCache[curr]; ok {
+			neighbors = cached
+		} else {
+			neighbors = s.getWeightedNeighbors(ctx, store, curr, portals)
+			neighborCache[curr] = neighbors
+		}
+
+		// Sort neighbors by weight to ensure branching doesn't cut high-priority links
+		type neighborWeight struct {
+			n    string
+			pred string
+			w    int
+		}
+		sorted := make([]neighborWeight, 0, len(neighbors))
+		for n, pred := range neighbors {
+			sorted = append(sorted, neighborWeight{n, pred, s.getWeight(pred)})
+		}
+		sort.Slice(sorted, func(i, j int) bool {
+			return sorted[i].w < sorted[j].w
+		})
+
+		for i, nw := range sorted {
+			if i >= 50 { // Branching control AFTER sorting
+				break
+			}
+
+			n, pred, weight := nw.n, nw.pred, nw.w
+			newCost := cost + weight
+			if oldD, ok := dist[n]; !ok || newCost < oldD {
+				dist[n] = newCost
+				parent[n] = curr
+				edgePred[n] = pred
+				depth[n] = d + 1
+				heap.Push(pq, &Item{
+					Value:    n,
+					Priority: newCost,
+				})
+			}
 		}
 	}
 
-	// File-Level Fallback: If symbol path fails, try parent files
+	fmt.Printf("[Pathfinder] Processed %d nodes in %v. Found: %v\n", processed, time.Since(startT), found)
+
+	if found {
+		// Reconstruct Path
+		path := []string{}
+		curr := cleanEnd
+		links := []export.D3Link{}
+		for curr != "" {
+			path = append([]string{curr}, path...) // Prepend
+			if curr == cleanStart {
+				break
+			}
+			p := parent[curr]
+			pred := edgePred[curr]
+			links = append([]export.D3Link{{Source: p, Target: curr, Relation: pred}}, links...)
+			curr = p
+		}
+		fmt.Printf("[Pathfinder] Path RECONSTRUCTED: %d nodes, %d links\n", len(path), len(links))
+		return s.buildGraphFromPath(ctx, store, path, links)
+	}
+
+	// File-Level Fallback
 	startFile := strings.Split(cleanStart, ":")[0]
 	endFile := strings.Split(cleanEnd, ":")[0]
 
-	// ONLY fallback if we were actually looking up symbols (containing :)
-	// and if the file-level search is different from the current search
 	if (strings.Contains(cleanStart, ":") || strings.Contains(cleanEnd, ":")) &&
 		(startFile != cleanStart || endFile != cleanEnd) {
-		fmt.Printf("[Pathfinder] Symbol path not found, trying file-level fallback: %s <-> %s\n", startFile, endFile)
-		fileGraph, err := s.FindShortestPath(ctx, projectID, startFile, endFile)
-		if err == nil && len(fileGraph.Nodes) > 0 {
-			return fileGraph, nil
-		}
+		fmt.Printf("[Pathfinder] Fallback to file-level: %s -> %s\n", startFile, endFile)
+		return s.FindShortestPath(ctx, projectID, startFile, endFile)
 	}
 
-	fmt.Printf("[Pathfinder] Path not found.\n")
 	return &export.D3Graph{Nodes: []export.D3Node{}, Links: []export.D3Link{}}, nil
 }
 
-func expandFrontier(ctx context.Context, s *GraphService, store *meb.MEBStore, queue *[]string, visitedMy map[string]string, visitedOther map[string]string, dir Direction, portals map[string]string, depth int) string {
-	currentLevelSize := len(*queue)
-	nextQueue := make([]string, 0)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	var intersection string
+func (s *GraphService) getWeight(pred string) int {
+	switch pred {
+	case meb.PredCalls, meb.PredCallsAPI, meb.PredHandledBy, "references", "exports":
+		return 1
+	case meb.PredImports, meb.PredDefines, meb.PredInPackage:
+		return 10
+	}
+	return 5 // Default for others (e.g. parent defines)
+}
 
-	expandNode := func(current string) {
-		defer wg.Done()
+func (s *GraphService) getWeightedNeighbors(ctx context.Context, store *meb.MEBStore, nodeID string, portals map[string]string) map[string]string {
+	neighbors := make(map[string]string)
 
-		neighbors, err := s.getNeighbors(ctx, store, current, dir, depth)
+	// Portals check (Logical jump)
+	if handler, ok := portals[nodeID]; ok {
+		neighbors[handler] = meb.PredHandledBy
+	}
+
+	// 1. Outbound edges
+	for fact, err := range store.Scan(nodeID, "", "", "default") {
 		if err != nil {
-			return
+			continue
+		}
+		pred := fact.Predicate
+		obj := fact.Object.(string)
+
+		if obj == nodeID {
+			continue
 		}
 
-		mu.Lock()
-		defer mu.Unlock()
-
-		// Portals: If current node is calling an API or is an API route
-		if dir == DirectionForward {
-			if handlerID, isRoute := portals[current]; isRoute {
-				if _, seen := visitedMy[handlerID]; !seen {
-					visitedMy[handlerID] = current
-					nextQueue = append(nextQueue, handlerID)
-					if _, hit := visitedOther[handlerID]; hit {
-						intersection = handlerID
-					}
-				}
-			}
-		} else {
-			for route, handler := range portals {
-				if handler == current {
-					if _, seen := visitedMy[route]; !seen {
-						visitedMy[route] = current
-						nextQueue = append(nextQueue, route)
-						if _, hit := visitedOther[route]; hit {
-							intersection = route
-						}
-					}
-				}
-			}
-		}
-
-		for _, n := range neighbors {
-			if _, seen := visitedMy[n]; !seen {
-				visitedMy[n] = current
-				nextQueue = append(nextQueue, n)
-				if _, hit := visitedOther[n]; hit {
-					intersection = n
-				}
-			}
+		if oldPred, exists := neighbors[obj]; !exists || s.getWeight(pred) < s.getWeight(oldPred) {
+			neighbors[obj] = pred
 		}
 	}
 
-	wg.Add(currentLevelSize)
-	for i := 0; i < currentLevelSize; i++ {
-		current := (*queue)[i]
-		go expandNode(current)
+	// 2. Inbound 'defines' (Structure Nav)
+	for fact, err := range store.Scan("", meb.PredDefines, nodeID, "default") {
+		if err != nil {
+			continue
+		}
+		parent := fact.Subject.String()
+		pred := "parent_defines"
+		if oldPred, exists := neighbors[parent]; !exists || s.getWeight(pred) < s.getWeight(oldPred) {
+			neighbors[parent] = pred
+		}
 	}
-	wg.Wait()
 
-	*queue = nextQueue
-	return intersection
+	return neighbors
 }
 
-func (s *GraphService) constructBidirectionalPath(ctx context.Context, store *meb.MEBStore, intersection string, visitedStart map[string]string, visitedEnd map[string]string) (*export.D3Graph, error) {
-	path := []string{}
-
-	// Trace back to Start
-	curr := intersection
-	for curr != "" {
-		path = append([]string{curr}, path...) // Prepend
-		curr = visitedStart[curr]
-	}
-
-	// Trace forward to End
-	curr = visitedEnd[intersection]
-	for curr != "" {
-		path = append(path, curr)
-		curr = visitedEnd[curr]
-	}
-
-	return s.buildGraphFromPath(ctx, store, path)
-}
-
-func (s *GraphService) getNeighbors(ctx context.Context, store *meb.MEBStore, nodeID string, dir Direction, depth int) ([]string, error) {
-	quoteID := fmt.Sprintf("\"%s\"", nodeID)
-
-	// Consolidated Query: Get ALL outbound/inbound triples in one go
-	var q string
-	if dir == DirectionForward {
-		q = fmt.Sprintf(`triples(%s, ?p, ?o)`, quoteID)
-	} else {
-		q = fmt.Sprintf(`triples(?s, ?p, %s)`, quoteID)
-	}
-
-	results, err := store.Query(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-
-	neighbors := make([]string, 0)
-	unique := make(map[string]bool)
-	nodePriority := make(map[string]int)
-
-	// Predicate priority ordering
-	priorityOrder := map[string]int{
-		meb.PredCalls:     1,
-		meb.PredCallsAPI:  1,
-		meb.PredHandledBy: 1,
-		meb.PredImports:   2,
-		meb.PredDefines:   3,
-		meb.PredInPackage: 3,
-	}
-
-	for _, res := range results {
-		pred, _ := res["?p"].(string)
-		var obj string
-		if dir == DirectionForward {
-			obj, _ = res["?o"].(string)
-		} else {
-			obj, _ = res["?s"].(string)
-		}
-
-		priority := priorityOrder[pred]
-		if priority == 0 {
-			priority = 5
-		}
-
-		if depth < 5 && priority > 3 {
-			continue // Only skip truly noisy ones at very low depth
-		}
-
-		if obj != nodeID {
-			if !unique[obj] {
-				unique[obj] = true
-				neighbors = append(neighbors, obj)
-				nodePriority[obj] = priority
-			} else if priority < nodePriority[obj] {
-				nodePriority[obj] = priority // Keep best priority
-			}
-		}
-	}
-
-	// 2. Extra Junction
-	var qJunction string
-	if dir == DirectionForward {
-		qJunction = fmt.Sprintf(`triples(?s, "defines", %s)`, quoteID)
-	} else {
-		qJunction = fmt.Sprintf(`triples(%s, "defines", ?o)`, quoteID)
-	}
-	resJ, _ := store.Query(ctx, qJunction)
-	for _, r := range resJ {
-		var obj string
-		if dir == DirectionForward {
-			obj, _ = r["?s"].(string)
-		} else {
-			obj, _ = r["?o"].(string)
-		}
-		if obj != nodeID {
-			if !unique[obj] {
-				unique[obj] = true
-				neighbors = append(neighbors, obj)
-				nodePriority[obj] = 3 // defines priority
-			}
-		}
-	}
-
-	// Sort neighbors by priority (lower number is better)
-	type weightedNeighbor struct {
-		id       string
-		priority int
-	}
-	weighted := make([]weightedNeighbor, 0, len(neighbors))
-	for _, n := range neighbors {
-		weighted = append(weighted, weightedNeighbor{n, nodePriority[n]})
-	}
-
-	sort.Slice(weighted, func(i, j int) bool {
-		return weighted[i].priority < weighted[j].priority
-	})
-
-	final := make([]string, 0, len(weighted))
-	for i := 0; i < len(weighted); i++ {
-		final = append(final, weighted[i].id)
-	}
-
-	// Branching Factor Cap (limit to 100 best)
-	if len(final) > 100 {
-		return final[:100], nil
-	}
-
-	return final, nil
-}
-
-// resolveCandidates resolves logical IDs to Canonical IDs.
-// Optimization: Skips expensive fuzzy search for full path IDs.
-func (s *GraphService) resolveCandidates(ctx context.Context, store *meb.MEBStore, obj string) []string {
-	return []string{obj}
-}
-
-func (s *GraphService) buildGraphFromPath(ctx context.Context, store *meb.MEBStore, path []string) (*export.D3Graph, error) {
+func (s *GraphService) buildGraphFromPath(ctx context.Context, store *meb.MEBStore, path []string, pathLinks []export.D3Link) (*export.D3Graph, error) {
 	graph := &export.D3Graph{
 		Nodes: []export.D3Node{},
-		Links: []export.D3Link{},
+		Links: pathLinks,
 	}
 
 	// Nodes
@@ -332,12 +245,45 @@ func (s *GraphService) buildGraphFromPath(ctx context.Context, store *meb.MEBSto
 		graph.Nodes = append(graph.Nodes, export.D3Node{ID: id, Name: name, Kind: kind})
 	}
 
-	// Links
-	for i := 0; i < len(path)-1; i++ {
-		src, dst := path[i], path[i+1]
-		graph.Links = append(graph.Links, export.D3Link{
-			Source: src, Target: dst, Relation: "related", // Generic relation for path
-		})
-	}
 	return graph, nil
+}
+
+// --- Priority Queue ---
+
+type Item struct {
+	Value    string
+	Priority int // Cost
+	Index    int
+}
+
+type PriorityQueue []*Item
+
+func (pq PriorityQueue) Len() int { return len(pq) }
+
+func (pq PriorityQueue) Less(i, j int) bool {
+	// Min-Heap: We want lower cost (priority) to pop first
+	return pq[i].Priority < pq[j].Priority
+}
+
+func (pq PriorityQueue) Swap(i, j int) {
+	pq[i], pq[j] = pq[j], pq[i]
+	pq[i].Index = i
+	pq[j].Index = j
+}
+
+func (pq *PriorityQueue) Push(x any) {
+	n := len(*pq)
+	item := x.(*Item)
+	item.Index = n
+	*pq = append(*pq, item)
+}
+
+func (pq *PriorityQueue) Pop() any {
+	old := *pq
+	n := len(old)
+	item := old[n-1]
+	old[n-1] = nil  // avoid memory leak
+	item.Index = -1 // for safety
+	*pq = old[0 : n-1]
+	return item
 }
