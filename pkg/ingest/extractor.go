@@ -544,6 +544,11 @@ func (e *TreeSitterExtractor) addGenericSymbol(name, symType, receiver string, n
 	}
 
 	doc := e.getDocComment(n, content)
+	// If no doc found, and parent is an export statement, check the parent's comments
+	if doc == "" && n.Parent() != nil && n.Parent().Kind() == "export_statement" {
+		doc = e.getDocComment(n.Parent(), content)
+	}
+
 	sig := e.getSignature(n, content)
 	*symbols = append(*symbols, Symbol{
 		ID:         id,

@@ -40,7 +40,13 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() && isSupportedFile(path) {
+		if d.IsDir() {
+			if d.Name() == "test-code" || d.Name() == "node_modules" || d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if isSupportedFile(path) {
 			relPath, _ := filepath.Rel(testDir, path)
 			// Add to file index for import resolution
 			fileIndex[relPath] = true
@@ -111,7 +117,13 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() && isSupportedFile(path) {
+		if d.IsDir() {
+			if d.Name() == "test-code" || d.Name() == "node_modules" || d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if isSupportedFile(path) {
 			jobs <- path
 		}
 		return nil
@@ -134,6 +146,12 @@ func Run(s *meb.MEBStore, sourceDir string) error {
 		// Log error but generally don't fail entire ingestion?
 		// User request implies this is critical part of pipeline.
 		return fmt.Errorf("dependency resolution failed: %w", err)
+	}
+
+	// Pass 4: Enhance Virtual Triples (FE -> BE)
+	fmt.Println("Pass 4: Injecting Virtual Triples...")
+	if err := EnhanceVirtualTriples(s); err != nil {
+		log.Printf("Warning: virtual triple injection failed: %v", err)
 	}
 
 	return nil
