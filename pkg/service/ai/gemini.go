@@ -225,7 +225,7 @@ Schema:
   - has_tag: "backend", "frontend"
   - calls_api: Frontend -> URI
   - handled_by: URI -> Backend Handler
-- Subject/Object are string identifiers (e.g., "pkg/file.go:Function").
+  - exposes_model: API Handler -> Data Contract (Use this for "defines a data contract" queries)
 
 Rules:
 1. Use standard Datalog syntax.
