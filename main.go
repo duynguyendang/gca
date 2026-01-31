@@ -73,7 +73,9 @@ func main() {
 		mgr := manager.NewStoreManager(dataDir, memProfile)
 		defer mgr.CloseAll()
 
-		srv := server.NewServer(mgr, sourceDir)
+		apiKey := os.Getenv("GEMINI_API_KEY")
+
+		srv := server.NewServer(mgr, sourceDir, apiKey)
 		port := os.Getenv("PORT")
 		if port == "" {
 			port = "8080"
@@ -109,10 +111,15 @@ func main() {
 	defer s.Close()
 
 	if *ingestMode {
+		// Ingest backend (Go) files from current directory
 		if err := ingest.Run(s, "gca-be", "."); err != nil {
 			s.Close()
-			log.Fatalf("Ingestion failed: %v", err)
+			log.Fatalf("Ingestion failed for gca-be: %v", err)
 		}
+
+		// Note: When sourceDir is the parent directory (e.g., gca-hackathon),
+		// both gca/ and gca-fe/ are automatically ingested under the "gca-be" project.
+		// The TypeScript/React files will have IDs like "gca-be/gca-fe/App.tsx:symbolName"
 
 		// Force stats recalc only in write mode
 		if _, err := s.RecalculateStats(); err != nil {

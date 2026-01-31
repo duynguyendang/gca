@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/export"
+	"github.com/duynguyendang/gca/pkg/meb"
 )
 
 // GetFileBackbone returns the bidirectional file-level dependency graph (depth 1) for a specific file.
@@ -17,6 +18,17 @@ func (s *GraphService) GetFileBackbone(ctx context.Context, projectID, fileID st
 	}
 
 	cleanFileID := strings.Trim(fileID, "\"")
+
+	// Try to resolve the file ID - it might need the project prefix
+	// If fileID doesn't start with the projectID, try with the prefix
+	if projectID != "" && !strings.HasPrefix(cleanFileID, projectID+"/") {
+		prefixedFileID := projectID + "/" + cleanFileID
+		// Check if the prefixed version exists in the store
+		if _, err := store.GetDocument(meb.DocumentID(prefixedFileID)); err == nil {
+			cleanFileID = prefixedFileID
+		}
+	}
+
 	quotedFileID := fmt.Sprintf("\"%s\"", cleanFileID)
 
 	nodesMap := make(map[string]export.D3Node)

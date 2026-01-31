@@ -293,10 +293,18 @@ func (s *GraphService) GetSource(projectID, docID string) (string, error) {
 		return "", err
 	}
 
+	// Try the docID as-is first
 	doc, err := store.GetDocument(meb.DocumentID(docID))
 	if err != nil {
-		// Assumptions regarding GetDocument error
-		return "", fmt.Errorf("%w: document not found", errors.ErrNotFound)
+		// If not found and projectID is set, try with project prefix
+		if projectID != "" && !strings.HasPrefix(docID, projectID+"/") {
+			prefixedDocID := projectID + "/" + docID
+			doc, err = store.GetDocument(meb.DocumentID(prefixedDocID))
+		}
+
+		if err != nil {
+			return "", fmt.Errorf("%w: document not found", errors.ErrNotFound)
+		}
 	}
 
 	return string(doc.Content), nil
@@ -311,11 +319,17 @@ func (s *GraphService) GetSymbol(ctx context.Context, projectID, docID string) (
 
 	ids := []meb.DocumentID{meb.DocumentID(docID)}
 	hydrated, err := store.Hydrate(ctx, ids, false) // lazy=false to fetch content
-	if err != nil {
-		return nil, err
-	}
-	if len(hydrated) == 0 {
-		return nil, fmt.Errorf("%w: symbol not found", errors.ErrNotFound)
+	if err != nil || len(hydrated) == 0 {
+		// If not found and projectID is set, try with project prefix
+		if projectID != "" && !strings.HasPrefix(docID, projectID+"/") {
+			prefixedDocID := projectID + "/" + docID
+			ids = []meb.DocumentID{meb.DocumentID(prefixedDocID)}
+			hydrated, err = store.Hydrate(ctx, ids, false)
+		}
+
+		if err != nil || len(hydrated) == 0 {
+			return nil, fmt.Errorf("%w: symbol not found", errors.ErrNotFound)
+		}
 	}
 
 	return &hydrated[0], nil
@@ -561,6 +575,17 @@ func (s *GraphService) GetFileGraph(ctx context.Context, projectID, fileID strin
 
 	// Clean fileID (remove quotes if present, though handler should pass clean string)
 	cleanFileID := strings.Trim(fileID, "\"")
+
+	// Try to resolve the file ID - it might need the project prefix
+	// If fileID doesn't start with the projectID, try with the prefix
+	if projectID != "" && !strings.HasPrefix(cleanFileID, projectID+"/") {
+		prefixedFileID := projectID + "/" + cleanFileID
+		// Check if the prefixed version exists in the store
+		if _, err := store.GetDocument(meb.DocumentID(prefixedFileID)); err == nil {
+			cleanFileID = prefixedFileID
+		}
+	}
+
 	quotedFileID := fmt.Sprintf("\"%s\"", cleanFileID)
 
 	// We will collect all results and then transform.

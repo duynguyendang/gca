@@ -1,76 +1,68 @@
-# 🚀 MASTER TASK: Full-Stack Reasoning & BFS Pathfinding Validation
+# 🚀 GCA Integration Test Protocol (Backend AI Architect)
 
-**Objective**: Verify the Backend's ability to find multi-hop paths across Frontend and Backend using the `find_connection` tool. The Agent must fix the Pathfinder (BFS) and Ingestor until all paths are accurately discovered and "skeletonized."
-
----
-
-## 🏗️ Phase 1: The "Connectivity" Ingestion Rules
-
-The Agent must ensure these triples exist to allow the BFS to "jump" layers:
-
-* **Semantic Portals**: Link API calls to handlers via URI nodes.
-* **Logical Ownership**: Link files to their primary exports.
-* **Weighted Edges**: Assign priorities so BFS prefers `calls` over `in_package`.
+**Role**: Senior QA Engineer / Architecture Validator.
+**Objective**: Execute 10 critical test cases to verify the integrity of the Knowledge Graph, the accuracy of cross-stack pathfinding, and the reasoning quality of Gemini-on-Backend.
 
 ---
 
-## 🧪 Phase 2: `find_connection` Tool Test Cases (BFS Validation)
+## 🛠️ Phase 1: Ingestion & Environment Setup
 
-The Agent must run the `find_connection` tool for these specific pairs and verify the output.
+Before running tests, the Agent must:
 
-### 1. The "Inception" Trace (FE  BE Logic)
-
-* **Source**: `gca-fe/App.tsx`
-* **Target**: `gca-be/pkg/service/pathfinder.go`
-* **Requirement**: BFS must find a path that crosses the API Bridge (e.g., via `/v1/graph/path`).
-* **Success**: Returns a **Skeleton Path** (exactly the nodes on the path, no noise).
-
-### 2. Data Propagation Trace (Model  UI)
-
-* **Source**: `gca-be/pkg/ast/ast.go:Term` (or equivalent data struct)
-* **Target**: `gca-fe/services/geminiService.ts`
-* **Requirement**: BFS must navigate from a Backend Model through a Handler, across the API, into a Frontend Service.
-* **Success**: Prove that a change in the Go struct has a logical path to the TypeScript parsing logic.
-
-### 3. Deep Utility Discovery (Component  Helper)
-
-* **Source**: `gca-fe/components/TreeVisualizer.tsx`
-* **Target**: `gca-fe/utils/pathfinding.ts:bfsPath`
-* **Requirement**: Verify internal Frontend connectivity.
-* **Success**: The path must show exactly which Hook or Service bridges the UI to the Utility.
+1. **Clean State**: Reset the BadgerDB FactStore.
+2. **Ingestion**: Run the full ingestion for `gca-be/` and `gca-fe/` in source-code/gca folder.
+3. **Verification**: Ensure all symbols use the standardized project prefixes.
 
 ---
 
-## 🔍 Phase 3: Datalog Logic Test Cases (Relational Validation)
+## 🧪 Phase 2: The Integration Test Suite
 
-In addition to BFS, run these to verify "Global Knowledge":
+### 1. Cross-Stack Connectivity (The Bridge)
 
-* **Case A (Dead Code)**: Find `role: "utility"` nodes with **In-degree = 0**.
-* **Case B (API Inventory)**: List all `role: "api_handler"` and their `exposes_model` targets.
-* **Case C (Package Integrity)**: Ensure all symbols have an `in_package` triple.
+| Test ID | User Query / Mission | Tool to Use | Success Criteria |
+| --- | --- | --- | --- |
+| **INT-01** | "Trace the flow from the search input in `App.tsx` to the query engine in Go." | `find_connection` | A path exists: `App.tsx` -> `useSmartSearch` -> `graphService` -> `/v1/graph/query` -> `handlers.go` -> `executor.go`. |
+| **INT-02** | "Find which Go handlers are triggered by `useGraphData.ts`." | `query_datalog` | Returns a list of Go functions linked via `calls_api` and `handled_by`. |
+| **INT-03** | "Verify the API link for the endpoint `/v1/graph/path`." | `query_datalog` | Confirms exactly 1 URI node connecting FE `fetchGraphPath` to BE `handleGraphPath`. |
+
+### 🧠 2. AI Architectural Reasoning (Gemini-on-BE)
+
+| Test ID | User Query / Mission | Agent Strategy | Success Criteria |
+| --- | --- | --- | --- |
+| **AI-01** | "What is the purpose of `graphService.ts` in the frontend?" | Gemini reads source + docs via BE. | Returns an insight: "Abstraction layer for graph API calls with caching logic." |
+| **AI-02** | "If I modify the `Term` struct in `ast.go`, which FE services need updates?" | **Impact Analysis**: Trace `Term` -> Handler -> URL -> FE Service. | Identifies all `.ts` files that parse the `Term` structure from API responses. |
+| **AI-03** | "Explain the error handling flow from Go Executor to the React UI." | BFS search for Error nodes. | Traces the propagation of errors from Go's `Result` type to React's Error Boundary. |
+
+### ⚡ 3. Performance & BFS Quality
+
+| Test ID | User Query / Mission | Tool to Use | Success Criteria |
+| --- | --- | --- | --- |
+| **PERF-01** | **Skeleton Check**: Run INT-01 and count nodes. | `find_connection` | **Result `nodeCount` < 15**. No noise/neighbor nodes allowed in the response. |
+| **PERF-02** | **Latency Check**: Measure cross-stack trace time. | Timer on BFS API. | **Execution time < 200ms** on the local environment. |
+| **PERF-03** | **Weighted Search**: Trace from `utils.ts` to `main.go`. | `find_connection` | Path must prefer `calls` (logic) over `in_package` (structure) even if the path is longer. |
+
+### 🧹 4. Code Health (Relational Checks)
+
+| Test ID | User Query / Mission | Tool to Use | Success Criteria |
+| --- | --- | --- | --- |
+| **CL-01** | "Find frontend utilities with zero incoming calls." | `query_datalog` | Identifies symbols in `gca-fe/utils` with `in-degree = 0`. |
+| **CL-02** | "List all API handlers that do not have a documentation string." | `query_datalog` | Returns functions with `role: api_handler` missing the `has_doc` fact. |
 
 ---
 
-## 📈 Phase 4: The "Show-off" Performance Standards
+## 📈 Phase 3: Reporting & Self-Healing
 
-The Agent is not done until the `find_connection` tool meets these quality bars:
+After execution, the Agent must provide a report in the following format:
 
-1. **Skeleton Pruning**: The result JSON must contain **ONLY** the nodes and links in the path. `nodeCount` must be **< 15** for any trace.
-2. **Branching Control**:
-* Limit expansion to **50 nodes per level**.
-* If BFS reaches **Depth 10** without a target, it must terminate gracefully.
-* **Math Constraint**: Ensure the search space  stays within memory limits.
+### **Test Results Summary**
 
+| ID | Status | Latency | Reasoning Logic / Path Taken |
+| --- | --- | --- | --- |
+| INT-01 | **PASS** | 142ms | App.tsx -> useSmartSearch -> graphService -> handlers.go |
+| AI-02 | **FAIL** | N/A | Missing `exposes_model` triple in Go ingestor. |
 
-3. **Path Labeling**: Edges in the path must have semantic types: `calls_api`, `handled_by`, `calls`.
+**Self-Healing Protocol**:
 
----
-
-## 📋 Acceptance Checklist for the Agent
-
-* [ ] **Cross-Stack**: Can `find_connection` jump from `.ts` to `.go` files?
-* [ ] **Precision**: Does the tool return a clean "Skeleton" or a "Cloud" of nodes? (Skeleton is mandatory).
-* [ ] **Speed**: Do all 3 BFS test cases return in **< 500ms**?
-* [ ] **Heuristics**: If a symbol-to-symbol path fails, does the tool automatically try a **File-to-File** path?
+* If any **INT** or **AI** test fails due to missing links, the Agent must **inspect the Ingestor code**, fix the triple extraction logic (e.g., improve string literal detection for APIs), re-ingest, and re-test until **PASS**.
 
 ---

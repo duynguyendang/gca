@@ -38,7 +38,7 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 			return err
 		}
 		if d.IsDir() {
-			if d.Name() == "node_modules" || d.Name() == ".git" || d.Name() == "dist" || d.Name() == "build" || d.Name() == ".next" || d.Name() == "test-code" {
+			if d.Name() == "node_modules" || d.Name() == ".git" || d.Name() == "dist" || d.Name() == "build" || d.Name() == ".next" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -97,7 +97,7 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 			return err
 		}
 		if d.IsDir() {
-			if d.Name() == "node_modules" || d.Name() == ".git" || d.Name() == "dist" || d.Name() == "build" || d.Name() == ".next" || d.Name() == "test-code" {
+			if d.Name() == "node_modules" || d.Name() == ".git" || d.Name() == "dist" || d.Name() == "build" || d.Name() == ".next" {
 				return filepath.SkipDir
 			}
 			return nil
