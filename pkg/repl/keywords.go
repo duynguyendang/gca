@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
 )
@@ -14,7 +15,7 @@ import (
 func ExtractKeywords(ctx context.Context, query string) ([]string, error) {
 	// Load the keyword prompt
 	promptPath := "prompts/keywords.prompt"
-	p, err := LoadPrompt(promptPath)
+	p, err := prompts.LoadPrompt(promptPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load prompt %s: %w", promptPath, err)
 	}

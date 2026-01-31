@@ -1,0 +1,11 @@
+---
+model: gemini-3-flash-preview
+temperature: 0.3
+input:
+  schema:
+    Query: string
+    Context: string
+---
+{{.Query}}
+
+{{.Context}}

@@ -11,12 +11,13 @@ import (
 	"time"
 
 	"github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
 )
 
 // ExecutePlan executes the plan steps.
-func ExecutePlan(ctx context.Context, cfg Config, s *meb.MEBStore, session *ExecutionSession, plannerPrompt *Prompt) error {
+func ExecutePlan(ctx context.Context, cfg Config, s *meb.MEBStore, session *ExecutionSession, plannerPrompt *prompts.Prompt) error {
 	fmt.Printf("\n🚀 Executing plan: %s\n\n", session.Goal)
 
 	for !session.IsComplete() {
@@ -179,7 +180,7 @@ func processVariableInjection(query string, session *ExecutionSession) string {
 }
 
 // reflectAndCorrect asks Gemini to suggest an alternative query when a step fails or returns no results.
-func reflectAndCorrect(ctx context.Context, step *PlanStep, session *ExecutionSession, plannerPrompt *Prompt) (string, error) {
+func reflectAndCorrect(ctx context.Context, step *PlanStep, session *ExecutionSession, plannerPrompt *prompts.Prompt) (string, error) {
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
 		return "", fmt.Errorf("GEMINI_API_KEY not set")

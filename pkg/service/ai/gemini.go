@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
 )
@@ -27,6 +28,14 @@ type GeminiService struct {
 	client  *genai.Client
 	model   *genai.GenerativeModel
 	manager ProjectStoreManager
+
+	// Loaded Prompts - All AI tasks use external prompt files
+	DatalogPrompt       *prompts.Prompt
+	ChatPrompt          *prompts.Prompt
+	PathNarrativePrompt *prompts.Prompt
+	PathEndpointsPrompt *prompts.Prompt
+	ResolveSymbolPrompt *prompts.Prompt
+	PrunePrompt         *prompts.Prompt
 }
 
 func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreManager) (*GeminiService, error) {
@@ -42,6 +51,16 @@ func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreMa
 		return nil, fmt.Errorf("failed to create gemini client: %w", err)
 	}
 
+	// Load all prompts from external files
+	loadPrompt := func(name string) *prompts.Prompt {
+		p, err := prompts.LoadPrompt("prompts/" + name)
+		if err != nil {
+			log.Printf("Warning: Failed to load %s: %v", name, err)
+			return nil
+		}
+		return p
+	}
+
 	// Use a default model, can be configured later
 	modelName := os.Getenv("GEMINI_MODEL")
 	if modelName == "" {
@@ -51,9 +70,15 @@ func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreMa
 	model.SetTemperature(0.2) // Low temperature for technical accuracy
 
 	return &GeminiService{
-		client:  client,
-		model:   model,
-		manager: manager,
+		client:              client,
+		model:               model,
+		manager:             manager,
+		DatalogPrompt:       loadPrompt("datalog.prompt"),
+		ChatPrompt:          loadPrompt("chat.prompt"),
+		PathNarrativePrompt: loadPrompt("path_narrative.prompt"),
+		PathEndpointsPrompt: loadPrompt("path_endpoints.prompt"),
+		ResolveSymbolPrompt: loadPrompt("resolve_symbol.prompt"),
+		PrunePrompt:         loadPrompt("prune.prompt"),
 	}, nil
 }
 
@@ -102,161 +127,208 @@ func (s *GeminiService) HandleRequest(ctx context.Context, req AIRequest) (strin
 
 func (s *GeminiService) buildTaskPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
 	switch req.Task {
-	case "insight": // Node Insight
-		// Query: "Analyze the architectural role of component..."
-		// We can construct this standard prompt here.
+	case "insight": // Node Insight - analyze a specific symbol
 		return s.BuildPrompt(ctx, store, fmt.Sprintf("Analyze the architectural role of component %s. Provide a comprehensive analysis including role, interactions, and design patterns.", req.SymbolID), req.SymbolID)
 
-	case "prune": // Prune Nodes
-		nodeList, ok := req.Data.(string) // Expecting a string formatted list or we format it here?
-		// Better to accept formatted string for now to match FE logic or []interface{}
-		if !ok {
-			// If it's a list of objects, format it
-			if list, ok := req.Data.([]interface{}); ok {
-				var sb strings.Builder
-				for _, item := range list {
-					if m, ok := item.(map[string]interface{}); ok {
-						name, _ := m["name"].(string)
-						kind, _ := m["kind"].(string)
-						id, _ := m["id"].(string)
-						sb.WriteString(fmt.Sprintf("- %s (Kind: %s, ID: %s)\n", name, kind, id))
-					}
-				}
-				nodeList = sb.String()
-			}
+	case "chat": // General code analysis with query results
+		context := formatNodesWithCode(req.Data, 20)
+		if s.ChatPrompt != nil {
+			return s.ChatPrompt.Execute(map[string]interface{}{
+				"Query":   req.Query,
+				"Context": context,
+			})
 		}
+		return fmt.Sprintf("%s\n\n%s", req.Query, context), nil
 
-		return fmt.Sprintf(`Identify the TOP 7 most significant "architectural gateway" nodes from this list:
-%s
-
-Return strictly JSON format:
-{
-    "selectedIds": ["id1", "id2"],
-    "explanation": "Brief reason..."
-}`, nodeList), nil
+	case "prune": // Select top architectural nodes
+		nodes := formatNodeList(req.Data)
+		if s.PrunePrompt != nil {
+			return s.PrunePrompt.Execute(map[string]interface{}{
+				"Nodes": nodes,
+			})
+		}
+		return "", fmt.Errorf("prune.prompt not loaded")
 
 	case "summary": // Architecture Summary for File
-		// req.Query could be fileName
-		nodeListStr := ""
-		if list, ok := req.Data.([]interface{}); ok {
-			var sb strings.Builder
-			for i, item := range list {
-				if i >= 15 {
-					break
-				}
-				if m, ok := item.(map[string]interface{}); ok {
-					name, _ := m["name"].(string)
-					kind, _ := m["kind"].(string)
-					sb.WriteString(fmt.Sprintf("- %s (%s)\n", name, kind))
-				}
-			}
-			nodeListStr = sb.String()
-		}
-		return s.BuildPrompt(ctx, store, fmt.Sprintf("Provide a 2-3 sentence architectural summary for file \"%s\".\nSymbols:\n%s", req.Query, nodeListStr), "")
+		nodes := formatNodesSimple(req.Data, 15)
+		return s.BuildPrompt(ctx, store, fmt.Sprintf("Provide a 2-3 sentence architectural summary for file \"%s\".\nSymbols:\n%s", req.Query, nodes), "")
 
 	case "narrative": // Architecture Flow Narrative
-		// Data is nodes list
-		nodeNames := ""
-		if list, ok := req.Data.([]interface{}); ok {
-			names := make([]string, 0, len(list))
-			for _, item := range list {
-				if m, ok := item.(map[string]interface{}); ok {
-					if name, ok := m["name"].(string); ok {
-						names = append(names, name)
-					}
-				}
-			}
-			nodeNames = strings.Join(names, ", ")
-		}
-		return s.BuildPrompt(ctx, store, fmt.Sprintf("Explain the high-level logic flow for these components: %s. Keep it concise.", nodeNames), "")
+		names := extractNodeNames(req.Data)
+		return s.BuildPrompt(ctx, store, fmt.Sprintf("Explain the high-level logic flow for these components: %s. Keep it concise.", names), "")
 
 	case "resolve_symbol":
-		candidateStr := ""
-		if list, ok := req.Data.([]interface{}); ok {
-			formatted := make([]string, 0)
-			for i, item := range list {
-				if i >= 30 {
-					break
-				}
-				if s, ok := item.(string); ok {
-					formatted = append(formatted, s)
-				}
-			}
-			candidateStr = strings.Join(formatted, "\n")
+		candidates := extractStringList(req.Data, 30)
+		if s.ResolveSymbolPrompt != nil {
+			return s.ResolveSymbolPrompt.Execute(map[string]interface{}{
+				"Query":      req.Query,
+				"Candidates": candidates,
+			})
 		}
-		return fmt.Sprintf(`Select the best matching symbol for query: "%s"
-Candidates:
-%s
-
-Return ONLY the exact symbol ID. If no match, return "null".`, req.Query, candidateStr), nil
+		return "", fmt.Errorf("resolve_symbol.prompt not loaded")
 
 	case "path_endpoints":
-		candidateStr := ""
-		if list, ok := req.Data.([]interface{}); ok {
-			formatted := make([]string, 0)
-			for i, item := range list {
-				if i >= 50 {
-					break
-				}
-				if s, ok := item.(string); ok {
-					formatted = append(formatted, s)
-				}
-			}
-			candidateStr = strings.Join(formatted, "\n")
+		candidates := extractStringList(req.Data, 50)
+		if s.PathEndpointsPrompt != nil {
+			return s.PathEndpointsPrompt.Execute(map[string]interface{}{
+				"Query":      req.Query,
+				"Candidates": candidates,
+			})
 		}
-		return fmt.Sprintf(`Identify Source and Target symbols for query: "%s"
-Candidates:
-%s
-
-Return strictly JSON: { "from": "id", "to": "id" } or null.`, req.Query, candidateStr), nil
+		return "", fmt.Errorf("path_endpoints.prompt not loaded")
 
 	case "datalog":
-		return fmt.Sprintf(`You are a Datalog Query Generator for a Code Knowledge Graph.
-Schema:
-- Fact: triples(Subject, Predicate, Object)
-- Predicates: "defines", "calls", "imports", "type", "implements", "has_doc", "in_package", "has_tag", "has_role", "calls_api", "handled_by", "exports", "exposes_model", "references".
-- Meaning:
-  - defines: File -> Symbol
-  - calls: Execution flow (Func -> Func)
-  - imports: File dependency
-  - type: Node classification (e.g., "struct", "function")
-  - in_package: Logical grouping
-  - has_role: "api_handler", "data_contract", "entry_point", "utility"
-  - has_tag: "backend", "frontend"
-  - calls_api: Frontend -> URI
-  - handled_by: URI -> Backend Handler
-  - exposes_model: API Handler -> Data Contract (Use this for "defines a data contract" queries)
-
-Rules:
-1. Use standard Datalog syntax.
-2. Direct calls: triples(?caller, "calls", ?callee).
-3. Transitive reachability (if asked):
-   reachable(X, Y) :- triples(X, "calls", Y).
-   reachable(X, Z) :- triples(X, "calls", Y), reachable(Y, Z).
-4. Return ONLY the Datalog query inside a markdown block.
-
-User Request: "%s"
-Context Symbol: %s`, req.Query, req.SymbolID), nil
+		if s.DatalogPrompt != nil {
+			return s.DatalogPrompt.Execute(map[string]interface{}{
+				"Query":    req.Query,
+				"SymbolID": req.SymbolID,
+			})
+		}
+		return "", fmt.Errorf("datalog.prompt not loaded")
 
 	case "path_narrative":
-		// Query is flow description, Data is pathNodes
-		pathStr := ""
-		if list, ok := req.Data.([]interface{}); ok {
-			names := make([]string, 0)
-			for _, item := range list {
-				if m, ok := item.(map[string]interface{}); ok {
-					if name, ok := m["name"].(string); ok {
-						names = append(names, name)
-					}
-				}
+		pathStr := extractPathString(req.Data)
+		if s.PathNarrativePrompt != nil {
+			promptStr, err := s.PathNarrativePrompt.Execute(map[string]interface{}{
+				"Query": req.Query,
+				"Path":  pathStr,
+			})
+			if err == nil {
+				return s.BuildPrompt(ctx, store, promptStr, "")
 			}
-			pathStr = strings.Join(names, " -> ")
 		}
 		return s.BuildPrompt(ctx, store, fmt.Sprintf("Explain flow: %s. Path: %s", req.Query, pathStr), "")
 
-	default: // "chat" or unknown
+	default:
 		return s.BuildPrompt(ctx, store, req.Query, req.SymbolID)
 	}
+}
+
+// Helper: Format nodes with full code for chat context
+func formatNodesWithCode(data interface{}, limit int) string {
+	list, ok := data.([]interface{})
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("## Query Results:\n\n")
+	for i, item := range list {
+		if i >= limit {
+			break
+		}
+		if m, ok := item.(map[string]interface{}); ok {
+			id, _ := m["id"].(string)
+			name, _ := m["name"].(string)
+			kind, _ := m["kind"].(string)
+			code, _ := m["code"].(string)
+
+			sb.WriteString(fmt.Sprintf("### %d. %s\n", i+1, id))
+			if name != "" && name != id {
+				sb.WriteString(fmt.Sprintf("Name: %s\n", name))
+			}
+			if kind != "" {
+				sb.WriteString(fmt.Sprintf("Type: %s\n", kind))
+			}
+			if code != "" {
+				sb.WriteString(fmt.Sprintf("```\n%s\n```\n", code))
+			}
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
+}
+
+// Helper: Format nodes as simple list (name + kind)
+func formatNodesSimple(data interface{}, limit int) string {
+	list, ok := data.([]interface{})
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	for i, item := range list {
+		if i >= limit {
+			break
+		}
+		if m, ok := item.(map[string]interface{}); ok {
+			name, _ := m["name"].(string)
+			kind, _ := m["kind"].(string)
+			sb.WriteString(fmt.Sprintf("- %s (%s)\n", name, kind))
+		}
+	}
+	return sb.String()
+}
+
+// Helper: Format nodes for prune task
+func formatNodeList(data interface{}) string {
+	if str, ok := data.(string); ok {
+		return str
+	}
+	list, ok := data.([]interface{})
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	for _, item := range list {
+		if m, ok := item.(map[string]interface{}); ok {
+			name, _ := m["name"].(string)
+			kind, _ := m["kind"].(string)
+			id, _ := m["id"].(string)
+			sb.WriteString(fmt.Sprintf("- %s (Kind: %s, ID: %s)\n", name, kind, id))
+		}
+	}
+	return sb.String()
+}
+
+// Helper: Extract node names as comma-separated string
+func extractNodeNames(data interface{}) string {
+	list, ok := data.([]interface{})
+	if !ok {
+		return ""
+	}
+	names := make([]string, 0, len(list))
+	for _, item := range list {
+		if m, ok := item.(map[string]interface{}); ok {
+			if name, ok := m["name"].(string); ok {
+				names = append(names, name)
+			}
+		}
+	}
+	return strings.Join(names, ", ")
+}
+
+// Helper: Extract string list with limit
+func extractStringList(data interface{}, limit int) string {
+	list, ok := data.([]interface{})
+	if !ok {
+		return ""
+	}
+	items := make([]string, 0)
+	for i, item := range list {
+		if i >= limit {
+			break
+		}
+		if str, ok := item.(string); ok {
+			items = append(items, str)
+		}
+	}
+	return strings.Join(items, "\n")
+}
+
+// Helper: Extract path string from node list
+func extractPathString(data interface{}) string {
+	list, ok := data.([]interface{})
+	if !ok {
+		return ""
+	}
+	names := make([]string, 0)
+	for _, item := range list {
+		if m, ok := item.(map[string]interface{}); ok {
+			if name, ok := m["name"].(string); ok {
+				names = append(names, name)
+			}
+		}
+	}
+	return strings.Join(names, " -> ")
 }
 
 // BuildPrompt constructs the prompt with context.

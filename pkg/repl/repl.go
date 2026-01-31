@@ -11,6 +11,7 @@ import (
 
 	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
 )
@@ -88,19 +89,19 @@ func Run(ctx context.Context, cfg Config, s *meb.MEBStore) {
 
 	// Load the prompt templates at startup
 	nlPromptPath := "prompts/nl_to_datalog.prompt"
-	nlPrompt, err := LoadPrompt(nlPromptPath)
+	nlPrompt, err := prompts.LoadPrompt(nlPromptPath)
 	if err != nil {
 		log.Printf("Warning: Failed to load prompt from %s: %v. NL features may not work.", nlPromptPath, err)
 	}
 
 	explainPromptPath := "prompts/explain_results.prompt"
-	explainPrompt, err := LoadPrompt(explainPromptPath)
+	explainPrompt, err := prompts.LoadPrompt(explainPromptPath)
 	if err != nil {
 		log.Printf("Warning: Failed to load explain prompt from %s: %v. Explanation features may not work.", explainPromptPath, err)
 	}
 
 	plannerPromptPath := "prompts/planner.prompt"
-	plannerPrompt, err := LoadPrompt(plannerPromptPath)
+	plannerPrompt, err := prompts.LoadPrompt(plannerPromptPath)
 	if err != nil {
 		log.Printf("Warning: Failed to load planner prompt from %s: %v. Plan features may not work.", plannerPromptPath, err)
 	}
@@ -383,7 +384,7 @@ func isFollowUpQuery(query string) bool {
 }
 
 // explainResults generates a natural language explanation of query results.
-func explainResults(ctx context.Context, cfg Config, session *SessionContext, explainPrompt *Prompt) (string, error) {
+func explainResults(ctx context.Context, cfg Config, session *SessionContext, explainPrompt *prompts.Prompt) (string, error) {
 	if session.ResultSummary == nil {
 		return "", fmt.Errorf("no result summary available")
 	}
@@ -457,11 +458,11 @@ func clean(s string) string {
 	return strings.TrimSpace(strings.ReplaceAll(s, "\"", ""))
 }
 
-func askGemini(ctx context.Context, cfg Config, p *Prompt, question string, facts []string) (string, error) {
+func askGemini(ctx context.Context, cfg Config, p *prompts.Prompt, question string, facts []string) (string, error) {
 	return askGeminiWithContext(ctx, cfg, p, question, facts, "")
 }
 
-func askGeminiWithContext(ctx context.Context, cfg Config, p *Prompt, question string, facts []string, suggestedQueries string) (string, error) {
+func askGeminiWithContext(ctx context.Context, cfg Config, p *prompts.Prompt, question string, facts []string, suggestedQueries string) (string, error) {
 
 	apiKey := cfg.GeminiAPIKey
 	if apiKey == "" {
@@ -525,7 +526,7 @@ func askGeminiWithContext(ctx context.Context, cfg Config, p *Prompt, question s
 }
 
 // executePlanCommand handles the "plan <goal>" command by generating and executing a multi-step plan.
-func executePlanCommand(ctx context.Context, cfg Config, s *meb.MEBStore, goal string, projectContext *ProjectSummary, plannerPrompt *Prompt) error {
+func executePlanCommand(ctx context.Context, cfg Config, s *meb.MEBStore, goal string, projectContext *ProjectSummary, plannerPrompt *prompts.Prompt) error {
 	fmt.Println("\n🧠 Analyzing codebase and generating execution plan...")
 
 	// Prepare template data with project context

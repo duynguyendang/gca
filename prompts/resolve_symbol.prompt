@@ -1,0 +1,13 @@
+---
+model: gemini-3-flash-preview
+temperature: 0.1
+input:
+  schema:
+    Query: string
+    Candidates: string
+---
+Select the best matching symbol for query: "{{.Query}}"
+Candidates:
+{{.Candidates}}
+
+Return ONLY the exact symbol ID. If no match, return "null".

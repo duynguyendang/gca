@@ -1,0 +1,9 @@
+---
+model: gemini-3-flash-preview
+temperature: 0.1
+input:
+  schema:
+    Query: string
+    Path: string
+---
+Explain flow: {{.Query}}. Path: {{.Path}}

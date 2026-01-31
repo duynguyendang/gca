@@ -1,0 +1,13 @@
+---
+model: gemini-3-flash-preview
+temperature: 0.1
+input:
+  schema:
+    Query: string
+    Candidates: string
+---
+Identify Source and Target symbols for query: "{{.Query}}"
+Candidates:
+{{.Candidates}}
+
+Return strictly JSON: { "from": "id", "to": "id" } or null.

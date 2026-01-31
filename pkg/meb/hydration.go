@@ -3,6 +3,7 @@ package meb
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"golang.org/x/sync/errgroup"
@@ -135,6 +136,28 @@ func (m *MEBStore) hydrateOne(ctx context.Context, id DocumentID, lazy bool, sha
 		content = string(doc.Content)
 	}
 
+	// 4. If content is empty but we have line metadata, extract snippet from parent file
+	if content == "" && !lazy && doc.Metadata != nil {
+		startLine, hasStart := doc.Metadata["start_line"]
+		endLine, hasEnd := doc.Metadata["end_line"]
+		fileID, hasFile := doc.Metadata["file"]
+
+		if hasStart && hasEnd && hasFile {
+			startLineInt, okStart := toInt(startLine)
+			endLineInt, okEnd := toInt(endLine)
+			fileIDStr, okFile := fileID.(string)
+
+			if okStart && okEnd && okFile && startLineInt > 0 && endLineInt >= startLineInt {
+				// Fetch parent file content
+				parentDoc, parentErr := m.GetDocument(DocumentID(fileIDStr))
+				if parentErr == nil && parentDoc.Content != nil {
+					// Extract lines startLineInt to endLineInt (1-indexed)
+					content = extractLines(string(parentDoc.Content), startLineInt, endLineInt)
+				}
+			}
+		}
+	}
+
 	return HydratedSymbol{
 		ID:       id,
 		Kind:     kind,
@@ -142,4 +165,38 @@ func (m *MEBStore) hydrateOne(ctx context.Context, id DocumentID, lazy bool, sha
 		Metadata: doc.Metadata,
 		Children: children,
 	}, nil
+}
+
+// toInt converts various numeric types to int
+func toInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	case string:
+		// Parse string as int (for JSON-serialized values)
+		var i int
+		_, err := fmt.Sscanf(n, "%d", &i)
+		return i, err == nil
+	default:
+		return 0, false
+	}
+}
+
+// extractLines extracts lines from content (1-indexed, inclusive)
+func extractLines(content string, startLine, endLine int) string {
+	lines := strings.Split(content, "\n")
+	if startLine < 1 || endLine > len(lines) {
+		return ""
+	}
+	// Convert to 0-indexed
+	start := startLine - 1
+	end := endLine
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return strings.Join(lines[start:end], "\n")
 }

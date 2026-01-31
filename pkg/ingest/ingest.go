@@ -137,6 +137,13 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 
 	s.AddDocument(meb.DocumentID(relPath), content, nil, map[string]any{"project": projectName})
 
+	// Store symbol documents (with file, start_line, end_line metadata for snippet extraction)
+	for _, doc := range bundle.Documents {
+		// Don't store content for symbols (we'll extract on-demand from parent file)
+		// But we DO need to store the metadata (file, start_line, end_line)
+		s.AddDocument(doc.ID, nil, nil, doc.Metadata)
+	}
+
 	finalFacts := make([]meb.Fact, 0, len(bundle.Facts)+2)
 
 	// Inject Role Tags based on path

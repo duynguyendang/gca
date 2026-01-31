@@ -1,0 +1,15 @@
+---
+model: gemini-3-flash-preview
+temperature: 0.1
+input:
+  schema:
+    Nodes: string
+---
+Identify the TOP 7 most significant "architectural gateway" nodes from this list:
+{{.Nodes}}
+
+Return strictly JSON format:
+{
+    "selectedIds": ["id1", "id2"],
+    "explanation": "Brief reason..."
+}
