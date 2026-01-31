@@ -69,7 +69,7 @@
 ## 📋 Agent Action Plan: "The Grand Validation"
 
 > **Agent, follow these steps to certify the system:**
-> 1. **Data Sync**: Perform a clean ingestion. Ensure prefixes `gca-be/` and `gca-fe/` are applied.
+> 1. **Data Sync**: Perform a clean ingestion using `go run main.go --ingest <source-path> ./data/gca-test`. Ensure prefixes `gca-be/` and `gca-fe/` are applied.
 > 2. **Execution**: Run all tests from **REL-01 to AI-05** sequentially.
 > 3. **Validation**:
 > * For **REL/BFS**: Verify against raw Datalog results.

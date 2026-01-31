@@ -11,7 +11,7 @@ import (
 )
 
 const baseURL = "http://localhost:8080"
-const projectID = "gca"
+const projectID = "gca-test"
 
 func main() {
 	fmt.Println("🚀 Starting GCA Integration Tests...")
