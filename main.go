@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/ingest"
@@ -112,9 +113,10 @@ func main() {
 
 	if *ingestMode {
 		// Ingest backend (Go) files from source directory
-		if err := ingest.Run(s, "gca-be", sourceDir); err != nil {
+		projectName := filepath.Base(dataDir)
+		if err := ingest.Run(s, projectName, sourceDir); err != nil {
 			s.Close()
-			log.Fatalf("Ingestion failed for gca-be: %v", err)
+			log.Fatalf("Ingestion failed for %s: %v", projectName, err)
 		}
 
 		// Note: When sourceDir is the parent directory (e.g., gca-hackathon),

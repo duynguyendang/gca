@@ -145,6 +145,9 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		}
 		if _, exists := routeMap[cleanRef]; exists {
 			s.AddFact(meb.Fact{Subject: meb.DocumentID(sID), Predicate: "calls_api", Object: cleanRef, Graph: "virtual"})
+			// Also add direct 'calls' link to the backend handler to enable standard pathfinding
+			targetID := routeMap[cleanRef]
+			s.AddFact(meb.Fact{Subject: meb.DocumentID(sID), Predicate: "calls", Object: targetID, Graph: "virtual"})
 		}
 	}
 

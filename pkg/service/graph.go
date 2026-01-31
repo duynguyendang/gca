@@ -837,35 +837,82 @@ func (s *GraphService) resolvePackageImportsToFiles(ctx context.Context, store *
 // For Go imports like "github.com/google/mangle/ast", we try:
 // 1. Direct prefix match (if files were ingested with full path)
 // 2. Suffix match using the package name (e.g., "ast/") for relative paths
+// 3. "in_package" predicate match (checking for dotted internal packages)
 func (s *GraphService) findFilesWithPrefix(store *meb.MEBStore, prefix string) []string {
 	var files []string
 	seen := make(map[string]bool)
 
-	// Extract the package suffix (last segment) for matching
-	// e.g., "github.com/google/mangle/ast" -> "ast"
-	pkgSuffix := prefix
-	if idx := strings.LastIndex(prefix, "/"); idx != -1 {
-		pkgSuffix = prefix[idx+1:]
+	// Strategy 1 & 2: File Path Scan (Existing logic, simplified)
+	// We combine this with Strategy 3 for a single pass if possible,
+	// but Strategy 3 requires scanning "in_package" predicate which is distinct from "type"="file" or scanning all triples.
+
+	// Let's do a scan of "in_package" which gives us ?f and ?p.
+	// This covers both finding file paths (since ?f is file path) and checking package membership.
+
+	// Normalize prefix for loose matching
+	// e.g. "github.com/duynguyendang/gca/pkg/ingest" -> "pkg/ingest" (suffix)
+	// We want to match internal package "gca.gca-be.pkg.ingest"
+
+	// Helper to normalize dotted package to slashed
+	toSlashed := func(p string) string {
+		return strings.ReplaceAll(p, ".", "/")
 	}
 
-	// Prefix to match: "ast/" (directory prefix)
-	dirPrefix := pkgSuffix + "/"
+	// prefixSlashed := prefix (unused)
 
-	// Scan for files with hash (ingested files)
-	for fact, _ := range store.Scan("", meb.PredHash, "", "") {
+	// Heuristic: Identify significant suffix of implementation
+	// We assume that the project structure (pkg/ingest) matches the end of the import path.
+	// We look for the last 2 segments as a discriminator?
+	// or try to match as much as possible.
+
+	// Let's iterate all files with "in_package"
+	for fact, _ := range store.Scan("", "in_package", "", "") {
 		filePath := string(fact.Subject)
-
-		// Skip test files
-		if strings.Contains(filePath, "_test.go") {
+		pkgName, ok := fact.Object.(string)
+		if !ok {
 			continue
 		}
 
-		// Match either full prefix OR directory prefix
 		matched := false
-		if strings.HasPrefix(filePath, prefix) && strings.HasSuffix(filePath, ".go") {
+
+		// 1. Check if filePath matches prefix directly
+		if strings.HasPrefix(filePath, prefix) {
 			matched = true
-		} else if strings.HasPrefix(filePath, dirPrefix) && strings.HasSuffix(filePath, ".go") {
-			matched = true
+		}
+
+		// 2. Check if internal normalized package matches prefix
+		// pkgName="gca.gca-be.pkg.ingest" -> "gca/gca-be/pkg/ingest"
+		internalPkg := toSlashed(pkgName)
+
+		// Does "gca/gca-be/pkg/ingest" end with "pkg/ingest"? Yes.
+		// Does "github.com/duynguyendang/gca/pkg/ingest" end with "pkg/ingest"? Yes.
+		// We check if (internalPkg ends with X) AND (prefix ends with X) where X is significant.
+		// Simply checking strings.HasSuffix(internalPkg, prefix) is unlikely to work due to "gca-be" vs "gca".
+
+		// Check if internalPkg "contains" the essential parts of prefix?
+		// Or: check if internalPkg is "compatible" with prefix.
+
+		// Robust Logic:
+		// Remove "github.com/host/user/" from prefix -> "repo/pkg/ingest"
+		// Remove "project/" from internalPkg -> "sub/pkg/ingest"
+
+		// Simple Overlap Match:
+		// Check if `internalPkg` contains `pkg/ingest` (from prefix).
+		// We take the last 2-3 segments of prefix.
+		parts := strings.Split(prefix, "/")
+		if len(parts) > 2 {
+			// Try matching the last 2 segments, e.g. "pkg/ingest"
+			suffix := strings.Join(parts[len(parts)-2:], "/")
+			if strings.Contains(internalPkg, suffix) {
+				matched = true
+			}
+		} else if len(parts) > 0 {
+			// Just match the last one e.g. "ast"
+			suffix := parts[len(parts)-1]
+			// Strict check: internalPkg must END with /ast or equal ast
+			if strings.HasSuffix(internalPkg, "/"+suffix) || internalPkg == suffix {
+				matched = true
+			}
 		}
 
 		if matched && !seen[filePath] {
@@ -874,9 +921,9 @@ func (s *GraphService) findFilesWithPrefix(store *meb.MEBStore, prefix string) [
 		}
 	}
 
-	// Limit to first 5 files to prevent explosion
-	if len(files) > 5 {
-		files = files[:5]
+	// Limit to avoid explosion
+	if len(files) > 10 {
+		files = files[:10]
 	}
 
 	return files
@@ -892,10 +939,20 @@ func (s *GraphService) GetProjectMap(ctx context.Context, projectID string) (*ex
 	// Let's assume standard query: triples(?s, "imports", ?o)
 	query := `triples(?s, "imports", ?o)`
 
-	// Execute with hydrate=false (or lazy=true implicitly if we used hydration, but here we skip it entirely?)
-	// Task says: "No Hydration: Do not fetch source code or heavy metadata."
-	// So hydrate=false.
-	return s.ExportGraph(ctx, projectID, query, false, false)
+	// Execute with hydrate=false
+	graph, err := s.ExportGraph(ctx, projectID, query, false, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// Resolve package nodes to file nodes so they are valid internal nodes
+	// This prevents the frontend from treating them as external/empty package nodes
+	store, err := s.getStore(projectID)
+	if err == nil {
+		s.resolvePackageImportsToFiles(ctx, store, graph, "")
+	}
+
+	return graph, nil
 }
 
 // GetFileDetails returns detailed internal structure of a file.

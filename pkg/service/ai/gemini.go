@@ -210,6 +210,24 @@ Candidates:
 
 Return strictly JSON: { "from": "id", "to": "id" } or null.`, req.Query, candidateStr), nil
 
+	case "datalog":
+		return fmt.Sprintf(`You are a Datalog Query Generator for a Code Knowledge Graph.
+Schema:
+- Fact: triples(Subject, Predicate, Object)
+- Predicates: "calls", "defines", "imports", "inherits", "references", "type", "has_tag", "calls_api".
+- Subject/Object are string identifiers (e.g., "pkg/file.go:Function").
+
+Rules:
+1. Use standard Datalog syntax.
+2. Direct calls: triples(?caller, "calls", ?callee).
+3. Transitive reachability (if asked):
+   reachable(X, Y) :- triples(X, "calls", Y).
+   reachable(X, Z) :- triples(X, "calls", Y), reachable(Y, Z).
+4. Return ONLY the Datalog query inside a markdown block.
+
+User Request: "%s"
+Context Symbol: %s`, req.Query, req.SymbolID), nil
+
 	case "path_narrative":
 		// Query is flow description, Data is pathNodes
 		pathStr := ""
@@ -247,58 +265,68 @@ func (s *GeminiService) BuildPrompt(ctx context.Context, store *meb.MEBStore, qu
 		if err := s.appendSymbolContext(ctx, store, symbolID, &contextBuilder); err != nil {
 			log.Printf("Failed to fetch symbol context for %s: %v", symbolID, err)
 		}
-	} else {
-		// 2. Semantic Context Discovery (from query)
-		// Find potential symbols in query and fetch their 1-hop context
-		// Simple regex to find words that look like symbols (TitleCase or specific format)
-		// Or just search for any word > 3 chars that matches a known symbol?
-		// "Automatic 1-hop Datalog query for any symbol mentioned"
+	// 2. Semantic Context Discovery (from query)
+	// Find potential symbols in query and fetch their 1-hop context
+	// Optimization: Use LookupID (Exact Match) instead of SearchSymbols (Full Scan)
+	
+	words := extractPotentialSymbols(query)
+	if len(words) > 0 {
+		// Limit to top 3 unique matches
+		count := 0
+		seen := make(map[string]bool)
+		
+		var wg sync.WaitGroup
+		var mu sync.Mutex
 
-		// Optimization: We could use store.SearchSymbols checking existence.
-		// For < 50ms, we must be fast.
-
-		words := extractPotentialSymbols(query)
-		if len(words) > 0 {
-			// Limit to top 3 matches to avoid huge context
-			count := 0
-			var wg sync.WaitGroup
-			var mu sync.Mutex
-
-			// Parallel fetch for potential symbols?
-			// BadgerDB is fast, sequential might be fine for < 5 items.
-			for _, word := range words {
-				if count >= 3 {
-					break
-				}
-
-				// Check if symbol exists (quick check)
-				// We assume checking existence is fast.
-				// Actually, let's just try to Search with exact match
-				matches, err := store.SearchSymbols(word, 1, "")
-				if err == nil && len(matches) > 0 {
-					// Use the first match
-					matchedID := matches[0]
-
-					// Avoid re-fetching if it's the same as symbolID (if we supported mixing)
-					if matchedID == symbolID {
-						continue
-					}
-
-					wg.Add(1)
-					go func(id string) {
-						defer wg.Done()
-						var localSb strings.Builder
-						if err := s.appendSymbolContext(ctx, store, id, &localSb); err == nil {
-							mu.Lock()
-							contextBuilder.WriteString(localSb.String())
-							mu.Unlock()
-						}
-					}(matchedID)
-					count++
-				}
+		for _, word := range words {
+			if count >= 3 {
+				break
 			}
-			wg.Wait()
+			if seen[word] {
+				continue
+			}
+			seen[word] = true
+
+			// Fast Is-It-A-Symbol Check
+			// We check for exact match first.
+			// This avoids scanning millions of keys.
+			id, exists := store.LookupID(word)
+			
+			// Try variations if exact match fails?
+			// e.g. "service" -> "pkg/service"?
+			// For now, keep it simple and fast.
+			
+			if exists {
+				// Convert numeric ID to string ID?
+				// Wait, LookupID returns uint64. appendSymbolContext takes string ID.
+				// We need ResolveID to get text back? 
+				// No, 'word' IS the string ID if it exists in dictionary (forward/reverse).
+				// Actually LookupID verifies 'word' is in dictionary.
+				// So we can pass 'word' as symbolID.
+				
+				matchedID := word
+				if matchedID == symbolID {
+					continue
+				}
+
+				wg.Add(1)
+				go func(id string) {
+					defer wg.Done()
+					var localSb strings.Builder
+					// Use a short timeout for each context fetch
+					localCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+					defer cancel()
+					
+					if err := s.appendSymbolContext(localCtx, store, id, &localSb); err == nil {
+						mu.Lock()
+						contextBuilder.WriteString(localSb.String())
+						mu.Unlock()
+					}
+				}(matchedID)
+				count++
+			}
 		}
+		wg.Wait()
 	}
 
 	prompt := fmt.Sprintf(`You are an expert Software Architect assistant.
@@ -381,10 +409,10 @@ func (s *GeminiService) appendSymbolContext(ctx context.Context, store *meb.MEBS
 	return nil
 }
 
-var symbolRegex = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9_]{2,}\b`)
+var symbolRegex = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9_.\/]{3,}\b`)
 
 func extractPotentialSymbols(query string) []string {
-	// Simple extraction: words >= 3 chars.
-	// We could be smarter (CamelCase preferred).
+	// Simple extraction: words >= 4 chars to avoid "are", "the", "any"
+	// Prefer CamelCase or underscores/dots
 	return symbolRegex.FindAllString(query, -1)
 }
