@@ -214,7 +214,17 @@ Return strictly JSON: { "from": "id", "to": "id" } or null.`, req.Query, candida
 		return fmt.Sprintf(`You are a Datalog Query Generator for a Code Knowledge Graph.
 Schema:
 - Fact: triples(Subject, Predicate, Object)
-- Predicates: "calls", "defines", "imports", "inherits", "references", "type", "has_tag", "calls_api".
+- Predicates: "defines", "calls", "imports", "type", "implements", "has_doc", "in_package", "has_tag", "has_role", "calls_api", "handled_by", "exports", "exposes_model", "references".
+- Meaning:
+  - defines: File -> Symbol
+  - calls: Execution flow (Func -> Func)
+  - imports: File dependency
+  - type: Node classification (e.g., "struct", "function")
+  - in_package: Logical grouping
+  - has_role: "api_handler", "data_contract", "entry_point", "utility"
+  - has_tag: "backend", "frontend"
+  - calls_api: Frontend -> URI
+  - handled_by: URI -> Backend Handler
 - Subject/Object are string identifiers (e.g., "pkg/file.go:Function").
 
 Rules:
@@ -265,68 +275,71 @@ func (s *GeminiService) BuildPrompt(ctx context.Context, store *meb.MEBStore, qu
 		if err := s.appendSymbolContext(ctx, store, symbolID, &contextBuilder); err != nil {
 			log.Printf("Failed to fetch symbol context for %s: %v", symbolID, err)
 		}
-	// 2. Semantic Context Discovery (from query)
-	// Find potential symbols in query and fetch their 1-hop context
-	// Optimization: Use LookupID (Exact Match) instead of SearchSymbols (Full Scan)
-	
-	words := extractPotentialSymbols(query)
-	if len(words) > 0 {
-		// Limit to top 3 unique matches
-		count := 0
-		seen := make(map[string]bool)
-		
-		var wg sync.WaitGroup
-		var mu sync.Mutex
+	} else {
+		// 2. Semantic Context Discovery (from query)
+		// Find potential symbols in query and fetch their 1-hop context
+		// Optimization: Use LookupID (Exact Match) instead of SearchSymbols (Full Scan)
 
-		for _, word := range words {
-			if count >= 3 {
-				break
-			}
-			if seen[word] {
-				continue
-			}
-			seen[word] = true
+		words := extractPotentialSymbols(query)
+		if len(words) > 0 {
+			// Limit to top 3 unique matches
+			count := 0
+			seen := make(map[string]bool)
 
-			// Fast Is-It-A-Symbol Check
-			// We check for exact match first.
-			// This avoids scanning millions of keys.
-			id, exists := store.LookupID(word)
-			
-			// Try variations if exact match fails?
-			// e.g. "service" -> "pkg/service"?
-			// For now, keep it simple and fast.
-			
-			if exists {
-				// Convert numeric ID to string ID?
-				// Wait, LookupID returns uint64. appendSymbolContext takes string ID.
-				// We need ResolveID to get text back? 
-				// No, 'word' IS the string ID if it exists in dictionary (forward/reverse).
-				// Actually LookupID verifies 'word' is in dictionary.
-				// So we can pass 'word' as symbolID.
-				
-				matchedID := word
-				if matchedID == symbolID {
+			var wg sync.WaitGroup
+			var mu sync.Mutex
+
+			for _, word := range words {
+				if count >= 3 {
+					break
+				}
+				if seen[word] {
 					continue
 				}
+				seen[word] = true
 
-				wg.Add(1)
-				go func(id string) {
-					defer wg.Done()
-					var localSb strings.Builder
-					// Use a short timeout for each context fetch
-					localCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-					defer cancel()
-					
-					if err := s.appendSymbolContext(localCtx, store, id, &localSb); err == nil {
-						mu.Lock()
-						contextBuilder.WriteString(localSb.String())
-						mu.Unlock()
+				// Fast Is-It-A-Symbol Check
+				// We check for exact match first.
+				// This avoids scanning millions of keys.
+				_, exists := store.LookupID(word)
+
+				// Try variations if exact match fails?
+				// e.g. "service" -> "pkg/service"?
+				// For now, keep it simple and fast.
+
+				if exists {
+					// Convert numeric ID to string ID?
+					// Wait, LookupID returns uint64. appendSymbolContext takes string ID.
+					// We need ResolveID to get text back?
+					// No, 'word' IS the string ID if it exists in dictionary (forward/reverse).
+					// Actually LookupID verifies 'word' is in dictionary.
+					// So we can pass 'word' as symbolID.
+
+					matchedID := word
+					if matchedID == symbolID {
+						continue
 					}
-				}(matchedID)
-				count++
+
+					wg.Add(1)
+					go func(id string) {
+						defer wg.Done()
+						var localSb strings.Builder
+						// Use a short timeout for each context fetch
+						localCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+						defer cancel()
+
+						if err := s.appendSymbolContext(localCtx, store, id, &localSb); err == nil {
+							mu.Lock()
+							contextBuilder.WriteString(localSb.String())
+							mu.Unlock()
+						}
+					}(matchedID)
+					count++
+				}
 			}
+			wg.Wait()
 		}
-		wg.Wait()
+
 	}
 
 	prompt := fmt.Sprintf(`You are an expert Software Architect assistant.
