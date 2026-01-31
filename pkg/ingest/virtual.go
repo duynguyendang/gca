@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/meb"
@@ -75,6 +76,23 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	}
 
 	// Scan Router Files
+	// Regex for: s.GET("/path", handler) or group.POST("/path", handler)
+	// Supports: GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD
+	// Captures: 1=Method, 2=Path, 3=Handler match (simple), 4=Handler token
+	// Note: Go syntax is flexible, this captures common patterns.
+	// We need to capture the handler symbol name.
+	// Example: s.GET("/v1/projects", s.handleProjects)
+	// Match: .GET, "/v1/projects", s.handleProjects
+	// Scan Router Files
+	// Regex for: s.GET("/path", handler) or group.POST("/path", handler)
+	// Supports: GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD
+	// Captures: 1=Method, 2=Path, 3=Handler match (simple)
+	// Note: Go syntax is flexible, this captures common patterns.
+	// We need to capture the handler symbol name.
+	// Example: s.GET("/v1/projects", s.handleProjects)
+	// Match: .GET, "/v1/projects", s.handleProjects
+	routeRegex := regexp.MustCompile(`\.(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\(\s*"([^"]+)"\s*,\s*([^,\)]+)`)
+
 	for id := range beSet {
 		if strings.Contains(id, ":") {
 			continue
@@ -84,43 +102,33 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 			continue
 		}
 		content := string(doc.Content)
-		if !strings.Contains(content, ".router.") {
+		// Basic heuristic: check if file looks like a router setup
+		if !strings.Contains(content, "gin.Default") && !strings.Contains(content, "gin.New") && !strings.Contains(content, ".Group") && !strings.Contains(content, "Router") {
 			continue
 		}
 
-		lines := strings.Split(content, "\n")
-		for _, line := range lines {
-			if !strings.Contains(line, ".router.") {
-				continue
-			}
-			quoteIdx := strings.Index(line, "\"")
-			if quoteIdx == -1 {
-				continue
-			}
-			rest := line[quoteIdx+1:]
-			endQuoteIdx := strings.Index(rest, "\"")
-			if endQuoteIdx == -1 {
-				continue
-			}
-			route := rest[:endQuoteIdx]
+		matches := routeRegex.FindAllStringSubmatch(content, -1)
+		for _, match := range matches {
+			// method := match[1] // Unused for now
+			route := match[2]
+			rawHandler := strings.TrimSpace(match[3])
 
-			var handler string
-			if sIdx := strings.LastIndex(line, "s."); sIdx != -1 {
-				handler = line[sIdx+2:]
-			} else if commaIdx := strings.LastIndex(line, ","); commaIdx != -1 {
-				handler = strings.TrimSpace(line[commaIdx+1:])
+			// Extract simple function name from regex match
+			// e.g. "s.handleProjects" -> "handleProjects"
+			// e.g. "handlers.GetUser" -> "GetUser"
+			handlerToken := rawHandler
+			if idx := strings.LastIndex(rawHandler, "."); idx != -1 {
+				handlerToken = rawHandler[idx+1:]
 			}
 
-			if handler == "" {
-				continue
-			}
-			handlerToken := strings.FieldsFunc(handler, func(r rune) bool {
-				return r == ')' || r == ',' || r == ' ' || r == ';'
-			})[0]
+			// Clean up token (remove closing parens if regex greediness caught them, though strict regex shouldn't)
+			handlerToken = strings.Trim(handlerToken, " ),;")
 
 			if targetID, ok := symbolLookup[handlerToken]; ok {
 				routeMap[route] = targetID
 				s.AddFact(meb.Fact{Subject: meb.DocumentID(route), Predicate: "handled_by", Object: targetID, Graph: "virtual"})
+				// REL-02: Tag the handler as an api_handler
+				s.AddFact(meb.Fact{Subject: meb.DocumentID(targetID), Predicate: "has_role", Object: "api_handler", Graph: "virtual"})
 			}
 		}
 	}

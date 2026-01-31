@@ -43,7 +43,11 @@ func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreMa
 	}
 
 	// Use a default model, can be configured later
-	model := client.GenerativeModel("gemini-1.5-flash")
+	modelName := os.Getenv("GEMINI_MODEL")
+	if modelName == "" {
+		modelName = "gemini-2.0-flash-exp"
+	}
+	model := client.GenerativeModel(modelName)
 	model.SetTemperature(0.2) // Low temperature for technical accuracy
 
 	return &GeminiService{
@@ -77,10 +81,12 @@ func (s *GeminiService) HandleRequest(ctx context.Context, req AIRequest) (strin
 
 	resp, err := s.model.GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {
+		log.Printf("Gemini GenerateContent Failed: %v", err)
 		return "", fmt.Errorf("gemini request failed: %w", err)
 	}
 
 	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
+		log.Printf("Gemini returned empty candidates")
 		return "No response from AI.", nil
 	}
 

@@ -36,12 +36,13 @@ type StoreManager struct {
 	projects      *lru.Cache[string, *meb.MEBStore]
 	mu            sync.RWMutex
 	profile       MemoryProfile
+	readOnly      bool
 	cachedList    []ProjectMetadata
 	lastListBuild time.Time
 }
 
 // NewStoreManager creates a new StoreManager.
-func NewStoreManager(baseDir string, profile MemoryProfile) *StoreManager {
+func NewStoreManager(baseDir string, profile MemoryProfile, readOnly bool) *StoreManager {
 	// Create LRU cache with eviction callback to close stores
 	cache, _ := lru.NewWithEvict[string, *meb.MEBStore](MaxOpenStores, func(key string, value *meb.MEBStore) {
 		_ = value.Close()
@@ -51,6 +52,7 @@ func NewStoreManager(baseDir string, profile MemoryProfile) *StoreManager {
 		baseDir:  baseDir,
 		projects: cache,
 		profile:  profile,
+		readOnly: readOnly,
 	}
 }
 
@@ -75,10 +77,23 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 		return nil, fmt.Errorf("project not found: %s", projectID)
 	}
 
-	// Open in ReadOnly mode with BypassLockGuard
+	// Open in ReadOnly mode if configured
 	cfg := store.DefaultConfig(projectDir)
-	cfg.ReadOnly = true
-	cfg.BypassLockGuard = true
+	cfg.ReadOnly = sm.readOnly
+	// If ReadOnly, we don't need BypassLockGuard typically, but for safety in server mode:
+	// cfg.BypassLockGuard = sm.readOnly
+	// Actually, BypassLockGuard is for multiple processes.
+	// If we are strictly ReadOnly, we might fail if a lock exists (e.g. ingestion running).
+	// Let's keep BypassLockGuard true if we want to read even if locked?
+	// No, standard ReadOnly usually respects locks or bypasses.
+	// Let's rely on standard config, but set ReadOnly.
+	if !sm.readOnly {
+		cfg.ReadOnly = false
+		cfg.BypassLockGuard = true
+	} else {
+		// In ReadOnly mode, we often want to bypass the lock to inspect running DBs
+		cfg.BypassLockGuard = true
+	}
 
 	// Apply Memory Profile
 	if sm.profile == MemoryProfileLow {

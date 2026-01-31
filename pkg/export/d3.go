@@ -101,6 +101,11 @@ func (t *D3Transformer) detectInternalPrefixes() {
 
 // Transform converts datalog query results into a D3Graph.
 func (t *D3Transformer) Transform(ctx context.Context, query string, results []map[string]any) (*D3Graph, error) {
+	// Short-circuit if no results to transform
+	if len(results) == 0 {
+		return &D3Graph{Nodes: []D3Node{}, Links: []D3Link{}}, nil
+	}
+
 	// Parse the query to find the 'triples' atom
 	atoms, err := datalog.Parse(query)
 	if err != nil {

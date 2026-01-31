@@ -15,6 +15,14 @@ type Atom struct {
 // It supports standard predicates like 'triples', constraints like 'regex', and syntactic sugar like '!='.
 func Parse(query string) ([]Atom, error) {
 	query = strings.TrimSpace(query)
+	// Handle "Head :- Body" syntax by taking Body (ignore Head as it's just the Goal)
+	if idx := strings.Index(query, ":-"); idx != -1 {
+		query = query[idx+2:]
+	}
+	query = strings.TrimSpace(query)
+	// Remove trailing dot
+	query = strings.TrimSuffix(query, ".")
+
 	// Remove leading ? if present (common in some Datalog dialects)
 	query = strings.TrimPrefix(query, "?")
 

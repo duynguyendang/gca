@@ -346,8 +346,12 @@ func (m *MEBStore) Query(ctx context.Context, query string) ([]map[string]any, e
 		// Everything else (like "regex", "neq") is treated as a constraint
 		if atom.Predicate == "triples" {
 			dataAtoms = append(dataAtoms, atom)
-		} else {
+		} else if atom.Predicate == "regex" || atom.Predicate == "neq" {
 			constraints = append(constraints, atom)
+		} else {
+			// Unknown predicate -> Treat as empty relation.
+			// In Datalog, joining with an empty relation yields zero results.
+			return []map[string]any{}, nil
 		}
 	}
 

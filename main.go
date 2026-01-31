@@ -70,7 +70,7 @@ func main() {
 		fmt.Printf("Starting REST API Server. Project Root: %s\n", dataDir)
 
 		// Initialize StoreManager
-		mgr := manager.NewStoreManager(dataDir, memProfile)
+		mgr := manager.NewStoreManager(dataDir, memProfile, true)
 		defer mgr.CloseAll()
 
 		apiKey := os.Getenv("GEMINI_API_KEY")
@@ -111,8 +111,8 @@ func main() {
 	defer s.Close()
 
 	if *ingestMode {
-		// Ingest backend (Go) files from current directory
-		if err := ingest.Run(s, "gca-be", "."); err != nil {
+		// Ingest backend (Go) files from source directory
+		if err := ingest.Run(s, "gca-be", sourceDir); err != nil {
 			s.Close()
 			log.Fatalf("Ingestion failed for gca-be: %v", err)
 		}

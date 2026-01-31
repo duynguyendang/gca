@@ -38,6 +38,17 @@ func (s *Server) handleQuery(c *gin.Context) {
 
 	projectID := c.Query("project")
 	lazy := c.Query("lazy") == "true"
+	raw := c.Query("raw") == "true"
+
+	if raw {
+		results, err := s.graphService.ExecuteQuery(c.Request.Context(), projectID, req.Query)
+		if err != nil {
+			handleError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"results": results})
+		return
+	}
 
 	// Delegate to service
 	graph, err := s.graphService.ExportGraph(c.Request.Context(), projectID, req.Query, true, lazy)

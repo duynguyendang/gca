@@ -137,7 +137,21 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 
 	s.AddDocument(meb.DocumentID(relPath), content, nil, map[string]any{"project": projectName})
 
-	finalFacts := make([]meb.Fact, 0, len(bundle.Facts))
+	finalFacts := make([]meb.Fact, 0, len(bundle.Facts)+2)
+
+	// Inject Role Tags based on path
+	// fmt.Printf("DEBUG: relPath=%s\n", relPath)
+	if strings.Contains(relPath, "gca-be") || strings.HasSuffix(relPath, ".go") {
+		// fmt.Printf("DEBUG: Tagging %s as backend\n", relPath)
+		finalFacts = append(finalFacts, meb.Fact{Subject: meb.DocumentID(relPath), Predicate: "has_tag", Object: "backend", Graph: "default"})
+	} else if strings.Contains(relPath, "gca-fe") || strings.HasSuffix(relPath, ".ts") || strings.HasSuffix(relPath, ".tsx") {
+		// fmt.Printf("DEBUG: Tagging %s as frontend\n", relPath)
+		finalFacts = append(finalFacts, meb.Fact{Subject: meb.DocumentID(relPath), Predicate: "has_tag", Object: "frontend", Graph: "default"})
+	}
+
+	// Make sure file has type "file"
+	finalFacts = append(finalFacts, meb.Fact{Subject: meb.DocumentID(relPath), Predicate: "type", Object: "file", Graph: "default"})
+
 	for _, f := range bundle.Facts {
 		if f.Predicate == meb.PredCalls {
 			if objStr, ok := f.Object.(string); ok {
