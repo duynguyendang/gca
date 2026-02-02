@@ -24,6 +24,9 @@ type VectorRegistry struct {
 	// revMap maps Internal Index -> GraphID
 	revMap []uint64
 
+	// stringIDs maps Internal Index -> Symbol ID string (for semantic search)
+	stringIDs []string
+
 	// db is the BadgerDB instance for persistence
 	db *badger.DB
 
@@ -43,10 +46,11 @@ func NewRegistry(db *badger.DB) *VectorRegistry {
 	capacity := 25 * 1024 * 1024 // 25MB in bytes
 
 	return &VectorRegistry{
-		data:   make([]int8, 0, capacity),
-		idMap:  make(map[uint64]uint32, 100000),
-		revMap: make([]uint64, 0, 100000),
-		db:     db,
+		data:      make([]int8, 0, capacity),
+		idMap:     make(map[uint64]uint32, 100000),
+		revMap:    make([]uint64, 0, 100000),
+		stringIDs: make([]string, 0, 100000),
+		db:        db,
 	}
 }
 
@@ -102,6 +106,61 @@ func (r *VectorRegistry) Add(id uint64, fullVec []float32) error {
 	}()
 
 	return nil
+}
+
+// AddWithStringID adds a vector with an associated string symbol ID for lookup.
+// This enables mapping search results back to readable symbol IDs.
+func (r *VectorRegistry) AddWithStringID(id uint64, stringID string, fullVec []float32) error {
+	if len(fullVec) < FullDim {
+		return fmt.Errorf("invalid vector dimension: expected at least %d, got %d", FullDim, len(fullVec))
+	}
+
+	// Process to get 64-d MRL vector (normalized)
+	mrlVec := ProcessMRL(fullVec)
+
+	// Quantize to int8 for efficient storage
+	quantized := Quantize(mrlVec)
+
+	r.mu.Lock()
+
+	// Check if ID already exists
+	if idx, exists := r.idMap[id]; exists {
+		// Overwrite existing vector in place
+		copy(r.data[idx*MRLDim:(idx+1)*MRLDim], quantized)
+		// Update string ID too (with bounds check for old snapshots)
+		if int(idx) < len(r.stringIDs) {
+			r.stringIDs[idx] = stringID
+		}
+		r.mu.Unlock()
+	} else {
+		// Append new vector
+		idx := uint32(len(r.revMap))
+		r.idMap[id] = idx
+		r.revMap = append(r.revMap, id)
+		r.stringIDs = append(r.stringIDs, stringID)
+		r.data = append(r.data, quantized...)
+		r.mu.Unlock()
+	}
+
+	// Async disk write for full vector
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		r.persistFullVector(id, fullVec)
+	}()
+
+	return nil
+}
+
+// GetStringID returns the string symbol ID for a given vector uint64 ID.
+func (r *VectorRegistry) GetStringID(id uint64) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if idx, exists := r.idMap[id]; exists && int(idx) < len(r.stringIDs) {
+		return r.stringIDs[idx], true
+	}
+	return "", false
 }
 
 // Count returns the number of vectors in the registry.

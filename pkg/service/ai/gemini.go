@@ -25,9 +25,10 @@ type ProjectStoreManager interface {
 }
 
 type GeminiService struct {
-	client  *genai.Client
-	model   *genai.GenerativeModel
-	manager ProjectStoreManager
+	client         *genai.Client
+	model          *genai.GenerativeModel
+	embeddingModel *genai.EmbeddingModel
+	manager        ProjectStoreManager
 
 	// Loaded Prompts - All AI tasks use external prompt files
 	DatalogPrompt       *prompts.Prompt
@@ -72,6 +73,7 @@ func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreMa
 	return &GeminiService{
 		client:              client,
 		model:               model,
+		embeddingModel:      client.EmbeddingModel("text-embedding-004"),
 		manager:             manager,
 		DatalogPrompt:       loadPrompt("datalog.prompt"),
 		ChatPrompt:          loadPrompt("chat.prompt"),
@@ -80,6 +82,27 @@ func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreMa
 		ResolveSymbolPrompt: loadPrompt("resolve_symbol.prompt"),
 		PrunePrompt:         loadPrompt("prune.prompt"),
 	}, nil
+}
+
+// GetEmbedding generates an embedding vector for the given text using Gemini.
+func (s *GeminiService) GetEmbedding(ctx context.Context, text string) ([]float32, error) {
+	if s.embeddingModel == nil {
+		return nil, fmt.Errorf("embedding model not initialized")
+	}
+	if text == "" {
+		return nil, fmt.Errorf("empty text for embedding")
+	}
+
+	res, err := s.embeddingModel.EmbedContent(ctx, genai.Text(text))
+	if err != nil {
+		return nil, fmt.Errorf("embedding generation failed: %w", err)
+	}
+
+	if res.Embedding == nil || len(res.Embedding.Values) == 0 {
+		return nil, fmt.Errorf("no embedding values returned")
+	}
+
+	return res.Embedding.Values, nil
 }
 
 // Ask processes a user query, optionally focusing on a specific symbol.
@@ -178,10 +201,13 @@ func (s *GeminiService) buildTaskPrompt(ctx context.Context, store *meb.MEBStore
 		return "", fmt.Errorf("path_endpoints.prompt not loaded")
 
 	case "datalog":
+		// Format predicates list from req.Data (array of predicate strings)
+		predicatesList := formatPredicatesList(req.Data)
 		if s.DatalogPrompt != nil {
 			return s.DatalogPrompt.Execute(map[string]interface{}{
-				"Query":    req.Query,
-				"SymbolID": req.SymbolID,
+				"Query":      req.Query,
+				"SymbolID":   req.SymbolID,
+				"Predicates": predicatesList,
 			})
 		}
 		return "", fmt.Errorf("datalog.prompt not loaded")
@@ -198,6 +224,29 @@ func (s *GeminiService) buildTaskPrompt(ctx context.Context, store *meb.MEBStore
 			}
 		}
 		return s.BuildPrompt(ctx, store, fmt.Sprintf("Explain flow: %s. Path: %s", req.Query, pathStr), "")
+
+	case "smart_search_analysis":
+		// Analyze Smart Search results with graph context
+		nodes := formatGraphResults(req.Data, "nodes")
+		links := formatGraphResults(req.Data, "links")
+		prompt := fmt.Sprintf(`User Query: "%s"
+
+The search found the following symbols and their relationships:
+
+**Symbols Found:**
+%s
+
+**Relationships:**
+%s
+
+Analyze these results and answer the user's question. Focus on:
+1. Which symbols directly answer the query
+2. How they relate to each other
+3. What their roles are in the codebase
+
+Provide a clear, actionable answer.`, req.Query, nodes, links)
+
+		return s.BuildPrompt(ctx, store, prompt, "")
 
 	default:
 		return s.BuildPrompt(ctx, store, req.Query, req.SymbolID)
@@ -258,6 +307,24 @@ func formatNodesSimple(data interface{}, limit int) string {
 	return sb.String()
 }
 
+// Helper: Format predicates list for datalog prompt
+func formatPredicatesList(data interface{}) string {
+	if str, ok := data.(string); ok {
+		return str
+	}
+	list, ok := data.([]interface{})
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	for _, item := range list {
+		if predicate, ok := item.(string); ok {
+			sb.WriteString(fmt.Sprintf("- `%s`\n", predicate))
+		}
+	}
+	return sb.String()
+}
+
 // Helper: Format nodes for prune task
 func formatNodeList(data interface{}) string {
 	if str, ok := data.(string); ok {
@@ -276,6 +343,45 @@ func formatNodeList(data interface{}) string {
 			sb.WriteString(fmt.Sprintf("- %s (Kind: %s, ID: %s)\n", name, kind, id))
 		}
 	}
+	return sb.String()
+}
+
+// Helper: Format graph results (nodes or links) for smart_search_analysis
+func formatGraphResults(data interface{}, key string) string {
+	m, ok := data.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	list, ok := m[key].([]interface{})
+	if !ok {
+		return ""
+	}
+
+	var sb strings.Builder
+	if key == "nodes" {
+		for i, item := range list {
+			if node, ok := item.(map[string]interface{}); ok {
+				name, _ := node["name"].(string)
+				kind, _ := node["kind"].(string)
+				id, _ := node["id"].(string)
+				sb.WriteString(fmt.Sprintf("%d. **%s** (Type: %s)\n   ID: `%s`\n", i+1, name, kind, id))
+			}
+		}
+	} else if key == "links" {
+		for i, item := range list {
+			if link, ok := item.(map[string]interface{}); ok {
+				source, _ := link["source"].(string)
+				target, _ := link["target"].(string)
+				relation, _ := link["relation"].(string)
+				if relation == "" {
+					relation = "calls"
+				}
+				sb.WriteString(fmt.Sprintf("%d. `%s` **%s** `%s`\n", i+1, source, relation, target))
+			}
+		}
+	}
+
 	return sb.String()
 }
 

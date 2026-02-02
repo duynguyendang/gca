@@ -70,6 +70,7 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/v1/files", s.handleFiles)
 	s.router.GET("/v1/search/flow", s.handleFlowPath)
 	s.router.GET("/v1/graph/path", s.handleGraphPath)
+	s.router.GET("/v1/semantic-search", s.handleSemanticSearch)
 
 	// AI Endpoints
 	s.router.POST("/v1/ai/ask", s.handleAIAsk)

@@ -427,3 +427,42 @@ func (s *Server) handleGraphPath(c *gin.Context) {
 
 	c.JSON(http.StatusOK, graph)
 }
+
+// handleSemanticSearch performs vector similarity search on embedded documentation.
+// GET /v1/semantic-search?project=X&q=query&k=10
+func (s *Server) handleSemanticSearch(c *gin.Context) {
+	projectID := c.Query("project")
+	query := c.Query("q")
+	kStr := c.DefaultQuery("k", "10")
+
+	k, err := strconv.Atoi(kStr)
+	if err != nil || k <= 0 {
+		k = 10
+	}
+	if k > 50 {
+		k = 50 // Cap results
+	}
+
+	if projectID == "" || query == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project or q parameter", nil))
+		return
+	}
+
+	// Get embedding for query using Gemini Service
+	if s.geminiService == nil {
+		handleError(c, errors.NewAppError(http.StatusServiceUnavailable, "AI service not initialized", nil))
+		return
+	}
+
+	results, err := s.graphService.SemanticSearch(c.Request.Context(), projectID, query, k, s.geminiService)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"query":   query,
+		"count":   len(results),
+		"results": results,
+	})
+}

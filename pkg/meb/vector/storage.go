@@ -79,6 +79,17 @@ func (r *VectorRegistry) SaveSnapshot() error {
 		binary.BigEndian.PutUint64(idsBytes[i*8:(i+1)*8], id)
 	}
 
+	// Serialize stringIDs (for semantic search symbol lookup)
+	var stringIDsBytes []byte
+	for _, sid := range r.stringIDs {
+		idBytes := []byte(sid)
+		// Write length as 4-byte big-endian
+		lenBytes := make([]byte, 4)
+		binary.BigEndian.PutUint32(lenBytes, uint32(len(idBytes)))
+		stringIDsBytes = append(stringIDsBytes, lenBytes...)
+		stringIDsBytes = append(stringIDsBytes, idBytes...)
+	}
+
 	batch := r.db.NewWriteBatch()
 	defer batch.Cancel()
 
@@ -92,6 +103,14 @@ func (r *VectorRegistry) SaveSnapshot() error {
 	if err := batch.Set([]byte("sys:mrl:ids"), idsBytes); err != nil {
 		slog.Error("failed to save IDs snapshot", "error", err)
 		return fmt.Errorf("failed to save IDs snapshot: %w", err)
+	}
+
+	// Save stringIDs snapshot
+	if len(stringIDsBytes) > 0 {
+		if err := batch.Set([]byte("sys:mrl:string_ids"), stringIDsBytes); err != nil {
+			slog.Error("failed to save stringIDs snapshot", "error", err)
+			return fmt.Errorf("failed to save stringIDs snapshot: %w", err)
+		}
 	}
 
 	if err := batch.Flush(); err != nil {
@@ -115,7 +134,7 @@ func (r *VectorRegistry) LoadSnapshot() error {
 
 	slog.Info("loading vector snapshot")
 
-	var vectorsBytes, idsBytes []byte
+	var vectorsBytes, idsBytes, stringIDsBytes []byte
 
 	err := r.db.View(func(txn *badger.Txn) error {
 		// Load vectors
@@ -148,9 +167,26 @@ func (r *VectorRegistry) LoadSnapshot() error {
 			return fmt.Errorf("failed to load IDs snapshot: %w", err)
 		}
 
-		return item.Value(func(val []byte) error {
+		if err := item.Value(func(val []byte) error {
 			idsBytes = make([]byte, len(val))
 			copy(idsBytes, val)
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		// Load stringIDs (for semantic search)
+		item, err = txn.Get([]byte("sys:mrl:string_ids"))
+		if err != nil {
+			if err != badger.ErrKeyNotFound {
+				slog.Warn("failed to load stringIDs snapshot", "error", err)
+			}
+			return nil // Not fatal, just no string IDs
+		}
+
+		return item.Value(func(val []byte) error {
+			stringIDsBytes = make([]byte, len(val))
+			copy(stringIDsBytes, val)
 			return nil
 		})
 	})
@@ -181,6 +217,24 @@ func (r *VectorRegistry) LoadSnapshot() error {
 	r.idMap = make(map[uint64]uint32, numVectors)
 	for idx, id := range r.revMap {
 		r.idMap[id] = uint32(idx)
+	}
+
+	// Deserialize stringIDs (if present)
+	r.stringIDs = make([]string, 0, numVectors)
+	if stringIDsBytes != nil {
+		offset := 0
+		for offset < len(stringIDsBytes) {
+			if offset+4 > len(stringIDsBytes) {
+				break
+			}
+			strLen := binary.BigEndian.Uint32(stringIDsBytes[offset : offset+4])
+			offset += 4
+			if offset+int(strLen) > len(stringIDsBytes) {
+				break
+			}
+			r.stringIDs = append(r.stringIDs, string(stringIDsBytes[offset:offset+int(strLen)]))
+			offset += int(strLen)
+		}
 	}
 
 	slog.Info("vector snapshot loaded successfully",

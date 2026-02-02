@@ -1429,3 +1429,54 @@ func (s *GraphService) GetFlowPath(ctx context.Context, projectID, fromID, toID 
 
 	return &export.D3Graph{Nodes: nodes, Links: links}, nil
 }
+
+// SemanticSearchResult represents a single semantic search result.
+type SemanticSearchResult struct {
+	SymbolID string  `json:"symbol_id"`
+	Score    float32 `json:"score"`
+	Name     string  `json:"name,omitempty"`
+}
+
+// SemanticSearch performs vector similarity search on embedded documentation.
+// It embeds the query using Gemini and searches VectorRegistry for similar docs.
+func (s *GraphService) SemanticSearch(ctx context.Context, projectID, query string, k int, gemini interface {
+	GetEmbedding(ctx context.Context, text string) ([]float32, error)
+}) ([]SemanticSearchResult, error) {
+	store, err := s.getStore(projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get embedding for query
+	embedding, err := gemini.GetEmbedding(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to embed query: %w", err)
+	}
+
+	// Search vectors
+	vectorResults, err := store.Vectors().Search(embedding, k)
+	if err != nil {
+		return nil, fmt.Errorf("vector search failed: %w", err)
+	}
+
+	// Map results to symbol IDs
+	results := make([]SemanticSearchResult, 0, len(vectorResults))
+	for _, vr := range vectorResults {
+		symbolID, ok := store.Vectors().GetStringID(vr.ID)
+		if !ok {
+			continue
+		}
+		// Extract name from symbol ID
+		name := symbolID
+		if parts := strings.Split(symbolID, ":"); len(parts) > 1 {
+			name = parts[len(parts)-1]
+		}
+		results = append(results, SemanticSearchResult{
+			SymbolID: symbolID,
+			Score:    vr.Score,
+			Name:     name,
+		})
+	}
+
+	return results, nil
+}

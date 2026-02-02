@@ -144,7 +144,9 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 			}
 			p := parent[curr]
 			pred := edgePred[curr]
-			links = append([]export.D3Link{{Source: p, Target: curr, Relation: pred}}, links...)
+			if p != "" { // Only create link if parent exists (not at start)
+				links = append([]export.D3Link{{Source: p, Target: curr, Relation: pred}}, links...)
+			}
 			curr = p
 		}
 		fmt.Printf("[Pathfinder] Path RECONSTRUCTED: %d nodes, %d links\n", len(path), len(links))

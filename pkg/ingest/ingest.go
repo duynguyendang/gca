@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 
 	"github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/meb/vector"
 )
 
 var symbolTable = make(map[string]string)
@@ -27,6 +28,17 @@ const MaxWorkers = 8
 func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 	ctx := context.Background()
 	ext := NewTreeSitterExtractor()
+
+	// Initialize embedding service for semantic doc search
+	var embeddingService *EmbeddingService
+	var embeddingErr error
+	embeddingService, embeddingErr = NewEmbeddingService(ctx)
+	if embeddingErr != nil {
+		log.Printf("Warning: Embedding service unavailable: %v (skipping doc embeddings)", embeddingErr)
+	} else {
+		defer embeddingService.Close()
+		log.Println("Embedding service initialized for semantic doc search")
+	}
 
 	// Pass 1: Collect Symbols and File Index
 	fmt.Printf("Pass 1: Collecting symbols and index for %s...\n", projectName)
@@ -84,7 +96,7 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 			for path := range jobs {
 				rel, _ := filepath.Rel(sourceDir, path)
 				fmt.Printf("  Processing %s/%s...\n", projectName, rel)
-				if err := processFileIncremental(ctx, s, localExt, path, projectName, sourceDir); err != nil {
+				if err := processFileIncremental(ctx, s, localExt, embeddingService, path, projectName, sourceDir); err != nil {
 					log.Printf("Error: %v", err)
 					pass2Err.Add(1)
 				}
@@ -118,7 +130,7 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 	return nil
 }
 
-func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor, path string, projectName string, sourceRoot string) error {
+func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *EmbeddingService, path string, projectName string, sourceRoot string) error {
 	relPath, _ := filepath.Rel(sourceRoot, path)
 	if projectName != "" {
 		relPath = filepath.Join(projectName, relPath)
@@ -136,6 +148,25 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 	}
 
 	s.AddDocument(meb.DocumentID(relPath), content, nil, map[string]any{"project": projectName})
+
+	// Embed documentation for semantic search
+	if embedder != nil {
+		for _, fact := range bundle.Facts {
+			if fact.Predicate == meb.PredHasDoc {
+				docText, ok := fact.Object.(string)
+				if ok && len(docText) > 10 { // Only embed meaningful docs
+					go func(symbolID meb.DocumentID, text string) {
+						embed, err := embedder.GetEmbedding(ctx, text)
+						if err == nil && len(embed) >= vector.FullDim {
+							// Use hash of symbol ID as vector ID, store original string for lookup
+							vecID := hashSymbolID(string(symbolID))
+							s.Vectors().AddWithStringID(vecID, string(symbolID), embed)
+						}
+					}(fact.Subject, docText)
+				}
+			}
+		}
+	}
 
 	// Store symbol documents (with file, start_line, end_line metadata for snippet extraction)
 	for _, doc := range bundle.Documents {
@@ -182,6 +213,17 @@ func calculateHash(path string) (string, error) {
 	h := sha256.New()
 	io.Copy(h, f)
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// hashSymbolID converts a symbol ID string to uint64 for vector storage.
+// Uses FNV-1a hash for fast, deterministic conversion.
+func hashSymbolID(id string) uint64 {
+	h := uint64(14695981039346656037) // FNV offset basis
+	for i := 0; i < len(id); i++ {
+		h ^= uint64(id[i])
+		h *= 1099511628211 // FNV prime
+	}
+	return h
 }
 
 func isSupportedFile(path string) bool {
