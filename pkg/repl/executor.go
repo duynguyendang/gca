@@ -43,7 +43,7 @@ func ExecutePlan(ctx context.Context, cfg Config, s *meb.MEBStore, session *Exec
 
 			// Attempt self-correction
 			fmt.Println("   🤔 Attempting self-correction...")
-			correctedQuery, corrErr := reflectAndCorrect(ctx, step, session, plannerPrompt)
+			correctedQuery, corrErr := reflectAndCorrect(ctx, cfg, step, session, plannerPrompt)
 			if corrErr != nil {
 				fmt.Printf("   ❌ Self-correction failed: %v\n\n", corrErr)
 				continue
@@ -62,7 +62,7 @@ func ExecutePlan(ctx context.Context, cfg Config, s *meb.MEBStore, session *Exec
 			fmt.Println("   📭 No results found.")
 			fmt.Println("   🤔 Attempting self-correction...")
 
-			correctedQuery, corrErr := reflectAndCorrect(ctx, step, session, plannerPrompt)
+			correctedQuery, corrErr := reflectAndCorrect(ctx, cfg, step, session, plannerPrompt)
 			if corrErr != nil {
 				fmt.Printf("   ⚠️  Self-correction failed: %v\n\n", corrErr)
 				// Store empty results and continue
@@ -180,8 +180,9 @@ func processVariableInjection(query string, session *ExecutionSession) string {
 }
 
 // reflectAndCorrect asks Gemini to suggest an alternative query when a step fails or returns no results.
-func reflectAndCorrect(ctx context.Context, step *PlanStep, session *ExecutionSession, plannerPrompt *prompts.Prompt) (string, error) {
-	apiKey := os.Getenv("GEMINI_API_KEY")
+// reflectAndCorrect asks Gemini to suggest an alternative query when a step fails or returns no results.
+func reflectAndCorrect(ctx context.Context, cfg Config, step *PlanStep, session *ExecutionSession, plannerPrompt *prompts.Prompt) (string, error) {
+	apiKey := cfg.GeminiAPIKey
 	if apiKey == "" {
 		return "", fmt.Errorf("GEMINI_API_KEY not set")
 	}
@@ -195,7 +196,7 @@ func reflectAndCorrect(ctx context.Context, step *PlanStep, session *ExecutionSe
 	}
 	defer client.Close()
 
-	model := client.GenerativeModel("gemini-3-flash-preview")
+	model := client.GenerativeModel(cfg.Model)
 	model.SetTemperature(0.2)
 
 	// Create reflection prompt

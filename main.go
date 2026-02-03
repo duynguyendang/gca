@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/ingest"
@@ -13,8 +16,6 @@ import (
 	"github.com/duynguyendang/gca/pkg/meb/store"
 	"github.com/duynguyendang/gca/pkg/repl"
 	"github.com/duynguyendang/gca/pkg/server"
-
-	"context"
 
 	"github.com/joho/godotenv"
 )
@@ -105,27 +106,49 @@ func main() {
 		fmt.Printf("Running in INGESTION mode.\nSource: %s\nData: %s\n", sourceDir, dataDir)
 	}
 
+	// Create context that cancels on signal
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle signals
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		fmt.Println("\nReceived signal, shutting down gracefully...")
+		cancel()
+	}()
+
 	s, err := meb.NewMEBStore(cfg)
 	if err != nil {
 		log.Fatalf("Failed to create MEB store: %v", err)
 	}
+	// We handle Close manually on exit or signal
+
+	// Ensure Close is called eventually
 	defer s.Close()
 
 	if *ingestMode {
 		// Ingest backend (Go) files from source directory
 		projectName := filepath.Base(dataDir)
-		if err := ingest.Run(s, projectName, sourceDir); err != nil {
-			s.Close()
-			log.Fatalf("Ingestion failed for %s: %v", projectName, err)
-		}
+		// Run ingestion in a goroutine so we can wait closer
+		errChan := make(chan error, 1)
+		go func() {
+			errChan <- ingest.Run(s, projectName, sourceDir)
+		}()
 
-		// Note: When sourceDir is the parent directory (e.g., gca-hackathon),
-		// both gca/ and gca-fe/ are automatically ingested under the "gca-be" project.
-		// The TypeScript/React files will have IDs like "gca-be/gca-fe/App.tsx:symbolName"
-
-		// Force stats recalc only in write mode
-		if _, err := s.RecalculateStats(); err != nil {
-			log.Printf("Stats recalc error: %v", err)
+		select {
+		case <-ctx.Done():
+			fmt.Println("Ingestion interrupted, closing store...")
+			// Store close deferred
+		case err := <-errChan:
+			if err != nil {
+				log.Printf("Ingestion failed: %v", err)
+			}
+			// Recalc stats
+			if _, err := s.RecalculateStats(); err != nil {
+				log.Printf("Stats recalc error: %v", err)
+			}
 		}
 	} else {
 		// Start Interactive Repl
@@ -138,6 +161,6 @@ func main() {
 			replCfg.Model = model
 		}
 
-		repl.Run(context.Background(), replCfg, s)
+		repl.Run(ctx, replCfg, s)
 	}
 }

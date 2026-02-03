@@ -34,7 +34,9 @@ func ExtractKeywords(ctx context.Context, query string) ([]string, error) {
 
 	model := client.GenerativeModel(p.Config.Model)
 	if p.Config.Model == "" {
-		model = client.GenerativeModel("gemini-3-flash-preview")
+		// Use default from config
+		defCfg := DefaultConfig()
+		model = client.GenerativeModel(defCfg.Model)
 	}
 	model.SetTemperature(p.Config.Temperature)
 

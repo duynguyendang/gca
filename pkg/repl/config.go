@@ -4,7 +4,7 @@ package repl
 type Config struct {
 	// GeminiAPIKey is the API key for Google Gemini.
 	GeminiAPIKey string
-	// Model is the default model to use (e.g., "gemini-1.5-pro").
+	// Model is the default model to use (e.g., "gemini-3-flash-preview").
 	Model string
 	// Temperature is the default temperature for generation.
 	Temperature float32
@@ -15,7 +15,7 @@ type Config struct {
 // DefaultConfig returns a default configuration.
 func DefaultConfig() Config {
 	return Config{
-		Model:       "gemini-1.5-flash",
+		Model:       "gemini-3-flash-preview",
 		Temperature: 0.2,
 	}
 }

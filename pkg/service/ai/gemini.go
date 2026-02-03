@@ -65,7 +65,7 @@ func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreMa
 	// Use a default model, can be configured later
 	modelName := os.Getenv("GEMINI_MODEL")
 	if modelName == "" {
-		modelName = "gemini-2.0-flash-exp"
+		modelName = "gemini-3-flash-preview"
 	}
 	model := client.GenerativeModel(modelName)
 	model.SetTemperature(0.2) // Low temperature for technical accuracy
@@ -126,6 +126,13 @@ func (s *GeminiService) HandleRequest(ctx context.Context, req AIRequest) (strin
 	if err != nil {
 		return "", fmt.Errorf("failed to build prompt: %w", err)
 	}
+
+	// Log prompt length for debugging
+	log.Printf("Sending AI Prompt (Task: %s, Length: %d chars)", req.Task, len(prompt))
+
+	// Add timeout to prevent hanging, extended for Gemini 3
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
 
 	resp, err := s.model.GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {
@@ -229,8 +236,10 @@ func (s *GeminiService) buildTaskPrompt(ctx context.Context, store *meb.MEBStore
 		// Analyze Smart Search results with graph context
 		nodes := formatGraphResults(req.Data, "nodes")
 		links := formatGraphResults(req.Data, "links")
-		prompt := fmt.Sprintf(`User Query: "%s"
+		prompt := fmt.Sprintf(`You are an expert Software Architect assistant.
+Analyze these search results and answer the user's question.
 
+## Context
 The search found the following symbols and their relationships:
 
 **Symbols Found:**
@@ -239,14 +248,17 @@ The search found the following symbols and their relationships:
 **Relationships:**
 %s
 
-Analyze these results and answer the user's question. Focus on:
+## User Question
+"%s"
+
+Focus on:
 1. Which symbols directly answer the query
 2. How they relate to each other
 3. What their roles are in the codebase
 
-Provide a clear, actionable answer.`, req.Query, nodes, links)
+Provide a clear, actionable answer based ONLY on the context provided.`, nodes, links, req.Query)
 
-		return s.BuildPrompt(ctx, store, prompt, "")
+		return prompt, nil
 
 	default:
 		return s.BuildPrompt(ctx, store, req.Query, req.SymbolID)

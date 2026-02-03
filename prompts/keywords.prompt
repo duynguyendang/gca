@@ -1,5 +1,5 @@
 ---
-model: gemini-3-flash-preview
+
 temperature: 0.1
 ---
 You are a Technical Keyword Extractor for a code search engine.

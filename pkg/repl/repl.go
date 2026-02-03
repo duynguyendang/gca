@@ -421,10 +421,12 @@ func explainResults(ctx context.Context, cfg Config, session *SessionContext, ex
 	}
 	defer client.Close()
 
-	model := client.GenerativeModel(explainPrompt.Config.Model)
-	if explainPrompt.Config.Model == "" {
-		model = client.GenerativeModel("gemini-3-flash-preview")
+	// Use model from config, which defaults to env or fallback in DefaultConfig()
+	modelName := cfg.Model
+	if explainPrompt.Config.Model != "" {
+		modelName = explainPrompt.Config.Model
 	}
+	model := client.GenerativeModel(modelName)
 	model.SetTemperature(explainPrompt.Config.Temperature)
 
 	resp, err := model.GenerateContent(ctx, genai.Text(promptStr))
@@ -479,15 +481,16 @@ func askGeminiWithContext(ctx context.Context, cfg Config, p *prompts.Prompt, qu
 	}
 	defer client.Close()
 
-	model := client.GenerativeModel(p.Config.Model)
-	if model == nil {
-		// Fallback if config model is empty ?? or just let it default?
-		// GenerativeModel returns a value, so we just use what we have.
-		// If p.Config.Model is empty, it might fail. Let's assume the prompt file is valid.
-		if p.Config.Model == "" {
-			model = client.GenerativeModel("gemini-3-flash-preview")
-		}
+	// Use model from config (which accounts for env var)
+	// If prompt config overrides it, use that?
+	// Usually prompt config model is bare or specific. Let's prefer global config if prompt doesn't specify?
+	// ACTUALLY, repl.Config.Model is the source of truth for the session.
+	modelName := cfg.Model
+	if p.Config.Model != "" {
+		modelName = p.Config.Model
 	}
+
+	model := client.GenerativeModel(modelName)
 	model.SetTemperature(p.Config.Temperature)
 
 	// Prepare data for template
@@ -558,10 +561,12 @@ func executePlanCommand(ctx context.Context, cfg Config, s *meb.MEBStore, goal s
 	}
 	defer client.Close()
 
-	model := client.GenerativeModel(plannerPrompt.Config.Model)
-	if plannerPrompt.Config.Model == "" {
-		model = client.GenerativeModel("gemini-3-flash-preview")
+	// Use model from config
+	modelName := cfg.Model
+	if plannerPrompt.Config.Model != "" {
+		modelName = plannerPrompt.Config.Model
 	}
+	model := client.GenerativeModel(modelName)
 	model.SetTemperature(plannerPrompt.Config.Temperature)
 
 	resp, err := model.GenerateContent(ctx, genai.Text(promptStr))
