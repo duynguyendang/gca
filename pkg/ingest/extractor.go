@@ -237,6 +237,7 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 			meb.Fact{Subject: meb.DocumentID(sym.ID), Predicate: meb.PredType, Object: sym.Type, Graph: "default"},
 			meb.Fact{Subject: meb.DocumentID(relPath), Predicate: meb.PredDefines, Object: sym.ID, Graph: "default"},
 			meb.Fact{Subject: meb.DocumentID(sym.ID), Predicate: meb.PredInPackage, Object: filePackage, Graph: "default"},
+			meb.Fact{Subject: meb.DocumentID(sym.ID), Predicate: meb.PredName, Object: sym.Name, Graph: "default"},
 		)
 
 		// Role Tagging

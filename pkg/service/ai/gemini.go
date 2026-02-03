@@ -131,7 +131,7 @@ func (s *GeminiService) HandleRequest(ctx context.Context, req AIRequest) (strin
 	log.Printf("Sending AI Prompt (Task: %s, Length: %d chars)", req.Task, len(prompt))
 
 	// Add timeout to prevent hanging, extended for Gemini 3
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
 	resp, err := s.model.GenerateContent(ctx, genai.Text(prompt))

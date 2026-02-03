@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/common/errors"
@@ -22,12 +24,17 @@ type ProjectStoreManager interface {
 
 // GraphService handles graph query and enrichment operations.
 type GraphService struct {
-	manager ProjectStoreManager
+	manager         ProjectStoreManager
+	projectMapCache map[string]*export.D3Graph
+	cacheMu         sync.RWMutex
 }
 
 // NewGraphService creates a new GraphService.
 func NewGraphService(manager ProjectStoreManager) *GraphService {
-	return &GraphService{manager: manager}
+	return &GraphService{
+		manager:         manager,
+		projectMapCache: make(map[string]*export.D3Graph),
+	}
 }
 
 // ListProjects returns a list of available projects.
@@ -931,12 +938,15 @@ func (s *GraphService) findFilesWithPrefix(store *meb.MEBStore, prefix string) [
 
 // GetProjectMap returns a high-level view of file dependencies (imports only).
 func (s *GraphService) GetProjectMap(ctx context.Context, projectID string) (*export.D3Graph, error) {
+	// Check Cache
+	s.cacheMu.RLock()
+	if graph, ok := s.projectMapCache[projectID]; ok {
+		s.cacheMu.RUnlock()
+		return graph, nil
+	}
+	s.cacheMu.RUnlock()
+
 	// Query only "imports" relationships between files
-	// We want triples(?s, "imports", ?o) where ?s is a file?
-	// Actually typical pattern: triples(?file, "imports", ?importedPackage)
-	// But usually we want file-to-file or package-to-package.
-	// Task says: "Query only imports predicates between files."
-	// Let's assume standard query: triples(?s, "imports", ?o)
 	query := `triples(?s, "imports", ?o)`
 
 	// Execute with hydrate=false
@@ -946,13 +956,54 @@ func (s *GraphService) GetProjectMap(ctx context.Context, projectID string) (*ex
 	}
 
 	// Resolve package nodes to file nodes so they are valid internal nodes
-	// This prevents the frontend from treating them as external/empty package nodes
 	store, err := s.getStore(projectID)
 	if err == nil {
 		s.resolvePackageImportsToFiles(ctx, store, graph, "")
 	}
 
+	// Cache result
+	s.cacheMu.Lock()
+	s.projectMapCache[projectID] = graph
+	s.cacheMu.Unlock()
+
 	return graph, nil
+}
+
+// GetSubgraph returns a subset of the graph containing the specified nodes and their connections.
+// It includes boundary links (links to nodes not in the subset) to allow frontend rewiring.
+func (s *GraphService) GetSubgraph(ctx context.Context, projectID string, ids []string) (*export.D3Graph, error) {
+	// Use cached project map for speed
+	fullGraph, err := s.GetProjectMap(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	idSet := make(map[string]bool)
+	for _, id := range ids {
+		idSet[id] = true
+	}
+
+	subgraph := &export.D3Graph{
+		Nodes: make([]export.D3Node, 0, len(ids)),
+		Links: make([]export.D3Link, 0),
+	}
+
+	// Filter Nodes
+	for _, n := range fullGraph.Nodes {
+		if idSet[n.ID] {
+			subgraph.Nodes = append(subgraph.Nodes, n)
+		}
+	}
+
+	// Filter Links (Internal + Boundary)
+	for _, l := range fullGraph.Links {
+		// Include if EITHER end is in the set
+		if idSet[l.Source] || idSet[l.Target] {
+			subgraph.Links = append(subgraph.Links, l)
+		}
+	}
+
+	return subgraph, nil
 }
 
 // GetFileDetails returns detailed internal structure of a file.
@@ -1479,4 +1530,143 @@ func (s *GraphService) SemanticSearch(ctx context.Context, projectID, query stri
 	}
 
 	return results, nil
+}
+
+// GetClusterGraph applies Leiden clustering to reduce large graphs.
+// GetClusterGraph executes a query and returns a clustered graph for large result sets.
+func (s *GraphService) GetClusterGraph(ctx context.Context, projectID, query string) (*export.D3Graph, error) {
+	// 1. Get Full Graph
+	fullGraph, err := s.ExportGraph(ctx, projectID, query, true, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Delegate to ClusterGraphData
+	return s.ClusterGraphData(fullGraph)
+}
+
+// ClusterGraphData takes an existing D3Graph and applies clustering to it.
+func (s *GraphService) ClusterGraphData(fullGraph *export.D3Graph) (*export.D3Graph, error) {
+	log.Printf("[ClusterGraphData] Starting with %d nodes and %d links", len(fullGraph.Nodes), len(fullGraph.Links))
+
+	if len(fullGraph.Nodes) == 0 {
+		return &export.D3Graph{Nodes: []export.D3Node{}, Links: []export.D3Link{}}, nil
+	}
+
+	// Only cluster if graph is large (> 500 nodes for meaningful clustering)
+	if len(fullGraph.Nodes) < 500 {
+		return fullGraph, nil
+	}
+
+	// Convert to GraphNode and GraphLink format
+	nodes := make([]GraphNode, len(fullGraph.Nodes))
+	for i, n := range fullGraph.Nodes {
+		nodes[i] = GraphNode{
+			ID:   n.ID,
+			Name: n.Name,
+			Kind: n.Kind,
+		}
+	}
+
+	links := make([]GraphLink, len(fullGraph.Links))
+	for i, l := range fullGraph.Links {
+		links[i] = GraphLink{
+			Source: l.Source,
+			Target: l.Target,
+		}
+	}
+
+	// Run Leiden clustering
+	clusteringSvc := NewClusteringService()
+	log.Println("[ClusterGraphData] Running Leiden algorithm...")
+	result := clusteringSvc.DetectCommunitiesLeiden(nodes, links)
+	log.Printf("[ClusterGraphData] Leiden returned %d clusters", len(result.Clusters))
+
+	// Build SuperNode graph
+	superNodes := make([]export.D3Node, 0, len(result.Clusters))
+	superLinks := make([]export.D3Link, 0)
+
+	// Create SuperNodes (one per cluster)
+	for clusterID, memberIDs := range result.Clusters {
+		// Determine Cluster Name based on common directory
+		dirCounts := make(map[string]int)
+		for _, id := range memberIDs {
+			// Extract directory from ID (assuming ID is file path)
+			lastSlash := strings.LastIndex(id, "/")
+			if lastSlash != -1 {
+				dir := id[:lastSlash]
+				dirCounts[dir]++
+			} else {
+				dirCounts["/"]++
+			}
+		}
+
+		bestDir := ""
+		maxCount := -1
+		for dir, count := range dirCounts {
+			if count > maxCount {
+				maxCount = count
+				bestDir = dir
+			}
+		}
+
+		// Create short name from directory (last 2 segments)
+		clusterLabel := fmt.Sprintf("Cluster %d", clusterID)
+		if bestDir != "" && bestDir != "/" {
+			parts := strings.Split(bestDir, "/")
+			if len(parts) > 2 {
+				clusterLabel = strings.Join(parts[len(parts)-2:], "/") // e.g. "pkg/service"
+			} else {
+				clusterLabel = bestDir
+			}
+		} else {
+			clusterLabel = "Root"
+		}
+
+		superNodes = append(superNodes, export.D3Node{
+			ID:   fmt.Sprintf("cluster_%d", clusterID),
+			Name: fmt.Sprintf("%s (%d)", clusterLabel, len(memberIDs)),
+			Kind: "cluster",
+			Metadata: map[string]string{
+				"cluster_id":     fmt.Sprintf("%d", clusterID),
+				"member_count":   fmt.Sprintf("%d", len(memberIDs)),
+				"representative": bestDir,
+				"members":        strings.Join(memberIDs, ","),
+			},
+		})
+	}
+
+	// Build SuperLinks (aggregate edges between clusters)
+	linkWeights := make(map[string]int) // "clusterA->clusterB" -> count
+
+	for _, l := range fullGraph.Links {
+		srcCluster := result.NodeCluster[l.Source]
+		tgtCluster := result.NodeCluster[l.Target]
+
+		if srcCluster == tgtCluster {
+			continue // Skip internal edges
+		}
+
+		key := fmt.Sprintf("cluster_%d->cluster_%d", srcCluster, tgtCluster)
+		linkWeights[key]++
+	}
+
+	for key, weight := range linkWeights {
+		parts := strings.Split(key, "->")
+		if len(parts) != 2 {
+			continue
+		}
+
+		superLinks = append(superLinks, export.D3Link{
+			Source:   parts[0],
+			Target:   parts[1],
+			Relation: "aggregated",
+			Weight:   float64(weight),
+		})
+	}
+
+	return &export.D3Graph{
+		Nodes: superNodes,
+		Links: superLinks,
+	}, nil
 }

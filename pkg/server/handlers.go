@@ -39,6 +39,7 @@ func (s *Server) handleQuery(c *gin.Context) {
 	projectID := c.Query("project")
 	lazy := c.Query("lazy") == "true"
 	raw := c.Query("raw") == "true"
+	autocluster := c.Query("nocluster") != "true" // Auto-cluster by default unless ?nocluster=true
 
 	if raw {
 		results, err := s.graphService.ExecuteQuery(c.Request.Context(), projectID, req.Query)
@@ -55,6 +56,16 @@ func (s *Server) handleQuery(c *gin.Context) {
 	if err != nil {
 		handleError(c, err)
 		return
+	}
+
+	// Auto-cluster if too many nodes (>500)
+	if autocluster && len(graph.Nodes) > 500 {
+		clustered, clusterErr := s.graphService.GetClusterGraph(c.Request.Context(), projectID, req.Query)
+		if clusterErr == nil && len(clustered.Nodes) > 0 {
+			c.JSON(http.StatusOK, clustered)
+			return
+		}
+		// Fall back to original if clustering fails
 	}
 
 	c.JSON(http.StatusOK, graph)
@@ -258,10 +269,21 @@ func (s *Server) handleGraphMap(c *gin.Context) {
 		return
 	}
 
+	autocluster := c.Query("nocluster") != "true"
+
 	graph, err := s.graphService.GetProjectMap(c.Request.Context(), projectID)
 	if err != nil {
 		handleError(c, err)
 		return
+	}
+
+	// Auto-cluster if too many nodes (>500)
+	if autocluster && len(graph.Nodes) > 500 {
+		clustered, clusterErr := s.graphService.ClusterGraphData(graph)
+		if clusterErr == nil && len(clustered.Nodes) > 0 {
+			c.JSON(http.StatusOK, clustered)
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, graph)
@@ -465,4 +487,49 @@ func (s *Server) handleSemanticSearch(c *gin.Context) {
 		"count":   len(results),
 		"results": results,
 	})
+}
+
+// handleGraphCluster returns a clustered graph for large result sets.
+// GET /v1/graph/cluster?project=X&query=...
+func (s *Server) handleGraphCluster(c *gin.Context) {
+	projectID := c.Query("project")
+	query := c.Query("query")
+
+	if projectID == "" || query == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project or query parameter", nil))
+		return
+	}
+
+	graph, err := s.graphService.GetClusterGraph(c.Request.Context(), projectID, query)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, graph)
+}
+
+// handleGraphSubgraph returns a subgraph matching the provided IDs.
+func (s *Server) handleGraphSubgraph(c *gin.Context) {
+	var req struct {
+		Ids []string `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Invalid request body", err))
+		return
+	}
+
+	projectID := c.Query("project")
+	if projectID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+		return
+	}
+
+	graph, err := s.graphService.GetSubgraph(c.Request.Context(), projectID, req.Ids)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, graph)
 }

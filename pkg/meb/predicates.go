@@ -13,6 +13,7 @@ const (
 	PredHasRole    = "has_role"   // Universal Role (entry_point, data_model, utility)
 	PredCallsAPI   = "calls_api"  // FE -> Virtual URI
 	PredHandledBy  = "handled_by" // Virtual URI -> BE Handler
+	PredName       = "name"       // Human readable name
 )
 
 // System/Whitelisted Predicates
