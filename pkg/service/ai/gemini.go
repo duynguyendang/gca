@@ -31,12 +31,15 @@ type GeminiService struct {
 	manager        ProjectStoreManager
 
 	// Loaded Prompts - All AI tasks use external prompt files
-	DatalogPrompt       *prompts.Prompt
-	ChatPrompt          *prompts.Prompt
-	PathNarrativePrompt *prompts.Prompt
-	PathEndpointsPrompt *prompts.Prompt
-	ResolveSymbolPrompt *prompts.Prompt
-	PrunePrompt         *prompts.Prompt
+	DatalogPrompt        *prompts.Prompt
+	ChatPrompt           *prompts.Prompt
+	PathNarrativePrompt  *prompts.Prompt
+	PathEndpointsPrompt  *prompts.Prompt
+	ResolveSymbolPrompt  *prompts.Prompt
+	PrunePrompt          *prompts.Prompt
+	SmartSearchPrompt    *prompts.Prompt
+	MultiFilePrompt      *prompts.Prompt
+	DefaultContextPrompt *prompts.Prompt
 }
 
 func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreManager) (*GeminiService, error) {
@@ -71,16 +74,19 @@ func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreMa
 	model.SetTemperature(0.2) // Low temperature for technical accuracy
 
 	return &GeminiService{
-		client:              client,
-		model:               model,
-		embeddingModel:      client.EmbeddingModel("text-embedding-004"),
-		manager:             manager,
-		DatalogPrompt:       loadPrompt("datalog.prompt"),
-		ChatPrompt:          loadPrompt("chat.prompt"),
-		PathNarrativePrompt: loadPrompt("path_narrative.prompt"),
-		PathEndpointsPrompt: loadPrompt("path_endpoints.prompt"),
-		ResolveSymbolPrompt: loadPrompt("resolve_symbol.prompt"),
-		PrunePrompt:         loadPrompt("prune.prompt"),
+		client:               client,
+		model:                model,
+		embeddingModel:       client.EmbeddingModel("text-embedding-004"),
+		manager:              manager,
+		DatalogPrompt:        loadPrompt("datalog.prompt"),
+		ChatPrompt:           loadPrompt("chat.prompt"),
+		PathNarrativePrompt:  loadPrompt("path_narrative.prompt"),
+		PathEndpointsPrompt:  loadPrompt("path_endpoints.prompt"),
+		ResolveSymbolPrompt:  loadPrompt("resolve_symbol.prompt"),
+		PrunePrompt:          loadPrompt("prune.prompt"),
+		SmartSearchPrompt:    loadPrompt("smart_search.prompt"),
+		MultiFilePrompt:      loadPrompt("multi_file.prompt"),
+		DefaultContextPrompt: loadPrompt("default_context.prompt"),
 	}, nil
 }
 
@@ -236,29 +242,62 @@ func (s *GeminiService) buildTaskPrompt(ctx context.Context, store *meb.MEBStore
 		// Analyze Smart Search results with graph context
 		nodes := formatGraphResults(req.Data, "nodes")
 		links := formatGraphResults(req.Data, "links")
-		prompt := fmt.Sprintf(`You are an expert Software Architect assistant.
-Analyze these search results and answer the user's question.
 
-## Context
-The search found the following symbols and their relationships:
+		if s.SmartSearchPrompt != nil {
+			return s.SmartSearchPrompt.Execute(map[string]interface{}{
+				"Nodes": nodes,
+				"Links": links,
+				"Query": req.Query,
+			})
+		}
+		return "", fmt.Errorf("smart_search.prompt not loaded")
 
-**Symbols Found:**
-%s
+	case "multi_file_summary":
+		// Data is list of file IDs
+		fileIDs := make([]string, 0)
+		if list, ok := req.Data.([]interface{}); ok {
+			for _, item := range list {
+				if s, ok := item.(string); ok {
+					fileIDs = append(fileIDs, s)
+				}
+			}
+		}
 
-**Relationships:**
-%s
+		// Limit to top 20 files to prevent context explosion
+		if len(fileIDs) > 20 {
+			fileIDs = fileIDs[:20]
+		}
 
-## User Question
-"%s"
+		var contextBuilder strings.Builder
+		contextBuilder.WriteString("## Context\n")
 
-Focus on:
-1. Which symbols directly answer the query
-2. How they relate to each other
-3. What their roles are in the codebase
+		var wg sync.WaitGroup
+		var mu sync.Mutex
 
-Provide a clear, actionable answer based ONLY on the context provided.`, nodes, links, req.Query)
+		for _, fileID := range fileIDs {
+			wg.Add(1)
+			go func(id string) {
+				defer wg.Done()
+				var localSb strings.Builder
+				localCtx, cancel := context.WithTimeout(ctx, 3*time.Second) // 3s per file
+				defer cancel()
 
-		return prompt, nil
+				if err := s.appendSymbolContext(localCtx, store, id, &localSb); err == nil {
+					mu.Lock()
+					contextBuilder.WriteString(localSb.String())
+					mu.Unlock()
+				}
+			}(fileID)
+		}
+		wg.Wait()
+
+		if s.MultiFilePrompt != nil {
+			return s.MultiFilePrompt.Execute(map[string]interface{}{
+				"Context": contextBuilder.String(),
+				"Query":   req.Query,
+			})
+		}
+		return "", fmt.Errorf("multi_file.prompt not loaded")
 
 	default:
 		return s.BuildPrompt(ctx, store, req.Query, req.SymbolID)
@@ -530,6 +569,13 @@ func (s *GeminiService) BuildPrompt(ctx context.Context, store *meb.MEBStore, qu
 			wg.Wait()
 		}
 
+	}
+
+	if s.DefaultContextPrompt != nil {
+		return s.DefaultContextPrompt.Execute(map[string]interface{}{
+			"Context": contextBuilder.String(),
+			"Query":   query,
+		})
 	}
 
 	prompt := fmt.Sprintf(`You are an expert Software Architect assistant.
