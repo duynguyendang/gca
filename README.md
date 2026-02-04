@@ -36,6 +36,8 @@ GET /v1/semantic-search?project=gca&q=authentication logic&k=10
 - **Smart Search Synthesis**: Analyzes query results with full graph context
 - **Architectural Insights**: Explains component roles and design patterns
 - **Path Narratives**: Traces and explains interaction flows
+- **Semantic Passport**: Injects "Identity" metadata (Roles, Layers, Tags) for every symbol
+- **Three-Layer Context**: Combines Global (Project), Local (File/Package), and Relational (Graph) context
 - **Context-Aware Prompts**: Injects local symbols, relations, and documentation
 
 ### 📦 **Code Ingestion**
@@ -76,6 +78,7 @@ GET /v1/semantic-search?project=gca&q=authentication logic&k=10
 - `GET /v1/graph/file-details` - Symbol-level details
 - `GET /v1/graph/backbone` - Cross-file architecture
 - `GET /v1/graph/path` - Shortest path between symbols
+- `GET /v1/graph/subgraph` - Retrieve specific subgraph for cluster expansion
 
 **AI Integration**  
 - `POST /v1/ai/ask` - Natural language queries with context injection
@@ -302,6 +305,29 @@ curl 'http://localhost:8080/v1/graph/path?project=gca&source=main.go:main&target
 }
 ```
 
+### Cluster Expansion
+
+**Endpoint:** `GET /v1/graph/subgraph`
+
+Retrieve a subgraph for specific nodes (used for expanding clusters).
+
+**Parameters:**
+- `project`: Project ID
+- `nodes`: Comma-separated list of Node IDs
+
+**Example:**
+```bash
+curl 'http://localhost:8080/v1/graph/subgraph?project=gca&nodes=node1,node2,node3'
+```
+
+**Response:**
+```json
+{
+  "nodes": [...],
+  "links": [...]
+}
+```
+
 ## Schema & Predicates
 
 ### Core Predicates
@@ -314,6 +340,7 @@ curl 'http://localhost:8080/v1/graph/path?project=gca&source=main.go:main&target
 | `has_doc` | Symbol has documentation | `triples("main", "has_doc", ?Doc)` |
 | `in_package` | Symbol belongs to package | `triples("Server", "in_package", "server")` |
 | `has_role` | Symbol has semantic role | `triples(?X, "has_role", "api_handler")` |
+| `has_tag` | Symbol has semantic tag | `triples(?X, "has_tag", "deprecated")` |
 
 ### Virtual Predicates
 
