@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/duynguyendang/gca/internal/manager"
@@ -43,9 +44,29 @@ func main() {
 	defer s.Close()
 
 	// 2. Ingest gca and gca-fe
-	// Paths are absolute based on user info
-	bePath := "/mnt/e/gca-hackathon/gca"
-	fePath := "/mnt/e/gca-hackathon/gca-fe"
+	// 2. Ingest gca and gca-fe
+	cwd, _ := os.Getwd()
+	fmt.Printf("Working directory: %s\n", cwd)
+
+	// Assume we are running from 'gca' root or a subdirectory
+	// Try to find go.mod to locate root
+	rootDir := cwd
+	for {
+		if _, err := os.Stat(filepath.Join(rootDir, "go.mod")); err == nil {
+			break
+		}
+		parent := filepath.Dir(rootDir)
+		if parent == rootDir {
+			log.Fatal("Could not find project root (go.mod)")
+		}
+		rootDir = parent
+	}
+
+	bePath := rootDir
+	fePath := filepath.Join(filepath.Dir(rootDir), "gca-fe")
+
+	fmt.Printf("Backend Path: %s\n", bePath)
+	fmt.Printf("Frontend Path: %s\n", fePath)
 
 	fmt.Println("Step 1: Ingesting Backend...")
 	if err := ingest.Run(s, "gca-be", bePath); err != nil {
