@@ -129,6 +129,9 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 				s.AddFact(meb.Fact{Subject: meb.DocumentID(route), Predicate: "handled_by", Object: targetID, Graph: "virtual"})
 				// REL-02: Tag the handler as an api_handler
 				s.AddFact(meb.Fact{Subject: meb.DocumentID(targetID), Predicate: "has_role", Object: "api_handler", Graph: "virtual"})
+			} else {
+				// DEBUG: Why did lookup fail?
+				fmt.Printf("[Virtual] Failed to link route %s to handler %s (token: %s). Symbol not found.\n", route, rawHandler, handlerToken)
 			}
 		}
 	}

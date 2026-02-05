@@ -795,6 +795,21 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 				Line:      lineFromOffset(content, n.StartByte()),
 			})
 		}
+	case "string_fragment":
+		strVal := strings.Trim(n.Utf8Text(content), " \t\n\r\"'`")
+		// Fragments in templates might be paths like /v1/ai/ask
+		if strings.HasPrefix(strVal, "/") && !strings.Contains(strVal, "\n") && len(strVal) < 1024 {
+			subj := currentScope
+			if subj == "" {
+				subj = relPath
+			}
+			*refs = append(*refs, Reference{
+				Subject:   subj,
+				Predicate: "references",
+				Object:    strVal,
+				Line:      lineFromOffset(content, n.StartByte()),
+			})
+		}
 	}
 
 	return nextScope

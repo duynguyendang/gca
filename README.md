@@ -171,6 +171,32 @@ export GEMINI_API_KEY="your_api_key_here"
 2026/02/01 13:59:56 INFO store closed successfully
 ```
 
+
+### Project Metadata
+
+To organize your project and enable automatic role tagging, create a `project.yaml` file in the root of your source directory:
+
+```yaml
+name: my-project
+description: "My awesome project"
+version: "1.0.0"
+tags: ["go", "backend", "api"]
+components:
+  backend:
+    type: backend
+    language: go
+    path: cmd/server  # Files in this path will be tagged as 'backend'
+  frontend:
+    type: frontend
+    language: typescript
+    path: web/ui      # Files in this path will be tagged as 'frontend'
+```
+
+Running ingestion with this file present will:
+1. Create a `Project` node with the specified metadata.
+2. Automatically tag files with `has_tag` based on the defined components (e.g., `has_tag: backend`).
+3. Fallback to generic file extension tagging (e.g., `.go` -> backend) if no component matches.
+
 ### 2. Start Server
 
 ```bash

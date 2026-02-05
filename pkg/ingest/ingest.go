@@ -45,6 +45,40 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 	symbolTable = make(map[string]string)
 	fileIndex = make(map[string]bool)
 
+	// Check for project metadata
+	var projectMeta *ProjectMetadata
+	metadataPath := filepath.Join(sourceDir, "project.yaml")
+	if _, err := os.Stat(metadataPath); err == nil {
+		fmt.Printf("Found project metadata at %s\n", metadataPath)
+		var metaErr error
+		projectMeta, metaErr = LoadProjectMetadata(metadataPath)
+		if metaErr != nil {
+			log.Printf("Warning: Failed to load project metadata: %v", metaErr)
+		} else {
+			// Create Project Node
+			s.AddFact(meb.Fact{
+				Subject:   meb.DocumentID(projectMeta.Name),
+				Predicate: "type",
+				Object:    "project",
+				Graph:     "default",
+			})
+			s.AddFact(meb.Fact{
+				Subject:   meb.DocumentID(projectMeta.Name),
+				Predicate: "description",
+				Object:    projectMeta.Description,
+				Graph:     "default",
+			})
+			for _, tag := range projectMeta.Tags {
+				s.AddFact(meb.Fact{
+					Subject:   meb.DocumentID(projectMeta.Name),
+					Predicate: "has_tag",
+					Object:    tag,
+					Graph:     "default",
+				})
+			}
+		}
+	}
+
 	err := filepath.WalkDir(sourceDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -96,7 +130,7 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 			for path := range jobs {
 				rel, _ := filepath.Rel(sourceDir, path)
 				fmt.Printf("  Processing %s/%s...\n", projectName, rel)
-				if err := processFileIncremental(ctx, s, localExt, embeddingService, path, projectName, sourceDir); err != nil {
+				if err := processFileIncremental(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta); err != nil {
 					log.Printf("Error: %v", err)
 					pass2Err.Add(1)
 				}
@@ -130,8 +164,24 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 	return nil
 }
 
-func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *EmbeddingService, path string, projectName string, sourceRoot string) error {
+func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *EmbeddingService, path string, projectName string, sourceRoot string, meta *ProjectMetadata) error {
 	relPath, _ := filepath.Rel(sourceRoot, path)
+
+	// Apply Logical Path Mapping from Metadata
+	if meta != nil && meta.Components != nil {
+		for compName, compMeta := range meta.Components {
+			// Check if path starts with component path (handle directory boundaries)
+			basePrefix := compMeta.Path
+			if relPath == basePrefix || strings.HasPrefix(relPath, basePrefix+string(os.PathSeparator)) {
+				// Rewrite path: replace physical prefix with logical component name
+				suffix := strings.TrimPrefix(relPath, basePrefix)
+				suffix = strings.TrimPrefix(suffix, string(os.PathSeparator))
+				relPath = filepath.Join(compName, suffix)
+				break // Match first component found
+			}
+		}
+	}
+
 	if projectName != "" {
 		relPath = filepath.Join(projectName, relPath)
 	}
@@ -177,14 +227,27 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 
 	finalFacts := make([]meb.Fact, 0, len(bundle.Facts)+2)
 
-	// Inject Role Tags based on path
+	// Inject Role Tags based on path or metadata
 	// fmt.Printf("DEBUG: relPath=%s\n", relPath)
-	if strings.Contains(relPath, "gca-be") || strings.HasSuffix(relPath, ".go") {
-		// fmt.Printf("DEBUG: Tagging %s as backend\n", relPath)
-		finalFacts = append(finalFacts, meb.Fact{Subject: meb.DocumentID(relPath), Predicate: "has_tag", Object: "backend", Graph: "default"})
-	} else if strings.Contains(relPath, "gca-fe") || strings.HasSuffix(relPath, ".ts") || strings.HasSuffix(relPath, ".tsx") {
-		// fmt.Printf("DEBUG: Tagging %s as frontend\n", relPath)
-		finalFacts = append(finalFacts, meb.Fact{Subject: meb.DocumentID(relPath), Predicate: "has_tag", Object: "frontend", Graph: "default"})
+	tagged := false
+	if meta != nil && meta.Components != nil {
+		for _, comp := range meta.Components {
+			if strings.Contains(relPath, comp.Path) {
+				finalFacts = append(finalFacts, meb.Fact{Subject: meb.DocumentID(relPath), Predicate: "has_tag", Object: comp.Type, Graph: "default"})
+				tagged = true
+				break // Assume one component per file for now
+			}
+		}
+	}
+
+	if !tagged {
+		if strings.HasSuffix(relPath, ".go") {
+			// fmt.Printf("DEBUG: Tagging %s as backend\n", relPath)
+			finalFacts = append(finalFacts, meb.Fact{Subject: meb.DocumentID(relPath), Predicate: "has_tag", Object: "backend", Graph: "default"})
+		} else if strings.HasSuffix(relPath, ".ts") || strings.HasSuffix(relPath, ".tsx") {
+			// fmt.Printf("DEBUG: Tagging %s as frontend\n", relPath)
+			finalFacts = append(finalFacts, meb.Fact{Subject: meb.DocumentID(relPath), Predicate: "has_tag", Object: "frontend", Graph: "default"})
+		}
 	}
 
 	// Make sure file has type "file"
