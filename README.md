@@ -232,6 +232,28 @@ The server starts on port `8080` by default.
 > .exit                                # Quit
 ```
 
+### 4. MCP Server (Model Context Protocol)
+
+Run GCA as an MCP server to expose the knowledge graph to AI coding assistants (like Claude Desktop or other MCP clients).
+
+```bash
+# Start MCP server (communicates via Stdio)
+./gca --mcp ./data/my-project
+```
+
+**Features Exposed:**
+- **Resources**:
+  - `gca://graph/summary`: Graph statistics
+  - `gca://files/{path}`: Source code content
+  - `gca://schema/conventions`: Architectural schema docs
+- **Tools**:
+  - `search_nodes`: Search for symbols/files
+  - `get_outgoing_edges`: Get dependencies
+  - `get_incoming_edges`: Get consumers
+  - `get_clusters`: Detect logical communities (Leiden)
+  - `trace_impact_path`: Trace weighted paths between nodes
+
+
 ## API Reference
 
 ### Semantic Search

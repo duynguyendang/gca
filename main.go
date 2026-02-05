@@ -12,8 +12,10 @@ import (
 
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/ingest"
+	"github.com/duynguyendang/gca/pkg/mcp"
 	"github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/meb/store"
+
 	"github.com/duynguyendang/gca/pkg/repl"
 	"github.com/duynguyendang/gca/pkg/server"
 
@@ -22,6 +24,7 @@ import (
 
 func main() {
 	// Define flags
+	mcpMode := flag.Bool("mcp", false, "run MCP server (Standard Input/Output)")
 	ingestMode := flag.Bool("ingest", false, "run in ingestion mode (requires source and data folder arguments)")
 	serverMode := flag.Bool("server", false, "run REST API server")
 	sourceFlag := flag.String("source", "", "path to source code (for source view)")
@@ -89,7 +92,7 @@ func main() {
 		return
 	}
 
-	// === Single Store Mode (Ingest / Repl) ===
+	// === Single Store Mode (Ingest / Repl / MCP) ===
 
 	// 1. MEB Store Initialization
 	cfg := store.DefaultConfig(dataDir)
@@ -149,6 +152,11 @@ func main() {
 			if _, err := s.RecalculateStats(); err != nil {
 				log.Printf("Stats recalc error: %v", err)
 			}
+		}
+	} else if *mcpMode {
+		// Start MCP Server
+		if err := mcp.Run(ctx, s); err != nil {
+			log.Fatalf("MCP server failed: %v", err)
 		}
 	} else {
 		// Start Interactive Repl
