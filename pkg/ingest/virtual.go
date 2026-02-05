@@ -76,7 +76,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	}
 
 	// Scan Router Files
-	// Regex for: s.GET("/path", handler) or group.POST("/path", handler)
+	// Regex for: `s.GET["/path", handler]` or `group.POST["/path", handler]`
 	// Supports: GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD
 	// Captures: 1=Method, 2=Path, 3=Handler match (simple), 4=Handler token
 	// Note: Go syntax is flexible, this captures common patterns.
@@ -84,7 +84,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	// Example: s.GET("/v1/projects", s.handleProjects)
 	// Match: .GET, "/v1/projects", s.handleProjects
 	// Scan Router Files
-	// Regex for: s.GET("/path", handler) or group.POST("/path", handler)
+	// Regex for: `s.GET["/path", handler]` or `group.POST["/path", handler]`
 	// Supports: GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD
 	// Captures: 1=Method, 2=Path, 3=Handler match (simple)
 	// Note: Go syntax is flexible, this captures common patterns.

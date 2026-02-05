@@ -35,12 +35,18 @@ type VectorRegistry struct {
 
 	// wg tracks async disk write operations
 	wg sync.WaitGroup
+
+	// dataDir is the directory where vector snapshots are stored
+	dataDir string
+
+	// mmapData holds the memory-mapped byte slice (to keep it alive/unmap)
+	mmapData []byte
 }
 
 // NewRegistry creates a new VectorRegistry with pre-allocated memory.
 // Allocates 25MB upfront (~1.6M int8 vectors) to avoid frequent reallocations.
 // With int8 quantization, we can store 4x more vectors in the same memory.
-func NewRegistry(db *badger.DB) *VectorRegistry {
+func NewRegistry(db *badger.DB, dataDir string) *VectorRegistry {
 	// Pre-allocate ~25MB for int8 vectors (25 * 1024 * 1024 bytes)
 	// This can hold approximately 409,600 vectors (26,214,400 / 64)
 	capacity := 25 * 1024 * 1024 // 25MB in bytes
@@ -51,6 +57,7 @@ func NewRegistry(db *badger.DB) *VectorRegistry {
 		revMap:    make([]uint64, 0, 100000),
 		stringIDs: make([]string, 0, 100000),
 		db:        db,
+		dataDir:   dataDir,
 	}
 }
 

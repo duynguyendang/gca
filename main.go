@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/duynguyendang/gca/internal/manager"
@@ -28,11 +29,14 @@ func main() {
 	ingestMode := flag.Bool("ingest", false, "run in ingestion mode (requires source and data folder arguments)")
 	serverMode := flag.Bool("server", false, "run REST API server")
 	sourceFlag := flag.String("source", "", "path to source code (for source view)")
-	lowMemMode := flag.Bool("low-mem", false, "optimize for low-memory environments (e.g., Cloud Run with 1GB RAM)")
 
 	flag.Parse() // Parse flags early
 
 	_ = godotenv.Load()
+
+	// Check environment variable for LOW_MEM
+	lowMemVal := os.Getenv("LOW_MEM")
+	isLowMem := strings.ToLower(lowMemVal) == "true"
 
 	// Defaults
 	sourceDir := ""
@@ -66,7 +70,7 @@ func main() {
 
 	// Determine memory profile
 	memProfile := manager.MemoryProfileDefault
-	if *lowMemMode {
+	if isLowMem {
 		memProfile = manager.MemoryProfileLow
 		fmt.Println("Running in LOW MEMORY mode")
 	}
@@ -98,7 +102,9 @@ func main() {
 	cfg := store.DefaultConfig(dataDir)
 	cfg.SyncWrites = true
 	// Optimize for resource awareness
-	cfg.Profile = "Cloud-Run-LowMem"
+	if isLowMem {
+		cfg.Profile = "Cloud-Run-LowMem"
+	}
 	cfg.BlockCacheSize = 128 << 20 // 128 MB
 	cfg.IndexCacheSize = 128 << 20 // 128 MB
 

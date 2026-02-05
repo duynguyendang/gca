@@ -36,6 +36,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -117,6 +118,11 @@ func (m *MEBStore) saveStats() error {
 	})
 }
 
+// Config returns the store configuration.
+func (m *MEBStore) Config() *store.Config {
+	return m.config
+}
+
 // NewMEBStore creates a new MEBStore with the given configuration.
 func NewMEBStore(cfg *store.Config) (*MEBStore, error) {
 	slog.Info("initializing MEB store",
@@ -182,7 +188,7 @@ func NewMEBStore(cfg *store.Config) (*MEBStore, error) {
 		predicates: make(map[ast.PredicateSym]*predicates.PredicateTable),
 		config:     cfg,
 		mu:         &sync.RWMutex{},
-		vectors:    vector.NewRegistry(db),
+		vectors:    vector.NewRegistry(db, filepath.Join(cfg.DataDir, "vectors")),
 	}
 
 	// Load vector snapshot from disk

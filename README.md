@@ -155,7 +155,14 @@ export GEMINI_API_KEY="your_api_key_here"
 
 # Example: Ingest GCA itself
 ./gca --ingest ./gca ./data/gca
+
+# Example: Ingest Full Stack (Frontend + Backend)
+./gca --ingest ./source-code/gca ./data/gca
 ```
+
+> [!TIP]
+> To skip embedding generation and save memory/API quota, set `LOW_MEM=true` before running ingestion.
+
 
 **What happens during ingestion:**
 1. **Parse**: tree-sitter extracts AST from source files
@@ -436,23 +443,26 @@ export GEMINI_API_KEY="your_gemini_api_key"
 # Optional: Server port (default: 8080)
 export PORT=8080
 
-# Optional: Low-memory mode (Cloud Run, 1GB RAM)
+# Optional: Low-memory mode (true/false)
+# Set to 'true' to skip embedding generation during ingestion 
+# and use mmap for vector snapshots during server/repl mode.
 export LOW_MEM=true
 ```
 
 ### Low-Memory Mode
 
-For deployment on constrained environments (e.g., Cloud Run with 1GB RAM):
+For deployment on constrained environments (e.g., Cloud Run with 1GB RAM), set `LOW_MEM=true`:
 
 ```bash
-./gca --server --low-mem
+export LOW_MEM=true
+./gca --server
 ```
 
-**Changes in low-mem mode:**
-- Reduced BadgerDB cache sizes
-- Disabled source code embedding
-- Lazy-load vector snapshots
-- Stream large query results
+**GCA Low-mem Strategy:**
+- **Skip Embeddings**: During ingestion, if `LOW_MEM=true` is set, the embedding service is skipped, and only metadata indexing is performed.
+- **On-demand Loading**: Vector snapshots are memory-mapped (mmap) to keep RAM footprint minimal (sub-100MB for medium projects).
+- **Lazy-load Graph**: Only expand sub-graphs based on active search queries.
+- **Quantization**: Uses Int8 quantization for compressed vectors.
 
 ## Advanced Features
 
@@ -559,8 +569,9 @@ rm ./data/my-project/vectors/sys:mrl:*
 ### Out of Memory During Ingestion
 
 **Fix:** Enable low-memory mode or process in batches:
+**Fix:** Enable low-memory mode or process in batches:
 ```bash
-./gca --ingest ./large-project ./data/large-project --low-mem
+LOW_MEM=true ./gca --ingest ./large-project ./data/large-project
 ```
 
 ## Contributing

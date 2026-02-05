@@ -32,12 +32,19 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 	// Initialize embedding service for semantic doc search
 	var embeddingService *EmbeddingService
 	var embeddingErr error
-	embeddingService, embeddingErr = NewEmbeddingService(ctx)
-	if embeddingErr != nil {
-		log.Printf("Warning: Embedding service unavailable: %v (skipping doc embeddings)", embeddingErr)
+
+	// Check for Low-Mem profile
+	isLowMem := s.Config().Profile == "Cloud-Run-LowMem"
+	if isLowMem {
+		log.Println("Low-memory mode detected: Skipping embedding generation (Metadata-only indexing)")
 	} else {
-		defer embeddingService.Close()
-		log.Println("Embedding service initialized for semantic doc search")
+		embeddingService, embeddingErr = NewEmbeddingService(ctx)
+		if embeddingErr != nil {
+			log.Printf("Warning: Embedding service unavailable: %v (skipping doc embeddings)", embeddingErr)
+		} else {
+			defer embeddingService.Close()
+			log.Println("Embedding service initialized for semantic doc search")
+		}
 	}
 
 	// Pass 1: Collect Symbols and File Index
