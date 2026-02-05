@@ -88,7 +88,7 @@ func Run(ctx context.Context, cfg Config, s *meb.MEBStore) {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	// Load the prompt templates at startup
-	nlPromptPath := "prompts/nl_to_datalog.prompt"
+	nlPromptPath := "prompts/datalog.prompt"
 	nlPrompt, err := prompts.LoadPrompt(nlPromptPath)
 	if err != nil {
 		log.Printf("Warning: Failed to load prompt from %s: %v. NL features may not work.", nlPromptPath, err)
@@ -495,9 +495,9 @@ func askGeminiWithContext(ctx context.Context, cfg Config, p *prompts.Prompt, qu
 
 	// Prepare data for template
 	data := map[string]interface{}{
-		"query":             question,
-		"context_facts":     facts,
-		"suggested_queries": suggestedQueries,
+		"Query":            question,
+		"Predicates":       formatPredicatesListSection(facts),
+		"SuggestedQueries": suggestedQueries,
 	}
 
 	promptStr, err := p.Execute(data)
