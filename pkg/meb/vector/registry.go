@@ -118,8 +118,12 @@ func (r *VectorRegistry) Add(id uint64, fullVec []float32) error {
 // AddWithStringID adds a vector with an associated string symbol ID for lookup.
 // This enables mapping search results back to readable symbol IDs.
 func (r *VectorRegistry) AddWithStringID(id uint64, stringID string, fullVec []float32) error {
+	// Check vector dimension
 	if len(fullVec) < FullDim {
 		return fmt.Errorf("invalid vector dimension: expected at least %d, got %d", FullDim, len(fullVec))
+	} else if len(fullVec) > FullDim {
+		// Truncate if larger (some models return extra dimensions or pooling tokens)
+		fullVec = fullVec[:FullDim]
 	}
 
 	// Process to get 64-d MRL vector (normalized)
@@ -148,6 +152,7 @@ func (r *VectorRegistry) AddWithStringID(id uint64, stringID string, fullVec []f
 		r.data = append(r.data, quantized...)
 		r.mu.Unlock()
 	}
+	slog.Info("AddWithStringID: Vector added to registry", "id", id, "stringID", stringID, "totalVectors", len(r.revMap))
 
 	// Async disk write for full vector
 	r.wg.Add(1)

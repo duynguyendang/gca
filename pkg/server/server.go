@@ -51,6 +51,11 @@ func (s *Server) Run(addr string) error {
 	return s.router.Run(addr)
 }
 
+// Handler returns the underlying HTTP handler (Gin engine).
+func (s *Server) Handler() http.Handler {
+	return s.router
+}
+
 func (s *Server) setupRoutes() {
 	s.router.GET("/api/health", s.healthCheck)
 	s.router.GET("/api/v1/projects", s.handleProjects)

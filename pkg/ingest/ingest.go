@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/meb/vector"
@@ -122,6 +123,7 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 	fmt.Printf("Pass 2: Processing files for %s...\n", projectName)
 	jobs := make(chan string, 100)
 	var wg sync.WaitGroup
+	var embeddingWg sync.WaitGroup // Wait for embeddings to finish
 	var pass2Err atomic.Uint64
 
 	workerCount := runtime.NumCPU()
@@ -137,7 +139,7 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 			for path := range jobs {
 				rel, _ := filepath.Rel(sourceDir, path)
 				fmt.Printf("  Processing %s/%s...\n", projectName, rel)
-				if err := processFileIncremental(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta); err != nil {
+				if err := processFileIncremental(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta, &embeddingWg); err != nil {
 					log.Printf("Error: %v", err)
 					pass2Err.Add(1)
 				}
@@ -168,10 +170,15 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 	EnhanceVirtualTriples(s)
 	TagRoles(s)
 
+	if embeddingService != nil {
+		fmt.Println("Waiting for embeddings to complete...")
+		embeddingWg.Wait()
+	}
+
 	return nil
 }
 
-func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *EmbeddingService, path string, projectName string, sourceRoot string, meta *ProjectMetadata) error {
+func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *EmbeddingService, path string, projectName string, sourceRoot string, meta *ProjectMetadata, embeddingWg *sync.WaitGroup) error {
 	relPath, _ := filepath.Rel(sourceRoot, path)
 
 	// Apply Logical Path Mapping from Metadata
@@ -204,32 +211,87 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 		return err
 	}
 
-	s.AddDocument(meb.DocumentID(relPath), content, nil, map[string]any{"project": projectName})
-
-	// Embed documentation for semantic search
-	if embedder != nil {
-		for _, fact := range bundle.Facts {
-			if fact.Predicate == meb.PredHasDoc {
-				docText, ok := fact.Object.(string)
-				if ok && len(docText) > 10 { // Only embed meaningful docs
-					go func(symbolID meb.DocumentID, text string) {
-						embed, err := embedder.GetEmbedding(ctx, text)
-						if err == nil && len(embed) >= vector.FullDim {
-							// Use hash of symbol ID as vector ID, store original string for lookup
-							vecID := hashSymbolID(string(symbolID))
-							s.Vectors().AddWithStringID(vecID, string(symbolID), embed)
-						}
-					}(fact.Subject, docText)
-				}
-			}
+	// Retry AddDocument to handle potential DB conflicts
+	var addErr error
+	for retries := 0; retries < 3; retries++ {
+		addErr = s.AddDocument(meb.DocumentID(relPath), content, nil, map[string]any{"project": projectName})
+		if addErr == nil {
+			break
 		}
+		// fast retry for conflicts
+		time.Sleep(time.Millisecond * time.Duration(10*(retries+1)))
+	}
+	if addErr != nil {
+		return fmt.Errorf("failed to add document %s: %w", relPath, addErr)
 	}
 
 	// Store symbol documents (with file, start_line, end_line metadata for snippet extraction)
 	for _, doc := range bundle.Documents {
 		// Don't store content for symbols (we'll extract on-demand from parent file)
 		// But we DO need to store the metadata (file, start_line, end_line)
-		s.AddDocument(doc.ID, nil, nil, doc.Metadata)
+		if err := s.AddDocument(doc.ID, nil, nil, doc.Metadata); err != nil {
+			// Log error but continue for symbols? Or fail file?
+			// Identifying symbols is important but not critical for file content.
+			// Let's log warning.
+			log.Printf("Warning: failed to add symbol doc %s: %v", doc.ID, err)
+		}
+	}
+
+	// Embed documentation for semantic search (AFTER symbols are added to ensure IDs exist)
+	if embedder != nil {
+		docFactsFound := 0
+		for _, fact := range bundle.Facts {
+			if fact.Predicate == meb.PredHasDoc {
+				docFactsFound++
+				docText, ok := fact.Object.(string)
+				log.Printf("DEBUG: Found doc for %s (len=%d)", fact.Subject, len(docText))
+
+				if ok && len(docText) > 10 { // Only embed meaningful docs
+					if embeddingWg != nil {
+						embeddingWg.Add(1)
+					} else {
+						log.Printf("Warning: embeddingWg is nil for %s", fact.Subject)
+					}
+
+					go func(symbolID meb.DocumentID, text string) {
+						if embeddingWg != nil {
+							defer embeddingWg.Done()
+						}
+
+						// Add a timeout to prevent hanging
+						ctxWithTimeout, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						defer cancel()
+
+						log.Printf("Generating embedding for %s (len=%d)...", symbolID, len(text))
+						embed, err := embedder.GetEmbedding(ctxWithTimeout, text)
+						if err != nil {
+							log.Printf("Error generating embedding for %s: %v", symbolID, err)
+							return
+						}
+
+						if len(embed) < vector.FullDim {
+							log.Printf("Error: embedding dimension mismatch for %s: got %d, want >= %d", symbolID, len(embed), vector.FullDim)
+							return
+						}
+
+						// Look up the correct dictionary ID for the symbol
+						dictID, found := s.LookupID(string(symbolID))
+						if !found {
+							log.Printf("Error: ID not found in dictionary for %s (cannot store vector)", symbolID)
+							return
+						}
+
+						if err := s.Vectors().AddWithStringID(dictID, string(symbolID), embed); err != nil {
+							log.Printf("Error adding vector to store for %s: %v", symbolID, err)
+						} else {
+							log.Printf("Successfully stored embedding for %s (ID=%d)", symbolID, dictID)
+						}
+					}(fact.Subject, docText)
+				} else if ok {
+					log.Printf("Skipping embedding for %s: text too short (%d chars)", fact.Subject, len(docText))
+				}
+			}
+		}
 	}
 
 	finalFacts := make([]meb.Fact, 0, len(bundle.Facts)+2)

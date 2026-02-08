@@ -69,6 +69,12 @@ func (r *VectorRegistry) SaveSnapshot() error {
 		"dataSizeBytes", len(r.data),
 	)
 
+	if len(r.data) == 0 {
+		slog.Warn("SaveSnapshot: r.data is empty! No vectors to write to vectors.bin")
+	} else {
+		slog.Info("SaveSnapshot: r.data has content", "bytes", len(r.data))
+	}
+
 	// Ensure vector directory exists
 	if err := os.MkdirAll(r.dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create vector dir: %w", err)

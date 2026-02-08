@@ -167,10 +167,10 @@ export GEMINI_API_KEY="your_api_key_here"
 **What happens during ingestion:**
 1. **Parse**: tree-sitter extracts AST from source files
 2. **Extract**: Facts (calls, imports, defines) and documentation are extracted
-3. **Embed**: Documentation is embedded using Gemini `text-embedding-004`
-4. **Compress**: 768-d vectors → 64-d int8 using MRL
-5. **Store**: Facts saved to BadgerDB, vectors to snapshot
-6. **Index**: SPO and OPS indices built for fast queries
+3. **Embed**: Documentation is embedded using `gemini-embedding-001` (MRL-enabled)
+4. **Compress**: 768-d vectors → 64-d int8 using MRL (truncated from larger model outputs)
+5. **Store**: Facts saved to BadgerDB, vectors buffered and flushed to disk on graceful shutdown
+6. **Index**: SPO and OPS indices built for fast bidirectional queries
 
 **Output:**
 ```

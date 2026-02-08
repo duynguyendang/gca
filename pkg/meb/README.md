@@ -25,7 +25,7 @@ It bridges the gap between structured relational data (**Knowledge Graphs**) and
 
 * **Hybrid Intelligence**: Combine Boolean graph filters with Vector similarity in a single atomic query
 * **Massive Scale**: Optimized for NVMe storage using a specialized Dual-index (SPO, OPS) architecture for bidirectional graph traversal
-* **Extreme Efficiency**: Vector Compression - 1536-d float vectors reduced to 64-byte SQ8 integers
+* **Extreme Efficiency**: Vector Compression - 768-d float vectors reduced to 64-byte SQ8 integers using MRL
 * **Data Compression**: S2-compressed content storage for large blobs
 * **Zero-Copy**: Leverages unsafe pointers and mmap for near-zero memory allocation during scans
 * **Go-Native**: Pure Go implementation, no CGO, no complex external dependencies. Uses Go 1.23 iter.Seq2 for elegant streaming
@@ -328,8 +328,8 @@ graph TD
 
 **Vector Processing Pipeline**
 
-1. **Input**: 1536-d float32 vectors (OpenAI embeddings)
-2. **MRL Reduction**: 1536-d → 64-d using Matryoshka Representation Learning
+1. **Input**: 768-d float32 vectors (Gemini `gemini-embedding-001`)
+2. **MRL Reduction**: 768-d → 64-d using Matryoshka Representation Learning
 3. **L2 Normalization**: Unit length vectors for cosine similarity
 4. **Scalar Quantization**: float32 → int8 (4x compression, 64 bytes per vector)
 5. **SIMD Search**: Parallel dot product operations using worker pools

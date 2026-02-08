@@ -27,7 +27,7 @@ func NewEmbeddingService(ctx context.Context) (*EmbeddingService, error) {
 		return nil, fmt.Errorf("failed to create Gemini client: %w", err)
 	}
 
-	model := client.EmbeddingModel("text-embedding-004")
+	model := client.EmbeddingModel("gemini-embedding-001")
 	return &EmbeddingService{
 		client: client,
 		model:  model,
