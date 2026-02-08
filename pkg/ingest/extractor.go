@@ -145,6 +145,9 @@ func (e *TreeSitterExtractor) ExtractSymbols(filename string, content []byte, re
 // ExtractReferences parses the content and returns a list of references (calls, imports, etc).
 func (e *TreeSitterExtractor) ExtractReferences(filename string, content []byte, relPath string) ([]Reference, error) {
 	ext := filepath.Ext(filename)
+	if ext == ".md" {
+		return nil, nil
+	}
 	lang := e.GetParser(ext)
 	e.parser.SetLanguage(lang)
 
@@ -180,6 +183,26 @@ func (e *TreeSitterExtractor) ExtractReferences(filename string, content []byte,
 
 // Extract satisfies the Extractor interface.
 func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, content []byte) (*AnalysisBundle, error) {
+	// Special handling for Markdown files (Documentation)
+	if filepath.Ext(relPath) == ".md" {
+		bundle := &AnalysisBundle{
+			Documents: []meb.Document{{
+				ID:      meb.DocumentID(relPath),
+				Content: content,
+				Metadata: map[string]any{
+					"file": relPath,
+					"type": "markdown",
+				},
+			}},
+			Facts: []meb.Fact{
+				{Subject: meb.DocumentID(relPath), Predicate: meb.PredType, Object: "document", Graph: "default"},
+				{Subject: meb.DocumentID(relPath), Predicate: meb.PredHasDoc, Object: string(content), Graph: "default"},
+				{Subject: meb.DocumentID(relPath), Predicate: meb.PredInPackage, Object: "root", Graph: "default"}, // Assign to root package
+			},
+		}
+		return bundle, nil
+	}
+
 	// Parse Symbols
 	symbols, err := e.ExtractSymbols(relPath, content, relPath)
 	if err != nil {

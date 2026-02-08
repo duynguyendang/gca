@@ -360,7 +360,7 @@ func hashSymbolID(id string) uint64 {
 
 func isSupportedFile(path string) bool {
 	ext := filepath.Ext(path)
-	return ext == ".go" || ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".py"
+	return ext == ".go" || ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".py" || ext == ".md"
 }
 
 func TagRoles(s *meb.MEBStore) error {

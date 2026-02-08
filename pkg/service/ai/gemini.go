@@ -76,7 +76,7 @@ func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreMa
 	return &GeminiService{
 		client:               client,
 		model:                model,
-		embeddingModel:       client.EmbeddingModel("text-embedding-004"),
+		embeddingModel:       client.EmbeddingModel("gemini-embedding-001"),
 		manager:              manager,
 		DatalogPrompt:        loadPrompt("datalog.prompt"),
 		ChatPrompt:           loadPrompt("chat.prompt"),
@@ -140,10 +140,12 @@ func (s *GeminiService) HandleRequest(ctx context.Context, req AIRequest) (strin
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
+	log.Printf("Sending Prompt to Gemini (%s):\n%s", req.Task, prompt)
+
 	resp, err := s.model.GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {
-		log.Printf("Gemini GenerateContent Failed: %v", err)
-		return "", fmt.Errorf("gemini request failed: %w", err)
+		log.Printf("Gemini Request Failed:\n%s\nError: %v", prompt, err)
+		return "", err
 	}
 
 	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
