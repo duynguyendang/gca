@@ -1003,36 +1003,87 @@ func (e *TreeSitterExtractor) getReceiverType(n *sitter.Node, content []byte) st
 }
 
 func resolveImportPath(relPath, importPath string) string {
-	if !strings.HasPrefix(importPath, ".") {
+	// 1. Handle Relative Imports
+	if strings.HasPrefix(importPath, ".") {
+		dir := filepath.Dir(relPath)
+		basePath := filepath.Clean(filepath.Join(dir, importPath))
+
+		// 1a. Exact match
+		if fileIndex[basePath] {
+			return basePath
+		}
+
+		// 1b. Try extensions
+		extensions := []string{".ts", ".tsx", ".js", ".jsx", ".py", ".go"}
+		for _, ext := range extensions {
+			candidate := basePath + ext
+			if fileIndex[candidate] {
+				return candidate
+			}
+		}
+
+		// 1c. Handle specific TypeScript import style (.js -> .ts)
+		if strings.HasSuffix(basePath, ".js") {
+			tsPath := strings.TrimSuffix(basePath, ".js") + ".ts"
+			if fileIndex[tsPath] {
+				return tsPath
+			}
+			tsxPath := strings.TrimSuffix(basePath, ".js") + ".tsx"
+			if fileIndex[tsxPath] {
+				return tsxPath
+			}
+		}
+
+		// 1d. Try index files
+		for _, ext := range extensions {
+			candidate := filepath.Join(basePath, "index"+ext)
+			if fileIndex[candidate] {
+				return candidate
+			}
+		}
+
+		return basePath // Fallback to resolved relative path even if file not found
+	}
+
+	// 2. Handle Absolute/Package Imports (Python, Go, etc.)
+	// First, check if it's already a known file path (unlikely for imports but possible)
+	if fileIndex[importPath] {
 		return importPath
 	}
 
-	dir := filepath.Dir(relPath)
-	basePath := filepath.Clean(filepath.Join(dir, importPath))
+	// Python-style dotted path resolution (e.g. langgraph.checkpoint.base -> langgraph/checkpoint/base.py)
+	if !strings.Contains(importPath, "/") {
+		slashPath := strings.ReplaceAll(importPath, ".", "/")
 
-	// 1. Exact match
-	if fileIndex[basePath] {
-		return basePath
-	}
+		// 2a. Check if direct mapping exists (module root at project root)
+		candidates := []string{
+			slashPath + ".py",
+			filepath.Join(slashPath, "__init__.py"),
+		}
 
-	// 2. Try extensions
-	extensions := []string{".ts", ".tsx", ".js", ".jsx", ".py", ".go"}
-	for _, ext := range extensions {
-		candidate := basePath + ext
-		if fileIndex[candidate] {
-			return candidate
+		for _, candidate := range candidates {
+			if fileIndex[candidate] {
+				return candidate
+			}
+		}
+
+		// 2b. Suffix Search (Full Scan)
+		// Necessary for complex structures like langgraph/libs/checkpoint/... importing langgraph.checkpoint...
+		// We look for any file ending with the constructed path.
+		// To avoid false positives, we check for precise suffix matches (ends with /path.py)
+
+		// Optimization: Only scan if it looks like a python module path
+		suffix1 := "/" + slashPath + ".py"
+		suffix2 := "/" + slashPath + "/__init__.py"
+
+		for path := range fileIndex {
+			if strings.HasSuffix(path, suffix1) || strings.HasSuffix(path, suffix2) {
+				return path // Return first match. Ambiguity possible but acceptable for now.
+			}
 		}
 	}
 
-	// 3. Try index files
-	for _, ext := range extensions {
-		candidate := filepath.Join(basePath, "index"+ext)
-		if fileIndex[candidate] {
-			return candidate
-		}
-	}
-
-	return basePath
+	return importPath
 }
 
 func isGoBuiltIn(name string) bool {

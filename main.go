@@ -191,6 +191,8 @@ func main() {
 			if _, err := s.RecalculateStats(); err != nil {
 				log.Printf("Stats recalc error: %v", err)
 			}
+			// Add a small delay to ensure all background goroutines (like badger writes) settle
+			time.Sleep(1 * time.Second)
 		}
 	} else if *mcpMode {
 		// Start MCP Server

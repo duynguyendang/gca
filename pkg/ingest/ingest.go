@@ -23,7 +23,7 @@ import (
 var symbolTable = make(map[string]string)
 var fileIndex = make(map[string]bool)
 
-const MaxWorkers = 8
+const MaxWorkers = 2
 
 // Run executes the ingestion process with an optional projectName prefix.
 func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
@@ -136,10 +136,12 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 		go func() {
 			defer wg.Done()
 			localExt := NewTreeSitterExtractor()
+			// Global semaphore for embeddings limit (max 10 concurrent)
+			sem := make(chan struct{}, 10)
 			for path := range jobs {
 				rel, _ := filepath.Rel(sourceDir, path)
 				fmt.Printf("  Processing %s/%s...\n", projectName, rel)
-				if err := processFileIncremental(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta, &embeddingWg); err != nil {
+				if err := processFileIncremental(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta, &embeddingWg, sem); err != nil {
 					log.Printf("Error: %v", err)
 					pass2Err.Add(1)
 				}
@@ -178,7 +180,7 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 	return nil
 }
 
-func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *EmbeddingService, path string, projectName string, sourceRoot string, meta *ProjectMetadata, embeddingWg *sync.WaitGroup) error {
+func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *EmbeddingService, path string, projectName string, sourceRoot string, meta *ProjectMetadata, embeddingWg *sync.WaitGroup, sem chan struct{}) error {
 	relPath, _ := filepath.Rel(sourceRoot, path)
 
 	// Apply Logical Path Mapping from Metadata
@@ -227,9 +229,8 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 
 	// Store symbol documents (with file, start_line, end_line metadata for snippet extraction)
 	for _, doc := range bundle.Documents {
-		// Don't store content for symbols (we'll extract on-demand from parent file)
-		// But we DO need to store the metadata (file, start_line, end_line)
-		if err := s.AddDocument(doc.ID, nil, nil, doc.Metadata); err != nil {
+		// Store content for symbols so it can be retrieved by UI
+		if err := s.AddDocument(doc.ID, doc.Content, nil, doc.Metadata); err != nil {
 			// Log error but continue for symbols? Or fail file?
 			// Identifying symbols is important but not critical for file content.
 			// Let's log warning.
@@ -240,6 +241,7 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 	// Embed documentation for semantic search (AFTER symbols are added to ensure IDs exist)
 	if embedder != nil {
 		docFactsFound := 0
+
 		for _, fact := range bundle.Facts {
 			if fact.Predicate == meb.PredHasDoc {
 				docFactsFound++
@@ -254,6 +256,12 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 					}
 
 					go func(symbolID meb.DocumentID, text string) {
+						// Acquire semaphore
+						if sem != nil {
+							sem <- struct{}{}
+							defer func() { <-sem }()
+						}
+
 						if embeddingWg != nil {
 							defer embeddingWg.Done()
 						}
