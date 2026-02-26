@@ -16,8 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/duynguyendang/gca/pkg/meb"
-	"github.com/duynguyendang/gca/pkg/meb/vector"
+	"github.com/duynguyendang/meb"
+	"github.com/duynguyendang/meb/vector"
 )
 
 var symbolTable = make(map[string]string)
@@ -34,18 +34,12 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 	var embeddingService *EmbeddingService
 	var embeddingErr error
 
-	// Check for Low-Mem profile
-	isLowMem := s.Config().Profile == "Cloud-Run-LowMem"
-	if isLowMem {
-		log.Println("Low-memory mode detected: Skipping embedding generation (Metadata-only indexing)")
+	embeddingService, embeddingErr = NewEmbeddingService(ctx)
+	if embeddingErr != nil {
+		log.Printf("Warning: Embedding service unavailable: %v (skipping doc embeddings)", embeddingErr)
 	} else {
-		embeddingService, embeddingErr = NewEmbeddingService(ctx)
-		if embeddingErr != nil {
-			log.Printf("Warning: Embedding service unavailable: %v (skipping doc embeddings)", embeddingErr)
-		} else {
-			defer embeddingService.Close()
-			log.Println("Embedding service initialized for semantic doc search")
-		}
+		defer embeddingService.Close()
+		log.Println("Embedding service initialized for semantic doc search")
 	}
 
 	// Pass 1: Collect Symbols and File Index
@@ -65,20 +59,20 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 		} else {
 			// Create Project Node
 			s.AddFact(meb.Fact{
-				Subject:   meb.DocumentID(projectMeta.Name),
+				Subject:   string(projectMeta.Name),
 				Predicate: "type",
 				Object:    "project",
 				Graph:     "default",
 			})
 			s.AddFact(meb.Fact{
-				Subject:   meb.DocumentID(projectMeta.Name),
+				Subject:   string(projectMeta.Name),
 				Predicate: "description",
 				Object:    projectMeta.Description,
 				Graph:     "default",
 			})
 			for _, tag := range projectMeta.Tags {
 				s.AddFact(meb.Fact{
-					Subject:   meb.DocumentID(projectMeta.Name),
+					Subject:   string(projectMeta.Name),
 					Predicate: "has_tag",
 					Object:    tag,
 					Graph:     "default",
@@ -168,7 +162,7 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 	wg.Wait()
 
 	// Final Passes
-	s.ResolveDependencies(ctx)
+	// s.ResolveDependencies(ctx) - removed in latest meb
 	EnhanceVirtualTriples(s)
 	TagRoles(s)
 
@@ -216,7 +210,7 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 	// Retry AddDocument to handle potential DB conflicts
 	var addErr error
 	for retries := 0; retries < 3; retries++ {
-		addErr = s.AddDocument(meb.DocumentID(relPath), content, nil, map[string]any{"project": projectName})
+		addErr = s.AddDocument(string(relPath), content, nil, map[string]any{"project": projectName})
 		if addErr == nil {
 			break
 		}
@@ -243,7 +237,7 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 		docFactsFound := 0
 
 		for _, fact := range bundle.Facts {
-			if fact.Predicate == meb.PredHasDoc {
+			if fact.Predicate == "has_doc" {
 				docFactsFound++
 				docText, ok := fact.Object.(string)
 				log.Printf("DEBUG: Found doc for %s (len=%d)", fact.Subject, len(docText))
@@ -255,7 +249,7 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 						log.Printf("Warning: embeddingWg is nil for %s", fact.Subject)
 					}
 
-					go func(symbolID meb.DocumentID, text string) {
+					go func(symbolID string, text string) {
 						// Acquire semaphore
 						if sem != nil {
 							sem <- struct{}{}
@@ -289,7 +283,7 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 							return
 						}
 
-						if err := s.Vectors().AddWithStringID(dictID, string(symbolID), embed); err != nil {
+						if err := s.Vectors().Add(dictID, embed); err != nil {
 							log.Printf("Error adding vector to store for %s: %v", symbolID, err)
 						} else {
 							log.Printf("Successfully stored embedding for %s (ID=%d)", symbolID, dictID)
@@ -310,7 +304,7 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 	if meta != nil && meta.Components != nil {
 		for _, comp := range meta.Components {
 			if strings.Contains(relPath, comp.Path) {
-				finalFacts = append(finalFacts, meb.Fact{Subject: meb.DocumentID(relPath), Predicate: "has_tag", Object: comp.Type, Graph: "default"})
+				finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: "has_tag", Object: comp.Type, Graph: "default"})
 				tagged = true
 				break // Assume one component per file for now
 			}
@@ -320,18 +314,18 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 	if !tagged {
 		if strings.HasSuffix(relPath, ".go") {
 			// fmt.Printf("DEBUG: Tagging %s as backend\n", relPath)
-			finalFacts = append(finalFacts, meb.Fact{Subject: meb.DocumentID(relPath), Predicate: "has_tag", Object: "backend", Graph: "default"})
+			finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: "has_tag", Object: "backend", Graph: "default"})
 		} else if strings.HasSuffix(relPath, ".ts") || strings.HasSuffix(relPath, ".tsx") {
 			// fmt.Printf("DEBUG: Tagging %s as frontend\n", relPath)
-			finalFacts = append(finalFacts, meb.Fact{Subject: meb.DocumentID(relPath), Predicate: "has_tag", Object: "frontend", Graph: "default"})
+			finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: "has_tag", Object: "frontend", Graph: "default"})
 		}
 	}
 
 	// Make sure file has type "file"
-	finalFacts = append(finalFacts, meb.Fact{Subject: meb.DocumentID(relPath), Predicate: "type", Object: "file", Graph: "default"})
+	finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: "type", Object: "file", Graph: "default"})
 
 	for _, f := range bundle.Facts {
-		if f.Predicate == meb.PredCalls {
+		if f.Predicate == "calls" {
 			if objStr, ok := f.Object.(string); ok {
 				if resolved, ok := symbolTable[objStr]; ok {
 					f.Object = resolved
@@ -377,7 +371,7 @@ func TagRoles(s *meb.MEBStore) error {
 	res, _ := s.Query(ctx, `triples(?url, "handled_by", ?h)`)
 	for _, r := range res {
 		h, _ := r["?h"].(string)
-		s.AddFact(meb.Fact{Subject: meb.DocumentID(h), Predicate: "has_role", Object: "api_handler", Graph: "virtual"})
+		s.AddFact(meb.Fact{Subject: string(h), Predicate: "has_role", Object: "api_handler", Graph: "virtual"})
 	}
 	// Tag Contracts
 	res, _ = s.Query(ctx, `triples(?s, "in_package", ?pkg)`)
@@ -385,7 +379,7 @@ func TagRoles(s *meb.MEBStore) error {
 		p, _ := r["?pkg"].(string)
 		sID, _ := r["?s"].(string)
 		if strings.Contains(p, "types") || strings.Contains(p, "models") || strings.Contains(p, "meb") || strings.Contains(p, "ast") {
-			s.AddFact(meb.Fact{Subject: meb.DocumentID(sID), Predicate: "has_role", Object: "data_contract", Graph: "virtual"})
+			s.AddFact(meb.Fact{Subject: string(sID), Predicate: "has_role", Object: "data_contract", Graph: "virtual"})
 		}
 	}
 	return nil

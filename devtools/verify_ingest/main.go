@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/ingest"
-	"github.com/duynguyendang/gca/pkg/meb"
-	"github.com/duynguyendang/gca/pkg/meb/store"
+	"github.com/duynguyendang/meb"
+	"github.com/duynguyendang/meb/store"
 	"github.com/joho/godotenv"
 )
 

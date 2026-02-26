@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/duynguyendang/gca/pkg/meb"
-	"github.com/duynguyendang/gca/pkg/meb/store"
+	"github.com/duynguyendang/meb"
+	"github.com/duynguyendang/meb/store"
 )
 
 func TestStoreManager_LRU(t *testing.T) {
@@ -25,11 +25,11 @@ func TestStoreManager_LRU(t *testing.T) {
 			t.Fatalf("Failed to create project dir: %v", err)
 		}
 		// Open and close a store to initialize it properly (so badger files exist)
-		s, err := meb.Open(pDir, store.DefaultConfig(pDir))
+		store, err := meb.NewMEBStore(store.DefaultConfig(pDir))
 		if err != nil {
 			t.Fatalf("Failed to init store %s: %v", id, err)
 		}
-		s.Close()
+		store.Close()
 	}
 
 	// 2. Init Manager with small LRU by overwriting the constant?
@@ -39,7 +39,7 @@ func TestStoreManager_LRU(t *testing.T) {
 	// For this test, verifying specific eviction count is hard without mocking LRU or changing the code to accept config.
 	// HOWEVER, we can just verify that GetStore works and projects are cached.
 
-	sm := NewStoreManager(tmpDir, MemoryProfileLow)
+	sm := NewStoreManager(tmpDir, MemoryProfileLow, false)
 
 	// Open p1
 	s1, err := sm.GetStore("p1")
@@ -72,7 +72,7 @@ func TestStoreManager_ListProjects_Caching(t *testing.T) {
 	// Create p1
 	os.Mkdir(filepath.Join(tmpDir, "p1"), 0755)
 
-	sm := NewStoreManager(tmpDir, MemoryProfileDefault)
+	sm := NewStoreManager(tmpDir, MemoryProfileDefault, false)
 
 	// First list
 	projects, err := sm.ListProjects()

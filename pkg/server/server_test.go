@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/duynguyendang/gca/internal/manager"
-	"github.com/duynguyendang/gca/pkg/meb"
-	"github.com/duynguyendang/gca/pkg/meb/store"
+	"github.com/duynguyendang/meb"
+	"github.com/duynguyendang/meb/store"
 )
 
 func TestServer_MultiProject(t *testing.T) {
@@ -41,7 +41,7 @@ func TestServer_MultiProject(t *testing.T) {
 		}
 		// Initialize DB (Open and Close to create manifest)
 		cfg := store.DefaultConfig(pDir)
-		db, err := meb.Open(pDir, cfg)
+		db, err := meb.NewMEBStore(cfg)
 		if err != nil {
 			t.Fatalf("Failed to initialize DB: %v", err)
 		}
@@ -49,11 +49,11 @@ func TestServer_MultiProject(t *testing.T) {
 	}
 
 	// Initialize Manager
-	mgr := manager.NewStoreManager(tmpDir)
+	mgr := manager.NewStoreManager(tmpDir, manager.MemoryProfileDefault, false)
 	defer mgr.CloseAll()
 
 	// Initialize Server
-	s := NewServer(mgr, tmpDir)
+	s := NewServer(mgr, tmpDir, "")
 
 	// Test GET /v1/projects
 	t.Run("ListProjects", func(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/duynguyendang/gca/pkg/meb"
-	"github.com/duynguyendang/gca/pkg/meb/store"
+	"github.com/duynguyendang/meb"
+	"github.com/duynguyendang/meb/store"
 	lru "github.com/hashicorp/golang-lru/v2"
 )
 
@@ -89,10 +89,6 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 	// Let's rely on standard config, but set ReadOnly.
 	if !sm.readOnly {
 		cfg.ReadOnly = false
-		cfg.BypassLockGuard = true
-	} else {
-		// In ReadOnly mode, we often want to bypass the lock to inspect running DBs
-		cfg.BypassLockGuard = true
 	}
 
 	// Apply Memory Profile
@@ -106,7 +102,7 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 		cfg.Profile = "Cloud-Run-LowMem"
 	}
 
-	s, err := meb.Open(projectDir, cfg)
+	s, err := meb.NewMEBStore(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open store for project %s: %w", projectID, err)
 	}

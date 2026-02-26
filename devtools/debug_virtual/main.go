@@ -7,8 +7,8 @@ import (
 
 	"strings"
 
-	"github.com/duynguyendang/gca/pkg/meb"
-	"github.com/duynguyendang/gca/pkg/meb/store"
+	"github.com/duynguyendang/meb"
+	"github.com/duynguyendang/meb/store"
 )
 
 func main() {
@@ -45,13 +45,13 @@ func main() {
 		fmt.Printf("[Debug] Found Service Func: %s\n", sID)
 
 		// Get Content
-		doc, err := s.GetDocument(meb.DocumentID(sID))
+		contentBytes, err := s.GetContentByKey(string(sID))
 		if err != nil {
 			fmt.Printf("[Debug] GetDocument failed for %s: %v\n", sID, err)
 			continue
 		}
 
-		content := string(doc.Content)
+		content := string(contentBytes)
 		// Debug print partial content
 		if len(content) > 50 {
 			fmt.Printf("[Debug] Content prefix: %s\n", content[:50])

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/duynguyendang/gca/pkg/export"
-	"github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/meb"
 )
 
 // FindShortestPath implements Dijkstra to find the shortest weighted path.
@@ -48,7 +48,7 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 
 	// API Bridge Portals: Pre-compute URL -> Handler map for O(1) jump
 	portals := make(map[string]string)
-	resPortals, _ := store.Query(ctx, fmt.Sprintf(`triples(?url, "%s", ?handler)`, meb.PredHandledBy))
+	resPortals, _ := store.Query(ctx, fmt.Sprintf(`triples(?url, "%s", ?handler)`, "handled_by"))
 	for _, r := range resPortals {
 		url, _ := r["?url"].(string)
 		handler, _ := r["?handler"].(string)
@@ -168,9 +168,9 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 
 func (s *GraphService) getWeight(pred string) int {
 	switch pred {
-	case meb.PredCalls, meb.PredCallsAPI, meb.PredHandledBy, "references", "exports":
+	case "calls", "calls_api", "handled_by", "references", "exports":
 		return 1
-	case meb.PredImports, meb.PredDefines, meb.PredInPackage:
+	case "imports", "defines", "in_package":
 		return 10
 	}
 	return 5 // Default for others (e.g. parent defines)
@@ -181,7 +181,7 @@ func (s *GraphService) getWeightedNeighbors(ctx context.Context, store *meb.MEBS
 
 	// Portals check (Logical jump)
 	if handler, ok := portals[nodeID]; ok {
-		neighbors[handler] = meb.PredHandledBy
+		neighbors[handler] = "handled_by"
 	}
 
 	// 1. Outbound edges
@@ -202,11 +202,11 @@ func (s *GraphService) getWeightedNeighbors(ctx context.Context, store *meb.MEBS
 	}
 
 	// 2. Inbound 'defines' (Structure Nav)
-	for fact, err := range store.Scan("", meb.PredDefines, nodeID, "default") {
+	for fact, err := range store.Scan("", "defines", nodeID, "default") {
 		if err != nil {
 			continue
 		}
-		parent := fact.Subject.String()
+		parent := fact.Subject
 		pred := "parent_defines"
 		if oldPred, exists := neighbors[parent]; !exists || s.getWeight(pred) < s.getWeight(oldPred) {
 			neighbors[parent] = pred
@@ -223,12 +223,12 @@ func (s *GraphService) buildGraphFromPath(ctx context.Context, store *meb.MEBSto
 	}
 
 	// Nodes
-	ids := make([]meb.DocumentID, len(path))
+	ids := make([]string, len(path))
 	for i, id := range path {
-		ids[i] = meb.DocumentID(id)
+		ids[i] = string(id)
 	}
-	hydrated, _ := store.HydrateShallow(ctx, ids, true)
-	hMap := make(map[string]meb.HydratedSymbol)
+	hydrated, _ := s.HydrateShallow(ctx, store, ids)
+	hMap := make(map[string]HydratedSymbol)
 	for _, h := range hydrated {
 		hMap[string(h.ID)] = h
 	}

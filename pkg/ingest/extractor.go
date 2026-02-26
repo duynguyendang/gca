@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/meb"
 	sitter "github.com/tree-sitter/go-tree-sitter"
 	golang "github.com/tree-sitter/tree-sitter-go/bindings/go"
 	javascript "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
@@ -186,8 +186,8 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 	// Special handling for Markdown files (Documentation)
 	if filepath.Ext(relPath) == ".md" {
 		bundle := &AnalysisBundle{
-			Documents: []meb.Document{{
-				ID:      meb.DocumentID(relPath),
+			Documents: []Document{{
+				ID:      string(relPath),
 				Content: content,
 				Metadata: map[string]any{
 					"file": relPath,
@@ -195,9 +195,9 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 				},
 			}},
 			Facts: []meb.Fact{
-				{Subject: meb.DocumentID(relPath), Predicate: meb.PredType, Object: "document", Graph: "default"},
-				{Subject: meb.DocumentID(relPath), Predicate: meb.PredHasDoc, Object: string(content), Graph: "default"},
-				{Subject: meb.DocumentID(relPath), Predicate: meb.PredInPackage, Object: "root", Graph: "default"}, // Assign to root package
+				{Subject: string(relPath), Predicate: "type", Object: "document", Graph: "default"},
+				{Subject: string(relPath), Predicate: "has_doc", Object: string(content), Graph: "default"},
+				{Subject: string(relPath), Predicate: "in_package", Object: "root", Graph: "default"}, // Assign to root package
 			},
 		}
 		return bundle, nil
@@ -210,7 +210,7 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 	}
 
 	bundle := &AnalysisBundle{
-		Documents: make([]meb.Document, 0, len(symbols)),
+		Documents: make([]Document, 0, len(symbols)),
 		Facts:     make([]meb.Fact, 0, len(symbols)*5),
 	}
 
@@ -224,8 +224,8 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 
 	// Emit File-Level Facts (once)
 	bundle.Facts = append(bundle.Facts, meb.Fact{
-		Subject:   meb.DocumentID(relPath),
-		Predicate: meb.PredInPackage,
+		Subject:   string(relPath),
+		Predicate: "in_package",
 		Object:    filePackage,
 		Graph:     "default",
 	})
@@ -233,8 +233,8 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 	tags := e.deriveTags(relPath)
 	for _, tag := range tags {
 		bundle.Facts = append(bundle.Facts, meb.Fact{
-			Subject:   meb.DocumentID(relPath),
-			Predicate: meb.PredHasTag,
+			Subject:   string(relPath),
+			Predicate: "has_tag",
 			Object:    tag,
 			Graph:     "default",
 		})
@@ -242,8 +242,8 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 
 	for _, sym := range symbols {
 		// Create Document
-		doc := meb.Document{
-			ID:      meb.DocumentID(sym.ID),
+		doc := Document{
+			ID:      string(sym.ID),
 			Content: []byte(sym.Content),
 			Metadata: map[string]any{
 				"file":       relPath,
@@ -257,17 +257,17 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 
 		// Create Facts
 		bundle.Facts = append(bundle.Facts,
-			meb.Fact{Subject: meb.DocumentID(sym.ID), Predicate: meb.PredType, Object: sym.Type, Graph: "default"},
-			meb.Fact{Subject: meb.DocumentID(relPath), Predicate: meb.PredDefines, Object: sym.ID, Graph: "default"},
-			meb.Fact{Subject: meb.DocumentID(sym.ID), Predicate: meb.PredInPackage, Object: filePackage, Graph: "default"},
-			meb.Fact{Subject: meb.DocumentID(sym.ID), Predicate: meb.PredName, Object: sym.Name, Graph: "default"},
+			meb.Fact{Subject: string(sym.ID), Predicate: "type", Object: sym.Type, Graph: "default"},
+			meb.Fact{Subject: string(relPath), Predicate: "defines", Object: sym.ID, Graph: "default"},
+			meb.Fact{Subject: string(sym.ID), Predicate: "in_package", Object: filePackage, Graph: "default"},
+			meb.Fact{Subject: string(sym.ID), Predicate: "name", Object: sym.Name, Graph: "default"},
 		)
 
 		// Role Tagging
 		if sym.Type == TypeStruct || sym.Type == TypeInterface || sym.Type == TypeClass {
 			bundle.Facts = append(bundle.Facts, meb.Fact{
-				Subject:   meb.DocumentID(sym.ID),
-				Predicate: meb.PredHasRole,
+				Subject:   string(sym.ID),
+				Predicate: "has_role",
 				Object:    "data_contract",
 				Graph:     "default",
 			})
@@ -277,8 +277,8 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 		// Heuristic: Method starts with "handle"
 		if sym.Type == TypeMethod && strings.HasPrefix(sym.Name, "handle") {
 			bundle.Facts = append(bundle.Facts, meb.Fact{
-				Subject:   meb.DocumentID(sym.ID),
-				Predicate: meb.PredHasRole,
+				Subject:   string(sym.ID),
+				Predicate: "has_role",
 				Object:    "api_handler",
 				Graph:     "default",
 			})
@@ -287,8 +287,8 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 		lowerPkg := strings.ToLower(filePackage)
 		if strings.Contains(lowerPkg, "util") || strings.Contains(lowerPkg, "helper") || strings.Contains(strings.ToLower(sym.Name), "util") {
 			bundle.Facts = append(bundle.Facts, meb.Fact{
-				Subject:   meb.DocumentID(sym.ID),
-				Predicate: meb.PredHasRole,
+				Subject:   string(sym.ID),
+				Predicate: "has_role",
 				Object:    "utility",
 				Graph:     "default",
 			})
@@ -296,8 +296,8 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 
 		if sym.DocComment != "" {
 			bundle.Facts = append(bundle.Facts, meb.Fact{
-				Subject:   meb.DocumentID(sym.ID),
-				Predicate: meb.PredHasDoc,
+				Subject:   string(sym.ID),
+				Predicate: "has_doc",
 				Object:    sym.DocComment,
 				Graph:     "default",
 			})
@@ -325,11 +325,10 @@ func (e *TreeSitterExtractor) addFacts(bundle *AnalysisBundle, relPath string, r
 			subj = relPath
 		}
 		bundle.Facts = append(bundle.Facts, meb.Fact{
-			Subject:   meb.DocumentID(subj),
+			Subject:   string(subj),
 			Predicate: ref.Predicate,
 			Object:    ref.Object,
 			Graph:     "default",
-			Source:    fmt.Sprintf("%s:%d", relPath, ref.Line),
 		})
 	}
 }
@@ -474,7 +473,7 @@ func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relP
 				if callee != "" && !isStdLibCall(callee, "go") {
 					*refs = append(*refs, Reference{
 						Subject:   currentScope,
-						Predicate: meb.PredCalls,
+						Predicate: "calls",
 						Object:    callee,
 						Line:      lineFromOffset(content, n.StartByte()),
 					})
@@ -599,7 +598,7 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 				resolvedImp := resolveImportPath(relPath, imp)
 				*refs = append(*refs, Reference{
 					Subject:   relPath,
-					Predicate: meb.PredImports,
+					Predicate: "imports",
 					Object:    resolvedImp,
 					Line:      lineFromOffset(content, n.StartByte()),
 				})
@@ -610,7 +609,7 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 					resolvedImp := resolveImportPath(relPath, imp)
 					*refs = append(*refs, Reference{
 						Subject:   relPath,
-						Predicate: meb.PredImports,
+						Predicate: "imports",
 						Object:    resolvedImp,
 						Line:      lineFromOffset(content, n.StartByte()),
 					})
@@ -625,7 +624,7 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 			resolvedMod := resolveImportPath(relPath, modName)
 			*refs = append(*refs, Reference{
 				Subject:   relPath,
-				Predicate: meb.PredImports,
+				Predicate: "imports",
 				Object:    resolvedMod,
 				Line:      lineFromOffset(content, n.StartByte()),
 			})
@@ -638,7 +637,7 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 				if !isStdLibCall(callee, "python") {
 					*refs = append(*refs, Reference{
 						Subject:   currentScope,
-						Predicate: meb.PredCalls,
+						Predicate: "calls",
 						Object:    callee,
 						Line:      lineFromOffset(content, n.StartByte()),
 					})
@@ -784,7 +783,7 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 			resolvedSrc := resolveImportPath(relPath, src)
 			*refs = append(*refs, Reference{
 				Subject:   relPath,
-				Predicate: meb.PredImports,
+				Predicate: "imports",
 				Object:    resolvedSrc,
 				Line:      lineFromOffset(content, n.StartByte()),
 			})
@@ -797,7 +796,7 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 				if len(callee) < 1024 && !isStdLibCall(callee, "js") {
 					*refs = append(*refs, Reference{
 						Subject:   currentScope,
-						Predicate: meb.PredCalls,
+						Predicate: "calls",
 						Object:    callee,
 						Line:      lineFromOffset(content, n.StartByte()),
 					})
@@ -846,7 +845,7 @@ func (e *TreeSitterExtractor) addImportRef(content []byte, node *sitter.Node, re
 		impPath := clean(pathNode.Utf8Text(content))
 		*refs = append(*refs, Reference{
 			Subject:   relPath,
-			Predicate: meb.PredImports,
+			Predicate: "imports",
 			Object:    impPath,
 			Line:      lineFromOffset(content, node.StartByte()),
 		})

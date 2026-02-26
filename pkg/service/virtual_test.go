@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/duynguyendang/gca/pkg/meb"
-	"github.com/duynguyendang/gca/pkg/meb/store"
+	"github.com/duynguyendang/meb"
+	"github.com/duynguyendang/meb/store"
 )
 
 func TestResolveVirtualTriples(t *testing.T) {
@@ -18,8 +18,7 @@ func TestResolveVirtualTriples(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	cfg := store.DefaultConfig(tmpDir)
-	cfg.BypassLockGuard = true // For testing
-	s, err := meb.Open(tmpDir, cfg)
+	s, err := meb.NewMEBStore(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,12 +39,12 @@ func TestResolveVirtualTriples(t *testing.T) {
 
 	// Add "defines" and "has_kind" facts
 	// Interface
-	s.AddFact(meb.Fact{Subject: meb.DocumentID(iName), Predicate: "has_kind", Object: "interface"})
+	s.AddFact(meb.Fact{Subject: string(iName), Predicate: "has_kind", Object: "interface"})
 
 	// Structs
-	s.AddFact(meb.Fact{Subject: meb.DocumentID(sName1), Predicate: "has_kind", Object: "struct"})
-	s.AddFact(meb.Fact{Subject: meb.DocumentID(sName2), Predicate: "has_kind", Object: "struct"})
-	s.AddFact(meb.Fact{Subject: meb.DocumentID(sName3), Predicate: "has_kind", Object: "struct"})
+	s.AddFact(meb.Fact{Subject: string(sName1), Predicate: "has_kind", Object: "struct"})
+	s.AddFact(meb.Fact{Subject: string(sName2), Predicate: "has_kind", Object: "struct"})
+	s.AddFact(meb.Fact{Subject: string(sName3), Predicate: "has_kind", Object: "struct"})
 
 	// 3. Setup Service
 	svc := NewGraphService(&MockStoreManager{store: s})

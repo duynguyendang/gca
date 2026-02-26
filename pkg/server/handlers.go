@@ -207,7 +207,7 @@ func (s *Server) handleSymbols(c *gin.Context) {
 		predicate = "defines" // Hardcoded literal instead of importing meb? Or import meb just for constant if needed.
 		// meb is not imported yet, I removed it.
 		// Let's assume "defines" string or import meb if critical.
-		// The original code used meb.PredDefines.
+		// The original code used "defines".
 		// GraphService doesn't expose constant.
 		// Let's just use string "defines".
 	}

@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/duynguyendang/gca/internal/manager"
-	"github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/service"
+	"github.com/duynguyendang/meb"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -199,12 +199,12 @@ func (ms *MCPServer) handleFileContent(ctx context.Context, request mcp.ReadReso
 
 	// Retrieve document
 	// DocumentID in store seems to be just the string path/ID
-	doc, err := ms.store.GetDocument(meb.DocumentID(path))
+	doc, err := ms.store.GetContentByKey(string(path))
 	if err != nil {
 		return nil, fmt.Errorf("file not found: %s", path)
 	}
 
-	if doc.Content == nil {
+	if doc == nil {
 		return nil, fmt.Errorf("no content available for file: %s", path)
 	}
 
@@ -212,7 +212,7 @@ func (ms *MCPServer) handleFileContent(ctx context.Context, request mcp.ReadReso
 		mcp.TextResourceContents{
 			URI:      request.Params.URI,
 			MIMEType: "text/plain", // TODO: Detect mime type if possible, or assume text for code
-			Text:     string(doc.Content),
+			Text:     string(doc),
 		},
 	}, nil
 }
@@ -262,10 +262,22 @@ func (ms *MCPServer) handleSearchNodes(ctx context.Context, request mcp.CallTool
 		limit = int(l)
 	}
 
-	// Use store.SearchSymbols
-	results, err := ms.store.SearchSymbols(query, limit, "")
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
+	// Use manual scan
+	var results []string
+	count := 0
+	for fact, err := range ms.store.Scan("", "defines", "", "") {
+		if err != nil {
+			continue
+		}
+		if obj, ok := fact.Object.(string); ok {
+			if strings.Contains(strings.ToLower(obj), strings.ToLower(query)) {
+				results = append(results, obj)
+				count++
+				if count >= limit {
+					break
+				}
+			}
+		}
 	}
 
 	return mcp.NewToolResultText(strings.Join(results, "\n")), nil
@@ -363,14 +375,14 @@ func (ms *MCPServer) handleGetClusters(ctx context.Context, request mcp.CallTool
 	// Scanning everything
 	// NOTE: This might be slow on large DBs.
 	// Optimized approach: Only scan structural edges.
-	structuralPreds := []string{meb.PredCalls, meb.PredImports, meb.PredDefines}
+	structuralPreds := []string{"calls", "imports", "defines"}
 
 	for _, pred := range structuralPreds {
 		for fact, err := range ms.store.Scan("", pred, "", "") {
 			if err != nil {
 				continue
 			}
-			src := fact.Subject.String()
+			src := fact.Subject
 			dst := fact.Object.(string)
 
 			if !nodeSet[src] {
@@ -405,8 +417,8 @@ func (ms *MCPServer) handleGetNodeMetadata(ctx context.Context, request mcp.Call
 	}
 
 	// Use Hydrate to get metadata
-	ids := []meb.DocumentID{meb.DocumentID(nodeID)}
-	hydrated, err := ms.store.Hydrate(ctx, ids, true) // shallow hydration
+	ids := []string{string(nodeID)}
+	hydrated, err := ms.graph.HydrateShallow(ctx, ms.store, ids) // shallow hydration
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("hydration failed: %v", err)), nil
 	}

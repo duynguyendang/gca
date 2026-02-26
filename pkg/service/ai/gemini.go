@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/prompts"
+	"github.com/duynguyendang/meb"
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
 )
@@ -595,11 +595,11 @@ Answer concisely and accurately based on the code provided.`, contextBuilder.Str
 
 func (s *GeminiService) appendSymbolContext(ctx context.Context, store *meb.MEBStore, symbolID string, sb *strings.Builder) error {
 	// 1. Fetch Symbol Content
-	val, err := store.GetDocument(meb.DocumentID(symbolID))
+	contentBytes, err := store.GetContentByKey(string(symbolID))
 	if err != nil {
 		return err
 	}
-	content := string(val.Content)
+	content := string(contentBytes)
 
 	// 2. Run 1-hop Datalog queries
 	// Inbound: Who calls me?

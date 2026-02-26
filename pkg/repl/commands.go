@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/meb"
 )
 
 // HandleShow executes the "show" command to display source code of a symbol.
@@ -14,20 +14,22 @@ func HandleShow(ctx context.Context, s *meb.MEBStore, arg string) {
 		return
 	}
 
-	targetID := meb.DocumentID(arg)
+	targetID := string(arg)
 
 	// Fetch document from DocStore
-	doc, err := s.GetDocument(targetID)
+	content, err := s.GetContentByKey(targetID)
 	if err != nil {
 		fmt.Printf("❌ Failed to get document: %v\n", err)
 		return
 	}
 
+	metadata, _ := s.GetDocumentMetadata(targetID)
+
 	// Display metadata
-	fmt.Printf("📄 Document: %s\n", doc.ID)
-	if len(doc.Metadata) > 0 {
+	fmt.Printf("📄 Document: %s\n", targetID)
+	if len(metadata) > 0 {
 		fmt.Println("Metadata:")
-		for k, v := range doc.Metadata {
+		for k, v := range metadata {
 			fmt.Printf("  - %s: %v\n", k, v)
 		}
 	} else {
@@ -35,9 +37,9 @@ func HandleShow(ctx context.Context, s *meb.MEBStore, arg string) {
 	}
 
 	// Display content
-	if len(doc.Content) > 0 {
+	if len(content) > 0 {
 		fmt.Println("\n--- Source Code ---")
-		fmt.Println(string(doc.Content))
+		fmt.Println(string(content))
 		fmt.Println("-------------------")
 	} else {
 		fmt.Println("\n[No content available]")

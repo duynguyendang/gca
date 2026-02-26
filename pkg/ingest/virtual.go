@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/meb"
 )
 
 // EnhanceVirtualTriples injects "virtual" edges to bridge the gap between
@@ -97,11 +97,11 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		if strings.Contains(id, ":") {
 			continue
 		}
-		doc, err := s.GetDocument(meb.DocumentID(id))
+		doc, err := s.GetContentByKey(string(id))
 		if err != nil {
 			continue
 		}
-		content := string(doc.Content)
+		content := string(doc)
 		// Basic heuristic: check if file looks like a router setup
 		if !strings.Contains(content, "gin.Default") && !strings.Contains(content, "gin.New") && !strings.Contains(content, ".Group") && !strings.Contains(content, "Router") {
 			continue
@@ -126,9 +126,9 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 
 			if targetID, ok := symbolLookup[handlerToken]; ok {
 				routeMap[route] = targetID
-				s.AddFact(meb.Fact{Subject: meb.DocumentID(route), Predicate: "handled_by", Object: targetID, Graph: "virtual"})
+				s.AddFact(meb.Fact{Subject: string(route), Predicate: "handled_by", Object: targetID, Graph: "virtual"})
 				// REL-02: Tag the handler as an api_handler
-				s.AddFact(meb.Fact{Subject: meb.DocumentID(targetID), Predicate: "has_role", Object: "api_handler", Graph: "virtual"})
+				s.AddFact(meb.Fact{Subject: string(targetID), Predicate: "has_role", Object: "api_handler", Graph: "virtual"})
 			} else {
 				// DEBUG: Why did lookup fail?
 				fmt.Printf("[Virtual] Failed to link route %s to handler %s (token: %s). Symbol not found.\n", route, rawHandler, handlerToken)
@@ -147,10 +147,10 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 			cleanRef = ref[:idx]
 		}
 		if _, exists := routeMap[cleanRef]; exists {
-			s.AddFact(meb.Fact{Subject: meb.DocumentID(sID), Predicate: "calls_api", Object: cleanRef, Graph: "virtual"})
+			s.AddFact(meb.Fact{Subject: string(sID), Predicate: "calls_api", Object: cleanRef, Graph: "virtual"})
 			// Also add direct 'calls' link to the backend handler to enable standard pathfinding
 			targetID := routeMap[cleanRef]
-			s.AddFact(meb.Fact{Subject: meb.DocumentID(sID), Predicate: "calls", Object: targetID, Graph: "virtual"})
+			s.AddFact(meb.Fact{Subject: string(sID), Predicate: "calls", Object: targetID, Graph: "virtual"})
 		}
 	}
 
@@ -164,9 +164,9 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		if strings.Contains(id, ":") {
 			continue
 		}
-		doc, err := s.GetDocument(meb.DocumentID(id))
+		doc, err := s.GetContentByKey(string(id))
 		if err == nil {
-			content := string(doc.Content)
+			content := string(doc)
 			qDef := fmt.Sprintf(`triples("%s", "defines", ?s)`, id)
 			resDef, _ := s.Query(ctx, qDef)
 			for _, r := range resDef {
@@ -198,7 +198,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 			if strings.Contains(h.Content, "."+methodName+"(") {
 				for _, svcID := range svcIDs {
 					if h.ID != svcID {
-						s.AddFact(meb.Fact{Subject: meb.DocumentID(h.ID), Predicate: "calls", Object: svcID, Graph: "virtual"})
+						s.AddFact(meb.Fact{Subject: string(h.ID), Predicate: "calls", Object: svcID, Graph: "virtual"})
 					}
 				}
 			}
@@ -221,7 +221,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		for modelName, targets := range contractMap {
 			if strings.Contains(h.Content, modelName) {
 				for _, tID := range targets {
-					s.AddFact(meb.Fact{Subject: meb.DocumentID(h.ID), Predicate: "exposes_model", Object: tID, Graph: "virtual"})
+					s.AddFact(meb.Fact{Subject: string(h.ID), Predicate: "exposes_model", Object: tID, Graph: "virtual"})
 				}
 			}
 		}
@@ -238,7 +238,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		for _, r := range resDef {
 			sID := r["?s"].(string)
 			if strings.EqualFold(filepath.Base(strings.Split(sID, ":")[1]), base) {
-				s.AddFact(meb.Fact{Subject: meb.DocumentID(id), Predicate: "exports", Object: sID, Graph: "virtual"})
+				s.AddFact(meb.Fact{Subject: string(id), Predicate: "exports", Object: sID, Graph: "virtual"})
 			}
 		}
 	}

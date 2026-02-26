@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"

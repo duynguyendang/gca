@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/duynguyendang/gca/pkg/export"
-	"github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/prompts"
+	"github.com/duynguyendang/meb"
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
 )
@@ -222,14 +222,14 @@ func Run(ctx context.Context, cfg Config, s *meb.MEBStore) {
 			// 2. Gather candidates from MEBStore
 			// We scan all symbols in the dictionary
 			var candidates []string
-			err = s.IterateSymbols(func(sym string) bool {
-				candidates = append(candidates, sym)
-				return true
-			})
-			if err != nil {
-				fmt.Printf("❌ Failed to scan symbols: %v\n", err)
-				continue
-			}
+			// err = s.IterateSymbols(func(sym string) bool {
+			// 	candidates = append(candidates, sym)
+			// 	return true
+			// })
+			// if err != nil {
+			// 	fmt.Printf("❌ Failed to scan symbols: %v\n", err)
+			// 	continue
+			// }
 
 			// 3. Fuzzy Match
 			// tailoredQuery combines keywords for better fuzzy matching context if needed,

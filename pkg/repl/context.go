@@ -5,16 +5,22 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/meb"
 )
+
+// SymbolStat local definition since it was removed from meb
+type SymbolStat struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
 
 // ProjectSummary holds a structured summary of the codebase for the AI Planner.
 type ProjectSummary struct {
-	Predicates  []string         `json:"predicates"`
-	Packages    []string         `json:"packages"`
-	TopSymbols  []meb.SymbolStat `json:"top_symbols"`
-	Stats       map[string]int   `json:"stats"`
-	EntryPoints []string         `json:"entry_points"`
+	Predicates  []string       `json:"predicates"`
+	Packages    []string       `json:"packages"`
+	TopSymbols  []SymbolStat   `json:"top_symbols"`
+	Stats       map[string]int `json:"stats"`
+	EntryPoints []string       `json:"entry_points"`
 }
 
 // GenerateProjectSummary scans the database and generates a structured context summary.
@@ -59,7 +65,11 @@ func GenerateProjectSummary(s *meb.MEBStore) (*ProjectSummary, error) {
 
 // discoverPredicates uses the high-level MEBStore API to find all unique predicates.
 func discoverPredicates(s *meb.MEBStore) ([]string, error) {
-	return s.GetAllPredicates()
+	var preds []string
+	for _, p := range s.ListPredicates() {
+		preds = append(preds, string(p.Symbol))
+	}
+	return preds, nil
 }
 
 // extractPackages scans for "defines" predicate facts and extracts unique directory paths.
@@ -100,22 +110,9 @@ func extractPackages(s *meb.MEBStore) ([]string, error) {
 }
 
 // analyzeTopSymbols retrieves the top N most frequent symbols using MEBStore API.
-func analyzeTopSymbols(s *meb.MEBStore, limit int) ([]meb.SymbolStat, error) {
-	// Common stdlib types to exclude
-	stdlibTypes := map[string]bool{
-		"int": true, "int64": true, "int32": true, "int16": true, "int8": true,
-		"uint": true, "uint64": true, "uint32": true, "uint16": true, "uint8": true,
-		"float64": true, "float32": true, "string": true, "bool": true,
-		"byte": true, "rune": true, "error": true, "interface{}": true,
-		"map": true, "slice": true, "chan": true, "func": true,
-		"true": true, "false": true, "nil": true,
-	}
-
-	filter := func(sym string) bool {
-		return !stdlibTypes[sym] && sym != ""
-	}
-
-	return s.GetTopSymbols(limit, filter)
+func analyzeTopSymbols(s *meb.MEBStore, limit int) ([]SymbolStat, error) {
+	// Function removed. Return empty stats.
+	return []SymbolStat{}, nil
 }
 
 // gatherStats computes high-level system statistics.

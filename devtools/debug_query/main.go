@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/duynguyendang/gca/pkg/meb"
-	"github.com/duynguyendang/gca/pkg/meb/store"
+	"github.com/duynguyendang/meb"
+	"github.com/duynguyendang/meb/store"
 )
 
 func main() {
@@ -30,11 +30,11 @@ func main() {
 
 	// 1. Check if the file exists
 	targetFile := "langgraph-fixed/libs/checkpoint/langgraph/checkpoint/serde/base.py"
-	doc, err := db.GetDocument(meb.DocumentID(targetFile))
+	content, err := db.GetContentByKey(string(targetFile))
 	if err != nil {
 		fmt.Printf("File %s NOT FOUND: %v\n", targetFile, err)
 	} else {
-		fmt.Printf("File %s FOUND. Content length: %d\n", targetFile, len(doc.Content))
+		fmt.Printf("File %s FOUND. Content length: %d\n", targetFile, len(content))
 	}
 
 	// 2. Check for specific symbol content
@@ -42,14 +42,14 @@ func main() {
 	// This maps to the file content itself often in our schema for modules
 	targetSymbol := "langgraph-fixed/libs/checkpoint/langgraph/checkpoint/serde/base.py"
 
-	var symDoc *meb.Document
-	symDoc, err = db.GetDocument(meb.DocumentID(targetSymbol))
+	var symContent []byte
+	symContent, err = db.GetContentByKey(string(targetSymbol))
 	if err != nil {
 		fmt.Printf("Symbol %s NOT FOUND: %v\n", targetSymbol, err)
 	} else {
-		fmt.Printf("Symbol %s FOUND. Content length: %d\n", targetSymbol, len(symDoc.Content))
-		if len(symDoc.Content) > 0 {
-			fmt.Printf("Sample: %.50s...\n", string(symDoc.Content))
+		fmt.Printf("Symbol %s FOUND. Content length: %d\n", targetSymbol, len(symContent))
+		if len(symContent) > 0 {
+			fmt.Printf("Sample: %.50s...\n", string(symContent))
 		}
 	}
 
@@ -59,7 +59,7 @@ func main() {
 
 	fmt.Printf("Imports for %s:\n", importingFile)
 	found := false
-	for fact, err := range db.Scan(importingFile, meb.PredImports, "", "") {
+	for fact, err := range db.Scan(importingFile, "imports", "", "") {
 		if err != nil {
 			fmt.Printf("Error scanning imports: %v\n", err)
 			continue

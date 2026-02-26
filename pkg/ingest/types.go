@@ -3,13 +3,21 @@ package ingest
 import (
 	"context"
 
-	"github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/meb"
 )
 
 // AnalysisBundle holds the results of extracting a file.
 // It separates raw documents from relational facts.
+type Document struct {
+	ID       string
+	Content  []byte
+	Metadata map[string]any
+}
+
+// AnalysisBundle holds the results of extracting a file.
+// It separates raw documents from relational facts.
 type AnalysisBundle struct {
-	Documents []meb.Document
+	Documents []Document
 	Facts     []meb.Fact
 }
 

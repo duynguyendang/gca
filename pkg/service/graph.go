@@ -12,9 +12,53 @@ import (
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/duynguyendang/gca/pkg/export"
-	"github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/repl"
+	"github.com/duynguyendang/meb"
 )
+
+// HydratedSymbol replaces the removed meb.HydratedSymbol schema.
+type HydratedSymbol struct {
+	ID       string
+	Kind     string
+	Content  string
+	Metadata map[string]interface{}
+	Children []HydratedSymbol
+}
+
+func (s *GraphService) HydrateShallow(ctx context.Context, store *meb.MEBStore, ids []string) ([]HydratedSymbol, error) {
+	var hydrated []HydratedSymbol
+	for _, id := range ids {
+		hs := HydratedSymbol{ID: id, Metadata: make(map[string]interface{})}
+		for fact, _ := range store.Scan(id, "has_kind", "", "") {
+			if str, ok := fact.Object.(string); ok {
+				hs.Kind = str
+				break
+			}
+		}
+		// simplified metadata fetch for brevity
+		for fact, _ := range store.Scan(id, "has_language", "", "") {
+			if str, ok := fact.Object.(string); ok {
+				hs.Metadata["language"] = str
+				break
+			}
+		}
+		hydrated = append(hydrated, hs)
+	}
+	return hydrated, nil
+}
+
+func (s *GraphService) Hydrate(ctx context.Context, store *meb.MEBStore, ids []string) ([]HydratedSymbol, error) {
+	hydrated, err := s.HydrateShallow(ctx, store, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range hydrated {
+		hs := &hydrated[i]
+		content, _ := store.GetContentByKey(hs.ID)
+		hs.Content = string(content)
+	}
+	return hydrated, nil
+}
 
 // ProjectStoreManager interface abstraction
 type ProjectStoreManager interface {
@@ -161,9 +205,9 @@ func mustAtoi(s string) int {
 
 // enrichNodes populates node content and kind from the store.
 func (s *GraphService) enrichNodes(ctx context.Context, store *meb.MEBStore, graph *export.D3Graph, lazy bool) error {
-	ids := make([]meb.DocumentID, len(graph.Nodes))
+	ids := make([]string, len(graph.Nodes))
 	for i, n := range graph.Nodes {
-		ids[i] = meb.DocumentID(n.ID)
+		ids[i] = string(n.ID)
 	}
 
 	// Use HydrateShallow if lazy is true, assuming lazy implies we just want metadata
@@ -189,27 +233,27 @@ func (s *GraphService) enrichNodes(ctx context.Context, store *meb.MEBStore, gra
 	// So `n.Children` from hydration is likely redundant or used only for specific "Expand" actions in old logic.
 	// Safe to use HydrateShallow if lazy is true.
 
-	var hydrated []meb.HydratedSymbol
+	var hydrated []HydratedSymbol
 	var err error
 
 	if lazy {
-		hydrated, err = store.HydrateShallow(ctx, ids, true)
+		hydrated, err = s.HydrateShallow(ctx, store, ids)
 	} else {
-		hydrated, err = store.Hydrate(ctx, ids, false)
+		hydrated, err = s.Hydrate(ctx, store, ids)
 	}
 
 	if err != nil {
 		return err
 	}
 
-	hMap := make(map[meb.DocumentID]meb.HydratedSymbol)
+	hMap := make(map[string]HydratedSymbol)
 	for _, h := range hydrated {
 		hMap[h.ID] = h
 	}
 
 	for i := range graph.Nodes {
 		n := &graph.Nodes[i]
-		if h, ok := hMap[meb.DocumentID(n.ID)]; ok {
+		if h, ok := hMap[string(n.ID)]; ok {
 			n.Code = h.Content
 			if h.Kind != "" {
 				n.Kind = h.Kind
@@ -245,7 +289,7 @@ func (s *GraphService) enrichNodes(ctx context.Context, store *meb.MEBStore, gra
 	return nil
 }
 
-func (s *GraphService) mapChildren(hydrated []meb.HydratedSymbol) []export.D3Node {
+func (s *GraphService) mapChildren(hydrated []HydratedSymbol) []export.D3Node {
 	if len(hydrated) == 0 {
 		return nil
 	}
@@ -301,12 +345,12 @@ func (s *GraphService) GetSource(projectID, docID string) (string, error) {
 	}
 
 	// Try the docID as-is first
-	doc, err := store.GetDocument(meb.DocumentID(docID))
+	doc, err := store.GetContentByKey(string(docID))
 	if err != nil {
 		// If not found and projectID is set, try with project prefix
 		if projectID != "" && !strings.HasPrefix(docID, projectID+"/") {
 			prefixedDocID := projectID + "/" + docID
-			doc, err = store.GetDocument(meb.DocumentID(prefixedDocID))
+			doc, err = store.GetContentByKey(string(prefixedDocID))
 		}
 
 		if err != nil {
@@ -314,24 +358,24 @@ func (s *GraphService) GetSource(projectID, docID string) (string, error) {
 		}
 	}
 
-	return string(doc.Content), nil
+	return string(doc), nil
 }
 
 // GetSymbol retrieves the full hydrated symbol (content + metadata) for a given ID.
-func (s *GraphService) GetSymbol(ctx context.Context, projectID, docID string) (*meb.HydratedSymbol, error) {
+func (s *GraphService) GetSymbol(ctx context.Context, projectID, docID string) (*HydratedSymbol, error) {
 	store, err := s.getStore(projectID)
 	if err != nil {
 		return nil, err
 	}
 
-	ids := []meb.DocumentID{meb.DocumentID(docID)}
-	hydrated, err := store.Hydrate(ctx, ids, false) // lazy=false to fetch content
+	ids := []string{string(docID)}
+	hydrated, err := s.Hydrate(ctx, store, ids) // lazy=false to fetch content
 	if err != nil || len(hydrated) == 0 {
 		// If not found and projectID is set, try with project prefix
 		if projectID != "" && !strings.HasPrefix(docID, projectID+"/") {
 			prefixedDocID := projectID + "/" + docID
-			ids = []meb.DocumentID{meb.DocumentID(prefixedDocID)}
-			hydrated, err = store.Hydrate(ctx, ids, false)
+			ids = []string{string(prefixedDocID)}
+			hydrated, err = s.Hydrate(ctx, store, ids)
 		}
 
 		if err != nil || len(hydrated) == 0 {
@@ -508,20 +552,11 @@ func (s *GraphService) GetPredicates(projectID string) ([]map[string]string, err
 		return nil, err
 	}
 
-	preds, err := store.GetAllPredicates()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", errors.ErrInternal, err)
-	}
-
 	var results []map[string]string
-	for _, p := range preds {
-		if m, ok := meb.SystemPredicates[p]; ok {
-			results = append(results, map[string]string{
-				"name":        p,
-				"description": m.Description,
-				"example":     m.Example,
-			})
-		}
+	for _, p := range store.ListPredicates() {
+		results = append(results, map[string]string{
+			"name": string(p.Symbol),
+		})
 	}
 	return results, nil
 }
@@ -537,7 +572,23 @@ func (s *GraphService) SearchSymbols(projectID, query, predicate string, limit i
 		limit = 50
 	}
 
-	return store.SearchSymbols(query, limit, predicate)
+	var matches []string
+	count := 0
+	for fact, err := range store.Scan("", "defines", "", "") {
+		if err != nil {
+			continue
+		}
+		if obj, ok := fact.Object.(string); ok {
+			if strings.Contains(strings.ToLower(obj), strings.ToLower(query)) {
+				matches = append(matches, obj)
+				count++
+				if count >= limit {
+					break
+				}
+			}
+		}
+	}
+	return matches, nil
 }
 
 // ListFiles returns all ingested file paths for a project.
@@ -548,7 +599,7 @@ func (s *GraphService) ListFiles(projectID string) ([]string, error) {
 	}
 
 	// Query for all files using type=file (more reliable than hash which relies on PSO index)
-	q := fmt.Sprintf("triples(?f, \"%s\", \"file\")", meb.PredType)
+	q := fmt.Sprintf("triples(?f, \"%s\", \"file\")", "type")
 	results, err := store.Query(context.Background(), q)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errors.ErrInternal, err)
@@ -588,7 +639,7 @@ func (s *GraphService) GetFileGraph(ctx context.Context, projectID, fileID strin
 	if projectID != "" && !strings.HasPrefix(cleanFileID, projectID+"/") {
 		prefixedFileID := projectID + "/" + cleanFileID
 		// Check if the prefixed version exists in the store
-		if _, err := store.GetDocument(meb.DocumentID(prefixedFileID)); err == nil {
+		if _, err := store.GetContentByKey(string(prefixedFileID)); err == nil {
 			cleanFileID = prefixedFileID
 		}
 	}
@@ -1513,8 +1564,8 @@ func (s *GraphService) SemanticSearch(ctx context.Context, projectID, query stri
 	// Map results to symbol IDs
 	results := make([]SemanticSearchResult, 0, len(vectorResults))
 	for _, vr := range vectorResults {
-		symbolID, ok := store.Vectors().GetStringID(vr.ID)
-		if !ok {
+		symbolID, err := store.ResolveID(vr.ID)
+		if err != nil {
 			continue
 		}
 		// Extract name from symbol ID

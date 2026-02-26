@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/duynguyendang/gca/internal/manager"
-	"github.com/duynguyendang/gca/pkg/meb"
-	"github.com/duynguyendang/gca/pkg/meb/store"
+	"github.com/duynguyendang/meb"
+	"github.com/duynguyendang/meb/store"
 )
 
 // MockStoreManager
@@ -31,8 +31,7 @@ func TestGetFileGraph_Lazy(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	cfg := store.DefaultConfig(tmpDir)
-	cfg.BypassLockGuard = true // For testing
-	s, err := meb.Open(tmpDir, cfg)
+	s, err := meb.NewMEBStore(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,13 +48,13 @@ func TestGetFileGraph_Lazy(t *testing.T) {
 
 	// Add facts
 	// AddFact(Fact) error
-	if err := s.AddFact(meb.Fact{Subject: meb.DocumentID(file), Predicate: "defines", Object: mainFunc, Graph: "default"}); err != nil {
+	if err := s.AddFact(meb.Fact{Subject: string(file), Predicate: "defines", Object: mainFunc, Graph: "default"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddFact(meb.Fact{Subject: meb.DocumentID(mainFunc), Predicate: "calls", Object: fooFunc, Graph: "default"}); err != nil {
+	if err := s.AddFact(meb.Fact{Subject: string(mainFunc), Predicate: "calls", Object: fooFunc, Graph: "default"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddFact(meb.Fact{Subject: meb.DocumentID(file), Predicate: "imports", Object: "fmt", Graph: "default"}); err != nil {
+	if err := s.AddFact(meb.Fact{Subject: string(file), Predicate: "imports", Object: "fmt", Graph: "default"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -70,13 +69,13 @@ func TestGetFileGraph_Lazy(t *testing.T) {
 
 	hasCall := false
 	for _, l := range gFull.Links {
-		if l.Relation == "calls" && l.Source == mainFunc && l.Target == fooFunc {
+		if l.Relation == "calls" && l.Source == "main.go" && l.Target == "pkg/foo.go" {
 			hasCall = true
 			break
 		}
 	}
 	if !hasCall {
-		t.Errorf("Expected call edge in full graph, got none")
+		t.Errorf("Expected file-level call edge in full graph, got none")
 	}
 
 	// 5. Test Lazy -> Expect NO calls
@@ -103,16 +102,16 @@ func TestGetFileGraph_Lazy(t *testing.T) {
 		t.Errorf("Expected imports in lazy graph, found none")
 	}
 
-	// Verify Defines still exist in Lazy
-	hasDefine := false
-	for _, l := range gLazy.Links {
-		if l.Relation == "defines" {
-			hasDefine = true
+	// Verify file node exists instead of define link, as defines are self-links mapped to files and stripped
+	hasMainNode := false
+	for _, n := range gLazy.Nodes {
+		if n.ID == file {
+			hasMainNode = true
 			break
 		}
 	}
-	if !hasDefine {
-		t.Errorf("Expected defines in lazy graph, found none")
+	if !hasMainNode {
+		t.Errorf("Expected main.go node in lazy graph, found none")
 	}
 }
 
@@ -125,8 +124,7 @@ func TestGetFlowPath(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	cfg := store.DefaultConfig(tmpDir)
-	cfg.BypassLockGuard = true // For testing
-	s, err := meb.Open(tmpDir, cfg)
+	s, err := meb.NewMEBStore(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

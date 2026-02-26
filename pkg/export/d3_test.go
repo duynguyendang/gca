@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/duynguyendang/gca/pkg/meb"
-	"github.com/duynguyendang/gca/pkg/meb/store"
+	"github.com/duynguyendang/meb"
+	"github.com/duynguyendang/meb/store"
 )
 
 func TestD3Transformer(t *testing.T) {

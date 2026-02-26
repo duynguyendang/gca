@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/datalog"
-	"github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/meb"
 )
 
 // D3Node represents a node in the D3 force-directed graph.
@@ -76,7 +76,7 @@ func (t *D3Transformer) detectInternalPrefixes() {
 	// These are all internal to the project
 	prefixSet := make(map[string]bool)
 
-	for fact, _ := range t.Store.Scan("", meb.PredHash, "", "") {
+	for fact, _ := range t.Store.Scan("", "hash", "", "") {
 		filePath := string(fact.Subject)
 
 		// Extract package prefix (first part before colon if symbol, or directory)
@@ -275,8 +275,8 @@ func (t *D3Transformer) isInternalNode(id string) bool {
 
 	// Check if the file exists in the store (was ingested)
 	// This is the most reliable way to detect internal files
-	doc, err := t.Store.GetDocument(meb.DocumentID(basePath))
-	if err == nil && len(doc.Content) > 0 {
+	content, err := t.Store.GetContentByKey(string(basePath))
+	if err == nil && len(content) > 0 {
 		return true
 	}
 
@@ -338,9 +338,9 @@ func (t *D3Transformer) getMetadata(id string) (string, string, string) {
 	}
 
 	// 3. Get Source Code from DocStore (instead of FactStore)
-	doc, err := t.Store.GetDocument(meb.DocumentID(id))
-	if err == nil && len(doc.Content) > 0 {
-		code = string(doc.Content)
+	content, err := t.Store.GetContentByKey(string(id))
+	if err == nil && len(content) > 0 {
+		code = string(content)
 	}
 
 	// Fallback: Infer language from file extension if not found in DB

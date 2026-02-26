@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 
 	"github.com/duynguyendang/gca/pkg/ingest"
-	"github.com/duynguyendang/gca/pkg/meb"
-	"github.com/duynguyendang/gca/pkg/meb/store"
+	"github.com/duynguyendang/meb"
+	"github.com/duynguyendang/meb/store"
 )
 
 func main() {
@@ -50,7 +50,7 @@ func main() {
 	}
 
 	// Add File Doc
-	if err := db.AddDocument(meb.DocumentID(relPath), content, nil, map[string]any{"project": projectID}); err != nil {
+	if err := db.AddDocument(string(relPath), content, nil, map[string]any{"project": projectID}); err != nil {
 		log.Printf("Failed to add file doc: %v", err)
 	}
 
