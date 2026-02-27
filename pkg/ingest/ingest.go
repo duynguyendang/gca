@@ -212,19 +212,22 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 	for retries := 0; retries < 3; retries++ {
 		addErr = s.AddDocument(string(relPath), content, nil, map[string]any{"project": projectName})
 		if addErr == nil {
+			log.Printf("DEBUG Ingest: Successfully stored raw content for %s using AddDocument", relPath)
 			break
 		}
 		// fast retry for conflicts
 		time.Sleep(time.Millisecond * time.Duration(10*(retries+1)))
 	}
 	if addErr != nil {
+		log.Printf("DEBUG Ingest: FAILED to store raw content for %s: %v", relPath, addErr)
 		return fmt.Errorf("failed to add document %s: %w", relPath, addErr)
 	}
 
 	// Store symbol documents (with file, start_line, end_line metadata for snippet extraction)
 	for _, doc := range bundle.Documents {
-		// Store content for symbols so it can be retrieved by UI
-		if err := s.AddDocument(doc.ID, doc.Content, nil, doc.Metadata); err != nil {
+		// Store ONLY metadata and dictionary ID for symbols to save DB space.
+		// The frontend dynamically extracts snippets from the full file content using start/end lines.
+		if err := s.AddDocument(doc.ID, nil, nil, doc.Metadata); err != nil {
 			// Log error but continue for symbols? Or fail file?
 			// Identifying symbols is important but not critical for file content.
 			// Let's log warning.

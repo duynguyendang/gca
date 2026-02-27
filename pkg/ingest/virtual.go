@@ -155,22 +155,29 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	}
 
 	// 4. Internal Service Linker (Optimized)
-	type HandlerInfo struct {
+	// We should only scan the content per file ONCE, not per symbol defined in the file!
+	type FileInfo struct {
 		ID      string
 		Content string
+		Symbols []string
 	}
-	var handlers []HandlerInfo
+	var files []FileInfo
 	for id := range beSet {
 		if strings.Contains(id, ":") {
-			continue
+			continue // skip symbols, only process files
 		}
 		doc, err := s.GetContentByKey(string(id))
 		if err == nil {
 			content := string(doc)
 			qDef := fmt.Sprintf(`triples("%s", "defines", ?s)`, id)
 			resDef, _ := s.Query(ctx, qDef)
+
+			var symbols []string
 			for _, r := range resDef {
-				handlers = append(handlers, HandlerInfo{ID: r["?s"].(string), Content: content})
+				symbols = append(symbols, r["?s"].(string))
+			}
+			if len(symbols) > 0 {
+				files = append(files, FileInfo{ID: id, Content: content, Symbols: symbols})
 			}
 		}
 	}
@@ -180,7 +187,8 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	resMethods, _ := s.Query(ctx, qMethods)
 	for _, r := range resMethods {
 		id := r["?s"].(string)
-		if isTagged(id, beSet) {
+		// Check both beSet and feSet just in case
+		if beSet[id] || isTagged(id, beSet) {
 			parts := strings.Split(id, ":")
 			if len(parts) > 1 {
 				name := parts[1]
@@ -193,12 +201,24 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	}
 
 	fmt.Println("[Virtual] Scanning internal BE calls...")
-	for _, h := range handlers {
+	methodCallRegex := regexp.MustCompile(`\.([A-Za-z0-9_]+)\(`)
+
+	for _, f := range files {
+		// Extract all called methods in this file once
+		calledMethods := make(map[string]bool)
+		matches := methodCallRegex.FindAllStringSubmatch(f.Content, -1)
+		for _, m := range matches {
+			if len(m) > 1 {
+				calledMethods[m[1]] = true
+			}
+		}
+
 		for methodName, svcIDs := range methodIndex {
-			if strings.Contains(h.Content, "."+methodName+"(") {
+			if calledMethods[methodName] {
+				// The file references the method. Assign 'calls' from the file to the target method.
 				for _, svcID := range svcIDs {
-					if h.ID != svcID {
-						s.AddFact(meb.Fact{Subject: string(h.ID), Predicate: "calls", Object: svcID, Graph: "virtual"})
+					if f.ID != svcID {
+						s.AddFact(meb.Fact{Subject: f.ID, Predicate: "calls", Object: svcID, Graph: "virtual"})
 					}
 				}
 			}
@@ -217,11 +237,14 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		}
 	}
 	fmt.Println("[Virtual] Scanning for Data Lineage...")
-	for _, h := range handlers {
+	for _, f := range files {
 		for modelName, targets := range contractMap {
-			if strings.Contains(h.Content, modelName) {
+			if strings.Contains(f.Content, modelName) {
+				// The file explicitly references the model name
 				for _, tID := range targets {
-					s.AddFact(meb.Fact{Subject: string(h.ID), Predicate: "exposes_model", Object: tID, Graph: "virtual"})
+					if f.ID != tID {
+						s.AddFact(meb.Fact{Subject: f.ID, Predicate: "exposes_model", Object: tID, Graph: "virtual"})
+					}
 				}
 			}
 		}

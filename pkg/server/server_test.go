@@ -55,9 +55,9 @@ func TestServer_MultiProject(t *testing.T) {
 	// Initialize Server
 	s := NewServer(mgr, tmpDir, "")
 
-	// Test GET /v1/projects
+	// Test GET /api/v1/projects
 	t.Run("ListProjects", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", "/v1/projects", nil)
+		req, _ := http.NewRequest("GET", "/api/v1/projects", nil)
 		w := httptest.NewRecorder()
 		s.router.ServeHTTP(w, req)
 
@@ -84,12 +84,12 @@ func TestServer_MultiProject(t *testing.T) {
 		}
 	})
 
-	// Test GET /v1/query (Lazy Loading)
+	// Test GET /api/v1/query (Lazy Loading)
 	// Note: The store will be empty, so queries won't find anything, but we check for successful execution vs "Project not found".
 	t.Run("Query_LazyLoad", func(t *testing.T) {
 		// Valid project
 		body := strings.NewReader(`{"query": "triples(?S, ?P, ?O)"}`)
-		req, _ := http.NewRequest("POST", "/v1/query?project=projA", body)
+		req, _ := http.NewRequest("POST", "/api/v1/query?project=projA", body)
 		w := httptest.NewRecorder()
 		s.router.ServeHTTP(w, req)
 
@@ -100,7 +100,7 @@ func TestServer_MultiProject(t *testing.T) {
 
 		// Invalid project
 		body = strings.NewReader(`{"query": "triples(?S, ?P, ?O)"}`)
-		req, _ = http.NewRequest("POST", "/v1/query?project=invalid", body)
+		req, _ = http.NewRequest("POST", "/api/v1/query?project=invalid", body)
 		w = httptest.NewRecorder()
 		s.router.ServeHTTP(w, req)
 
