@@ -18,11 +18,11 @@ import (
 
 // HydratedSymbol replaces the removed meb.HydratedSymbol schema.
 type HydratedSymbol struct {
-	ID       string
-	Kind     string
-	Content  string
-	Metadata map[string]interface{}
-	Children []HydratedSymbol
+	ID       string                 `json:"id"`
+	Kind     string                 `json:"kind"`
+	Content  string                 `json:"code"`
+	Metadata map[string]interface{} `json:"metadata"`
+	Children []HydratedSymbol       `json:"children,omitempty"`
 }
 
 func (s *GraphService) HydrateShallow(ctx context.Context, store *meb.MEBStore, ids []string) ([]HydratedSymbol, error) {
@@ -42,6 +42,29 @@ func (s *GraphService) HydrateShallow(ctx context.Context, store *meb.MEBStore, 
 				break
 			}
 		}
+		for fact, _ := range store.Scan(id, "start_line", "", "") {
+			if num, ok := fact.Object.(int); ok {
+				hs.Metadata["start_line"] = num
+			} else if floatNum, ok := fact.Object.(float64); ok {
+				hs.Metadata["start_line"] = int(floatNum)
+			} else if strNum, ok := fact.Object.(string); ok {
+				if parsed, err := strconv.Atoi(strNum); err == nil {
+					hs.Metadata["start_line"] = parsed
+				}
+			}
+		}
+		for fact, _ := range store.Scan(id, "end_line", "", "") {
+			if num, ok := fact.Object.(int); ok {
+				hs.Metadata["end_line"] = num
+			} else if floatNum, ok := fact.Object.(float64); ok {
+				hs.Metadata["end_line"] = int(floatNum)
+			} else if strNum, ok := fact.Object.(string); ok {
+				if parsed, err := strconv.Atoi(strNum); err == nil {
+					hs.Metadata["end_line"] = parsed
+				}
+			}
+		}
+
 		hydrated = append(hydrated, hs)
 	}
 	return hydrated, nil
@@ -56,6 +79,33 @@ func (s *GraphService) Hydrate(ctx context.Context, store *meb.MEBStore, ids []s
 		hs := &hydrated[i]
 		content, _ := store.GetContentByKey(hs.ID)
 		hs.Content = string(content)
+
+		// If the symbol itself doesn't have content stored, but we have a parent file and line numbers
+		if hs.Content == "" && strings.Contains(hs.ID, ":") {
+			parts := strings.Split(hs.ID, ":")
+			filePath := parts[0]
+			fileContentBytes, err := store.GetContentByKey(filePath)
+			if err == nil && len(fileContentBytes) > 0 {
+				startLineFloat, hasStart := hs.Metadata["start_line"].(int)
+				endLineFloat, hasEnd := hs.Metadata["end_line"].(int)
+
+				if hasStart && hasEnd {
+					lines := strings.Split(string(fileContentBytes), "\n")
+					start := startLineFloat - 1
+					end := endLineFloat
+
+					if start < 0 {
+						start = 0
+					}
+					if end > len(lines) {
+						end = len(lines)
+					}
+					if start <= end {
+						hs.Content = strings.Join(lines[start:end], "\n")
+					}
+				}
+			}
+		}
 	}
 	return hydrated, nil
 }
