@@ -136,7 +136,7 @@ func main() {
 	cfg.SyncWrites = true
 	// Optimize for resource awareness
 	if isLowMem {
-		cfg.Profile = "Cloud-Run-LowMem"
+		cfg.Profile = "Safe-Serving"
 	}
 	cfg.BlockCacheSize = 128 << 20 // 128 MB
 	cfg.IndexCacheSize = 128 << 20 // 128 MB

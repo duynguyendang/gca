@@ -95,11 +95,11 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 	if sm.profile == MemoryProfileLow {
 		cfg.BlockCacheSize = 64 << 20 // 64 MB
 		cfg.IndexCacheSize = 64 << 20 // 64 MB
-		cfg.Profile = "Cloud-Run-LowMem"
+		cfg.Profile = "Safe-Serving"
 	} else {
 		cfg.BlockCacheSize = 128 << 20 // 128 MB (Still small)
 		cfg.IndexCacheSize = 128 << 20 // 128 MB
-		cfg.Profile = "Cloud-Run-LowMem"
+		cfg.Profile = "Safe-Serving"
 	}
 
 	s, err := meb.NewMEBStore(cfg)

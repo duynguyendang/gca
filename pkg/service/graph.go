@@ -648,21 +648,16 @@ func (s *GraphService) ListFiles(projectID string) ([]string, error) {
 		return nil, err
 	}
 
-	// Query for all files using type=file (more reliable than hash which relies on PSO index)
-	q := fmt.Sprintf("triples(?f, \"%s\", \"file\")", "type")
-	results, err := store.Query(context.Background(), q)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", errors.ErrInternal, err)
-	}
-
-	// Deduplicate files
 	seen := make(map[string]bool)
-	files := make([]string, 0, len(results))
-	for _, res := range results {
-		if f, ok := res["?f"].(string); ok {
-			// clean quotes if any (datalog sometimes returns quoted strings if not careful,
-			// but here they should be DocumentIDs which are strings)
-			f = strings.Trim(f, "\"")
+	var files []string
+
+	// Scan directly for the "type" = "file" facts to bypass Datalog parser issues with string literals
+	for fact, err := range store.Scan("", "type", "", "") {
+		if err != nil {
+			continue // skip errors
+		}
+		if obj, ok := fact.Object.(string); ok && obj == "file" {
+			f := string(fact.Subject)
 			if !seen[f] {
 				seen[f] = true
 				files = append(files, f)

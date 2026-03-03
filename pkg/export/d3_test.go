@@ -23,8 +23,7 @@ func TestD3Transformer(t *testing.T) {
 	// Assuming standard behavior of allowing empty for InMemory.
 
 	// Workaround if validation is strict:
-	cfg.DataDir = t.TempDir()
-	cfg.DictDir = t.TempDir()
+	// cfg.DataDir and cfg.DictDir should be empty for InMemory
 
 	s, err := meb.NewMEBStore(cfg)
 	if err != nil {
