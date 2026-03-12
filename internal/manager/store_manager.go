@@ -135,7 +135,7 @@ func (sm *StoreManager) ListProjects() ([]ProjectMetadata, error) {
 
 	entries, err := os.ReadDir(sm.baseDir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ReadDir error on baseDir '%s': %v", sm.baseDir, err)
 	}
 
 	var projects []ProjectMetadata

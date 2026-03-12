@@ -30,8 +30,8 @@ func main() {
 	defer db.Close()
 
 	// Re-ingest ONLY math.go
-	path := filepath.Join(cwd, "pkg/meb/vector/math.go")
-	relPath := "pkg/meb/vector/math.go"
+	path := filepath.Join(cwd, "../meb/vector/math.go")
+	relPath := "github.com/duynguyendang/meb/vector/math.go"
 
 	// Create extractor
 	ext := ingest.NewTreeSitterExtractor()

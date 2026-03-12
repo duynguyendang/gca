@@ -79,7 +79,7 @@ func main() {
 	}
 
 	// === BFS-02 ===
-	bfs02Source := "gca-be/gca-be/pkg/meb/types.go:Fact"
+	bfs02Source := "gca-be/gca-be/types.go:Fact"
 	bfs02Target := "gca-be/gca-fe/services/geminiService.ts"
 	if err := runBFS02(bfs02Source, bfs02Target); err != nil {
 		fmt.Printf("❌ BFS-02 Failed: %v\n", err)
@@ -116,7 +116,7 @@ func main() {
 	}
 
 	// === AI-02 ===
-	ai02ID := "gca-be/gca-be/pkg/meb/types.go:Fact"
+	ai02ID := "gca-be/gca-be/types.go:Fact"
 	if err := runAI02(ai02ID); err != nil {
 		fmt.Printf("❌ AI-02 Failed: %v\n", err)
 		failures++

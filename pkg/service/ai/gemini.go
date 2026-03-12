@@ -26,7 +26,6 @@ type ProjectStoreManager interface {
 
 type GeminiService struct {
 	client         *genai.Client
-	model          *genai.GenerativeModel
 	embeddingModel *genai.EmbeddingModel
 	manager        ProjectStoreManager
 
@@ -65,17 +64,8 @@ func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreMa
 		return p
 	}
 
-	// Use a default model, can be configured later
-	modelName := os.Getenv("GEMINI_MODEL")
-	if modelName == "" {
-		modelName = "gemini-3-flash-preview"
-	}
-	model := client.GenerativeModel(modelName)
-	model.SetTemperature(0.2) // Low temperature for technical accuracy
-
 	return &GeminiService{
 		client:               client,
-		model:                model,
 		embeddingModel:       client.EmbeddingModel("gemini-embedding-001"),
 		manager:              manager,
 		DatalogPrompt:        loadPrompt("datalog.prompt"),
@@ -88,6 +78,18 @@ func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreMa
 		MultiFilePrompt:      loadPrompt("multi_file.prompt"),
 		DefaultContextPrompt: loadPrompt("default_context.prompt"),
 	}, nil
+}
+
+// getModel fetches the GenerativeModel dynamically so changes to GEMINI_MODEL
+// take effect without needing to restart the application.
+func (s *GeminiService) getModel() *genai.GenerativeModel {
+	modelName := os.Getenv("GEMINI_MODEL")
+	if modelName == "" {
+		modelName = "gemini-3-flash-preview"
+	}
+	model := s.client.GenerativeModel(modelName)
+	model.SetTemperature(0.2) // Low temperature for technical accuracy
+	return model
 }
 
 // GetEmbedding generates an embedding vector for the given text using Gemini.
@@ -142,7 +144,7 @@ func (s *GeminiService) HandleRequest(ctx context.Context, req AIRequest) (strin
 
 	log.Printf("Sending Prompt to Gemini (%s):\n%s", req.Task, prompt)
 
-	resp, err := s.model.GenerateContent(ctx, genai.Text(prompt))
+	resp, err := s.getModel().GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {
 		log.Printf("Gemini Request Failed:\n%s\nError: %v", prompt, err)
 		return "", err

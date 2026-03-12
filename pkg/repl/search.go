@@ -86,7 +86,7 @@ func calculateScore(queryLower string, queryTokens map[string]bool, symbol strin
 	}
 
 	// 3. Jaccard Similarity & Token-wise Levenshtein
-	// This helps when the user types keywords "meb store" vs "pkg/meb/store.go"
+	// This helps when the user types keywords "meb store" vs "github.com/duynguyendang/meb/store.go"
 	// or makes a typo in a keyword "storag" vs "store".
 	symbolTokens := tokenize(symbolLower)
 

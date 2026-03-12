@@ -222,7 +222,7 @@ func (ms *MCPServer) handleSchemaConventions(ctx context.Context, request mcp.Re
 # GCA Knowledge Graph Conventions
 
 ## 1. Node Types
-- 'file': A source code file (e.g., pkg/meb/store.go)
+- 'file': A source code file (e.g., github.com/duynguyendang/meb/store.go)
 - 'function': A named function or method.
 - 'struct': A data structure definition.
 - 'cluster': A logical community identified by the Leiden algorithm.

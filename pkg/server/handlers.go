@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,7 +15,8 @@ import (
 func (s *Server) handleProjects(c *gin.Context) {
 	projects, err := s.graphService.ListProjects()
 	if err != nil {
-		handleError(c, err)
+		fmt.Printf("handleProjects error: %v\n", err)
+		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, projects)

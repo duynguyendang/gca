@@ -80,6 +80,8 @@ GET /v1/semantic-search?project=gca&q=authentication logic&k=10
 - `GET /v1/graph/path` - Shortest path between symbols
 - `GET /v1/graph/subgraph` - Retrieve specific subgraph for cluster expansion
 
+*Note: The frontend leverages these endpoints to power its diagnostic **Entropy View**, pinpointing technical debt, test coverage, and code churn.*
+
 **AI Integration**  
 - `POST /v1/ai/ask` - Natural language queries with context injection
 

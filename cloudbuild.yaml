@@ -21,8 +21,8 @@ steps:
       - '--set-env-vars'
       - 'LOW_MEM=true'
       - '--set-secrets'
-      - 'GEMINI_API_KEY=GEMINI_KEY:latest'
-      - '--no-allow-unauthenticated'
+      - 'GEMINI_API_KEY=GEMINI_KEY:latest,GEMINI_MODEL=GEMINI_MODEL:latest'
+      - '--allow-unauthenticated'
 
 images:
   - 'gcr.io/$PROJECT_ID/gca-be'

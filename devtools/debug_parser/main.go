@@ -12,8 +12,8 @@ import (
 
 func main() {
 	cwd, _ := os.Getwd()
-	filePath := filepath.Join(cwd, "pkg/meb/vector/math.go")
-	relPath := "pkg/meb/vector/math.go"
+	filePath := filepath.Join(cwd, "../meb/vector/math.go")
+	relPath := "github.com/duynguyendang/meb/vector/math.go"
 
 	content, err := ioutil.ReadFile(filePath)
 	if err != nil {

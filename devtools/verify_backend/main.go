@@ -105,8 +105,8 @@ func main() {
 	}
 
 	// Trace 2: BE Model -> FE Service
-	fmt.Println("Trace: Data Propagation (gca-be/pkg/meb/types.go:Fact -> gca-fe/services/geminiService.ts)")
-	graph2, err := svc.FindShortestPath(ctx, "default", "gca-be/pkg/meb/types.go:Fact", "gca-fe/services/geminiService.ts")
+	fmt.Println("Trace: Data Propagation (gca-be/types.go:Fact -> gca-fe/services/geminiService.ts)")
+	graph2, err := svc.FindShortestPath(ctx, "default", "gca-be/types.go:Fact", "gca-fe/services/geminiService.ts")
 	if err != nil || len(graph2.Nodes) == 0 {
 		fmt.Printf("  FAIL: %v\n", err)
 		if len(graph2.Nodes) == 0 {

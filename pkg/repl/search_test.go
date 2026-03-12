@@ -6,12 +6,12 @@ import (
 
 func TestFindNodesBySimilarity(t *testing.T) {
 	symbols := []string{
-		"pkg/meb/store.go",
-		"pkg/meb/dict/encoder.go",
-		"pkg/datalog/parser.go",
-		"pkg/repl/repl.go",
-		"main.go",
-		"README.md",
+		"github.com/duynguyendang/meb/store.go",
+		"github.com/duynguyendang/meb/dict/encoder.go",
+		"github.com/duynguyendang/gca/pkg/datalog/parser.go",
+		"github.com/duynguyendang/gca/pkg/repl/repl.go",
+		"github.com/duynguyendang/gca/main.go",
+		"github.com/duynguyendang/gca/README.md",
 	}
 
 	tests := []struct {
@@ -22,22 +22,22 @@ func TestFindNodesBySimilarity(t *testing.T) {
 		{
 			name:     "Exact mismatch but relevant",
 			query:    "meb store",
-			expected: []string{"pkg/meb/store.go"},
+			expected: []string{"github.com/duynguyendang/meb/store.go"},
 		},
 		{
 			name:     "Typo in query",
 			query:    "storag",
-			expected: []string{"pkg/meb/store.go"},
+			expected: []string{"github.com/duynguyendang/meb/store.go"},
 		},
 		{
 			name:     "CamelCase split",
 			query:    "repl go",
-			expected: []string{"pkg/repl/repl.go"},
+			expected: []string{"github.com/duynguyendang/gca/pkg/repl/repl.go"},
 		},
 		{
 			name:     "Partial filename",
 			query:    "parser",
-			expected: []string{"pkg/datalog/parser.go"},
+			expected: []string{"github.com/duynguyendang/gca/pkg/datalog/parser.go"},
 		},
 		{
 			name:     "Acronym or short",
