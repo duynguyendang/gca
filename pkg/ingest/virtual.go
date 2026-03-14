@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/meb"
 )
 
@@ -64,14 +65,8 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		resDef, _ := s.Query(ctx, qDef)
 		for _, r := range resDef {
 			sID := r["?s"].(string)
-			parts := strings.Split(sID, ":")
-			if len(parts) > 1 {
-				name := parts[len(parts)-1]
-				if idx := strings.LastIndex(name, "."); idx != -1 {
-					name = name[idx+1:]
-				}
-				symbolLookup[name] = sID
-			}
+			name := common.ExtractSymbolName(sID)
+			symbolLookup[name] = sID
 		}
 	}
 
@@ -230,11 +225,8 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	resContracts, _ := s.Query(ctx, `triples(?s, "has_role", "data_contract")`)
 	for _, r := range resContracts {
 		sID := r["?s"].(string)
-		parts := strings.Split(sID, ":")
-		if len(parts) > 1 {
-			name := parts[len(parts)-1]
-			contractMap[name] = append(contractMap[name], sID)
-		}
+		name := common.ExtractSymbolName(sID)
+		contractMap[name] = append(contractMap[name], sID)
 	}
 	fmt.Println("[Virtual] Scanning for Data Lineage...")
 	for _, f := range files {

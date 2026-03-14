@@ -10,10 +10,12 @@ import (
 	"sync"
 
 	"github.com/duynguyendang/gca/internal/manager"
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/duynguyendang/gca/pkg/repl"
 	"github.com/duynguyendang/meb"
+	"github.com/duynguyendang/meb/clustering"
 )
 
 // HydratedSymbol replaces the removed meb.HydratedSymbol schema.
@@ -136,7 +138,6 @@ func (s *GraphService) ListProjects() ([]manager.ProjectMetadata, error) {
 	return s.manager.ListProjects()
 }
 
-// ExecuteQuery executes a Datalog query for a specific project.
 func (s *GraphService) ExecuteQuery(ctx context.Context, projectID, query string) ([]map[string]any, error) {
 	store, err := s.getStore(projectID)
 	if err != nil {
@@ -145,12 +146,29 @@ func (s *GraphService) ExecuteQuery(ctx context.Context, projectID, query string
 
 	results, err := store.Query(ctx, query)
 	if err != nil {
-		// Can we differentiate invalid query vs internal error here?
-		// Assuming Query returns standard errors, we might wrap them.
 		return nil, fmt.Errorf("%w: %v", errors.ErrInvalidInput, err)
 	}
 
 	return results, nil
+}
+
+// DetectCommunityHierarchy runs the Leiden algorithm on the graph and returns a hierarchical structure.
+func (s *GraphService) DetectCommunityHierarchy(ctx context.Context, projectID string) (*clustering.CommunityHierarchy, error) {
+	store, err := s.getStore(projectID)
+	if err != nil {
+		return nil, err
+	}
+	// We use "default" as the graph name for now.
+	return store.DetectCommunities("default")
+}
+
+// GetHybridClusters performs k-means clustering on vector search results while preserving community structure.
+func (s *GraphService) GetHybridClusters(ctx context.Context, projectID string, queryEmbedding []float32, limit int, numClusters int) (*clustering.HybridClusteringResult, error) {
+	store, err := s.getStore(projectID)
+	if err != nil {
+		return nil, err
+	}
+	return store.ClusterWithHybrid("default", queryEmbedding, limit, numClusters)
 }
 
 // ExportGraph executes a query and transforms the results into a D3 graph JSON.
@@ -555,10 +573,10 @@ func (s *GraphService) ResolveVirtualTriples(ctx context.Context, projectID stri
 	// match: "I[Name]" -> "[Name]Impl" or "Default[Name]"
 
 	for iName := range uniqueInterfaces {
-		shortName := getShortName(iName) // e.g. "Service"
+		shortName := common.ExtractSymbolName(iName) // e.g. "Service"
 
 		for sName := range uniqueStructs {
-			sShort := getShortName(sName) // e.g. "ServiceImpl"
+			sShort := common.ExtractSymbolName(sName) // e.g. "ServiceImpl"
 
 			// Check "Impl" suffix
 			if strings.HasSuffix(sShort, "Impl") && strings.TrimSuffix(sShort, "Impl") == shortName {
@@ -584,15 +602,6 @@ func (s *GraphService) ResolveVirtualTriples(ctx context.Context, projectID stri
 	}
 
 	return &export.D3Graph{Nodes: nodes, Links: links}, nil
-}
-
-func getShortName(path string) string {
-	parts := strings.Split(path, ":")
-	if len(parts) > 1 {
-		return parts[1]
-	}
-	parts = strings.Split(path, "/")
-	return parts[len(parts)-1]
 }
 
 // GetPredicates returns known predicates.
@@ -1238,7 +1247,7 @@ func (s *GraphService) GetBackboneGraph(ctx context.Context, projectID string, a
 				if !nodeSet[srcFile] {
 					backbone.Nodes = append(backbone.Nodes, export.D3Node{
 						ID:   srcFile,
-						Name: getNodeName(srcFile),
+						Name: common.ExtractBaseName(srcFile),
 						Kind: "file",
 					})
 					nodeSet[srcFile] = true
@@ -1246,7 +1255,7 @@ func (s *GraphService) GetBackboneGraph(ctx context.Context, projectID string, a
 				if !nodeSet[tgtFile] {
 					backbone.Nodes = append(backbone.Nodes, export.D3Node{
 						ID:   tgtFile,
-						Name: getNodeName(tgtFile),
+						Name: common.ExtractBaseName(tgtFile),
 						Kind: "file",
 					})
 					nodeSet[tgtFile] = true
@@ -1315,15 +1324,6 @@ func (s *GraphService) GetBackboneGraph(ctx context.Context, projectID string, a
 	return backbone, nil
 }
 
-// Helper for node name from path
-func getNodeName(path string) string {
-	parts := strings.Split(path, "/")
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
-	}
-	return path
-}
-
 // GetFileCalls returns a recursive file-to-file call graph starting from a specific file.
 func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID string, depth int) (*export.D3Graph, error) {
 	if depth <= 0 {
@@ -1355,7 +1355,7 @@ func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID strin
 	startFile := strings.Trim(fileID, "\"")
 	nodesMap[startFile] = export.D3Node{
 		ID:   startFile,
-		Name: getNodeName(startFile),
+		Name: common.ExtractBaseName(startFile),
 		Kind: "file",
 	}
 
@@ -1447,7 +1447,7 @@ func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID strin
 			if _, exists := nodesMap[targetFile]; !exists {
 				nodesMap[targetFile] = export.D3Node{
 					ID:   targetFile,
-					Name: getNodeName(targetFile),
+					Name: common.ExtractBaseName(targetFile),
 					Kind: "file",
 				}
 			}
@@ -1553,7 +1553,7 @@ func (s *GraphService) GetFlowPath(ctx context.Context, projectID, fromID, toID 
 		if !nodeSet[id] {
 			nodes = append(nodes, export.D3Node{
 				ID:   id,
-				Name: getNodeName(id),
+				Name: common.ExtractBaseName(id),
 				Kind: "symbol",
 			})
 			nodeSet[id] = true

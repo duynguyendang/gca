@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/service"
@@ -77,6 +79,8 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/api/v1/graph/path", s.handleGraphPath)
 	s.router.GET("/api/v1/graph/cluster", s.handleGraphCluster)
 	s.router.GET("/api/v1/semantic-search", s.handleSemanticSearch)
+	s.router.GET("/api/v1/graph/communities", s.handleGraphCommunities)
+	s.router.POST("/api/v1/graph/hybrid-cluster", s.handleHybridCluster)
 	s.router.POST("/api/v1/graph/subgraph", s.handleGraphSubgraph)
 
 	// AI Endpoints
@@ -98,7 +102,8 @@ func (s *Server) handleAIAsk(c *gin.Context) {
 	}
 
 	if req.ProjectID == "" {
-		// Could default to something or return error
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ProjectID is required"})
+		return
 	}
 
 	answer, err := s.geminiService.HandleRequest(c.Request.Context(), req)
@@ -118,9 +123,30 @@ func (s *Server) healthCheck(c *gin.Context) {
 
 // CORSMiddleware handles CORS headers.
 func CORSMiddleware() gin.HandlerFunc {
+	allowOrigins := os.Getenv("CORS_ALLOW_ORIGINS")
+	isProduction := os.Getenv("GIN_MODE") == "release"
+
 	return func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		origin := c.Request.Header.Get("Origin")
+
+		if isProduction && allowOrigins != "" {
+			allowedList := strings.Split(allowOrigins, ",")
+			allowed := false
+			for _, allowedOrigin := range allowedList {
+				if strings.TrimSpace(allowedOrigin) == origin {
+					allowed = true
+					break
+				}
+			}
+			if allowed {
+				c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+				c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
+		} else if !isProduction || origin != "" {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
+
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, Project-Id")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
 

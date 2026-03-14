@@ -42,7 +42,7 @@ func TestFindNodesBySimilarity(t *testing.T) {
 		{
 			name:     "Acronym or short",
 			query:    "readme",
-			expected: []string{"README.md"},
+			expected: []string{"github.com/duynguyendang/gca/README.md"},
 		},
 	}
 

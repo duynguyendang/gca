@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/meb"
@@ -42,7 +43,7 @@ func Run(ctx context.Context, cfg Config, s *meb.MEBStore) {
 		// Display packages
 		if len(projectContext.Packages) > 0 {
 			fmt.Printf("\n📦 Packages (%d):\n", len(projectContext.Packages))
-			displayLimit := 10
+			displayLimit := config.DisplayLimitSmall
 			for i, pkg := range projectContext.Packages {
 				if i >= displayLimit {
 					fmt.Printf("   ... and %d more\n", len(projectContext.Packages)-displayLimit)
@@ -55,7 +56,7 @@ func Run(ctx context.Context, cfg Config, s *meb.MEBStore) {
 		// Display top symbols
 		if len(projectContext.TopSymbols) > 0 {
 			fmt.Printf("\n🎯 Top Symbols (%d):\n", len(projectContext.TopSymbols))
-			displayLimit := 15
+			displayLimit := config.DisplayLimitMedium
 			for i, symbol := range projectContext.TopSymbols {
 				if i >= displayLimit {
 					fmt.Printf("   ... and %d more\n", len(projectContext.TopSymbols)-displayLimit)

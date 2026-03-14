@@ -12,6 +12,8 @@ import (
 
 var _ context.Context // Explicitly reference context package type
 
+var incremental bool
+
 // ingestCmd represents the ingest command
 var ingestCmd = &cobra.Command{
 	Use:   "ingest <source-folder> [data-folder]",
@@ -50,7 +52,11 @@ Arguments:
 		errChan := make(chan error, 1)
 
 		go func() {
-			errChan <- ingest.Run(s, projectName, sourcePath)
+			if incremental {
+				errChan <- ingest.RunIncremental(s, projectName, sourcePath)
+			} else {
+				errChan <- ingest.Run(s, projectName, sourcePath)
+			}
 		}()
 
 		select {
@@ -79,4 +85,5 @@ Arguments:
 
 func init() {
 	rootCmd.AddCommand(ingestCmd)
+	ingestCmd.Flags().BoolVarP(&incremental, "incremental", "i", false, "Enable incremental ingestion (only process changed files)")
 }

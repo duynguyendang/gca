@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/common"
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/duynguyendang/meb"
 )
@@ -78,12 +80,12 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 			break
 		}
 
-		if processed > 10000 { // Safety break
+		if processed > config.MaxProcessedNodes {
 			break
 		}
 
 		d := depth[curr]
-		if d >= 10 { // Depth limit
+		if d >= config.MaxPathDepth {
 			continue
 		}
 
@@ -111,7 +113,7 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 		})
 
 		for i, nw := range sorted {
-			if i >= 50 { // Branching control AFTER sorting
+			if i >= config.MaxBranching {
 				break
 			}
 
@@ -169,11 +171,11 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 func (s *GraphService) getWeight(pred string) int {
 	switch pred {
 	case "calls", "calls_api", "handled_by", "references", "exports":
-		return 1
+		return config.PathfinderEdgeWeightFile
 	case "imports", "defines", "in_package":
-		return 10
+		return config.PathfinderEdgeWeightDir
 	}
-	return 5 // Default for others (e.g. parent defines)
+	return config.PathfinderEdgeWeightFunction
 }
 
 func (s *GraphService) getWeightedNeighbors(ctx context.Context, store *meb.MEBStore, nodeID string, portals map[string]string) map[string]string {
@@ -235,14 +237,9 @@ func (s *GraphService) buildGraphFromPath(ctx context.Context, store *meb.MEBSto
 
 	for _, id := range path {
 		h, ok := hMap[id]
-		name, kind := id, "unknown"
+		name, kind := common.ExtractBaseName(id), "unknown"
 		if ok {
-			parts := strings.Split(string(h.ID), "/")
-			name = parts[len(parts)-1]
 			kind = h.Kind
-		} else {
-			parts := strings.Split(id, "/")
-			name = parts[len(parts)-1]
 		}
 		graph.Nodes = append(graph.Nodes, export.D3Node{ID: id, Name: name, Kind: kind})
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/export"
 )
 
@@ -34,7 +35,7 @@ func (s *GraphService) GetFileBackbone(ctx context.Context, projectID, fileID st
 	linksMap := make(map[string]export.D3Link)
 
 	// Add Center Node
-	nodesMap[cleanFileID] = export.D3Node{ID: cleanFileID, Name: getNodeName(cleanFileID), Kind: "file", Group: "center"}
+	nodesMap[cleanFileID] = export.D3Node{ID: cleanFileID, Name: common.ExtractBaseName(cleanFileID), Kind: "file", Group: "center"}
 
 	// 1. Downstream: File -> Calls -> ?
 	// Query: defined symbols in File -> calls -> ?target
@@ -61,10 +62,10 @@ func (s *GraphService) GetFileBackbone(ctx context.Context, projectID, fileID st
 
 		// Add Node
 		if _, exists := nodesMap[targetFile]; !exists {
-			nodesMap[targetFile] = export.D3Node{ID: targetFile, Name: getNodeName(targetFile), Kind: "file", Group: "downstream"}
+			nodesMap[targetFile] = export.D3Node{ID: targetFile, Name: common.ExtractBaseName(targetFile), Kind: "file", Group: "downstream"}
 		}
 		// Add Link
-		linkKey := fmt.Sprintf("%s->%s", cleanFileID, targetFile)
+		linkKey := common.MakeLinkKey(cleanFileID, targetFile)
 		if _, exists := linksMap[linkKey]; !exists {
 			linksMap[linkKey] = export.D3Link{Source: cleanFileID, Target: targetFile, Relation: "calls", Weight: 1}
 		} else {
@@ -99,10 +100,10 @@ func (s *GraphService) GetFileBackbone(ctx context.Context, projectID, fileID st
 
 		// Add Node
 		if _, exists := nodesMap[callerFile]; !exists {
-			nodesMap[callerFile] = export.D3Node{ID: callerFile, Name: getNodeName(callerFile), Kind: "file", Group: "upstream"}
+			nodesMap[callerFile] = export.D3Node{ID: callerFile, Name: common.ExtractBaseName(callerFile), Kind: "file", Group: "upstream"}
 		}
 		// Add Link
-		linkKey := fmt.Sprintf("%s->%s", callerFile, cleanFileID)
+		linkKey := common.MakeLinkKey(callerFile, cleanFileID)
 		if _, exists := linksMap[linkKey]; !exists {
 			linksMap[linkKey] = export.D3Link{Source: callerFile, Target: cleanFileID, Relation: "calls", Weight: 1}
 		} else {

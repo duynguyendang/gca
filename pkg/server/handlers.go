@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/common/errors"
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/gin-gonic/gin"
 )
 
@@ -60,8 +61,8 @@ func (s *Server) handleQuery(c *gin.Context) {
 		return
 	}
 
-	// Auto-cluster if too many nodes (>500)
-	if autocluster && len(graph.Nodes) > 500 {
+	// Auto-cluster if too many nodes
+	if autocluster && len(graph.Nodes) > config.AutoClusterThreshold {
 		clustered, clusterErr := s.graphService.GetClusterGraph(c.Request.Context(), projectID, req.Query)
 		if clusterErr == nil && len(clustered.Nodes) > 0 {
 			c.JSON(http.StatusOK, clustered)
@@ -279,8 +280,8 @@ func (s *Server) handleGraphMap(c *gin.Context) {
 		return
 	}
 
-	// Auto-cluster if too many nodes (>500)
-	if autocluster && len(graph.Nodes) > 500 {
+	// Auto-cluster if too many nodes
+	if autocluster && len(graph.Nodes) > config.AutoClusterThreshold {
 		clustered, clusterErr := s.graphService.ClusterGraphData(graph)
 		if clusterErr == nil && len(clustered.Nodes) > 0 {
 			c.JSON(http.StatusOK, clustered)
@@ -382,7 +383,7 @@ func (s *Server) handleFileCalls(c *gin.Context) {
 		return
 	}
 
-	depth := 3
+	depth := config.PathfinderDepthLimit
 	if depthStr != "" {
 		if d, err := strconv.Atoi(depthStr); err == nil {
 			depth = d
@@ -534,4 +535,56 @@ func (s *Server) handleGraphSubgraph(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, graph)
+}
+
+// handleGraphCommunities returns the hierarchical community structure.
+func (s *Server) handleGraphCommunities(c *gin.Context) {
+	projectID := c.Query("project")
+	if projectID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+		return
+	}
+
+	hierarchy, err := s.graphService.DetectCommunityHierarchy(c.Request.Context(), projectID)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, hierarchy)
+}
+
+// handleHybridCluster performs k-means clustering on vector results while preserving community structure.
+func (s *Server) handleHybridCluster(c *gin.Context) {
+	projectID := c.Query("project")
+	if projectID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+		return
+	}
+
+	var req struct {
+		Embedding []float32 `json:"embedding"`
+		Limit     int       `json:"limit"`
+		Clusters  int       `json:"clusters"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Invalid request body", err))
+		return
+	}
+
+	if req.Limit <= 0 {
+		req.Limit = 100
+	}
+	if req.Clusters <= 0 {
+		req.Clusters = 5
+	}
+
+	result, err := s.graphService.GetHybridClusters(c.Request.Context(), projectID, req.Embedding, req.Limit, req.Clusters)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
 }

@@ -14,6 +14,12 @@ import (
 	typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
 
+var currentState *IngestState
+
+func SetIngestState(s *IngestState) {
+	currentState = s
+}
+
 // SymbolType constants
 const (
 	TypeFunction  = "function"
@@ -1008,7 +1014,7 @@ func resolveImportPath(relPath, importPath string) string {
 		basePath := filepath.Clean(filepath.Join(dir, importPath))
 
 		// 1a. Exact match
-		if fileIndex[basePath] {
+		if currentState.FileIndex[basePath] {
 			return basePath
 		}
 
@@ -1016,7 +1022,7 @@ func resolveImportPath(relPath, importPath string) string {
 		extensions := []string{".ts", ".tsx", ".js", ".jsx", ".py", ".go"}
 		for _, ext := range extensions {
 			candidate := basePath + ext
-			if fileIndex[candidate] {
+			if currentState.FileIndex[candidate] {
 				return candidate
 			}
 		}
@@ -1024,11 +1030,11 @@ func resolveImportPath(relPath, importPath string) string {
 		// 1c. Handle specific TypeScript import style (.js -> .ts)
 		if strings.HasSuffix(basePath, ".js") {
 			tsPath := strings.TrimSuffix(basePath, ".js") + ".ts"
-			if fileIndex[tsPath] {
+			if currentState.FileIndex[tsPath] {
 				return tsPath
 			}
 			tsxPath := strings.TrimSuffix(basePath, ".js") + ".tsx"
-			if fileIndex[tsxPath] {
+			if currentState.FileIndex[tsxPath] {
 				return tsxPath
 			}
 		}
@@ -1036,7 +1042,7 @@ func resolveImportPath(relPath, importPath string) string {
 		// 1d. Try index files
 		for _, ext := range extensions {
 			candidate := filepath.Join(basePath, "index"+ext)
-			if fileIndex[candidate] {
+			if currentState.FileIndex[candidate] {
 				return candidate
 			}
 		}
@@ -1046,7 +1052,7 @@ func resolveImportPath(relPath, importPath string) string {
 
 	// 2. Handle Absolute/Package Imports (Python, Go, etc.)
 	// First, check if it's already a known file path (unlikely for imports but possible)
-	if fileIndex[importPath] {
+	if currentState.FileIndex[importPath] {
 		return importPath
 	}
 
@@ -1061,7 +1067,7 @@ func resolveImportPath(relPath, importPath string) string {
 		}
 
 		for _, candidate := range candidates {
-			if fileIndex[candidate] {
+			if currentState.FileIndex[candidate] {
 				return candidate
 			}
 		}
@@ -1075,7 +1081,7 @@ func resolveImportPath(relPath, importPath string) string {
 		suffix1 := "/" + slashPath + ".py"
 		suffix2 := "/" + slashPath + "/__init__.py"
 
-		for path := range fileIndex {
+		for path := range currentState.FileIndex {
 			if strings.HasSuffix(path, suffix1) || strings.HasSuffix(path, suffix2) {
 				return path // Return first match. Ambiguity possible but acceptable for now.
 			}

@@ -94,31 +94,28 @@ GET /v1/semantic-search?project=gca&q=authentication logic&k=10
 gca/
 ├── cmd/                        # CLI entry points
 ├── pkg/
+│   ├── config/                 # Centralized configuration constants
 │   ├── ingest/                # Code ingestion pipeline
 │   │   ├── extractor.go       # tree-sitter AST extraction
 │   │   ├── ingest.go          # Parallel worker orchestration
-│   │   └── bridge/            # Package-level relationship inference
-│   ├── meb/                   # Knowledge graph storage
-│   │   ├── store.go           # Main MEB store
-│   │   ├── query_builder.go  # Datalog query engine
-│   │   ├── dictionary.go      # String compression
-│   │   └── vector/            # Vector registry & MRL
-│   │       ├── registry.go    # In-memory vector store
-│   │       ├── storage.go     # BadgerDB persistence
-│   │       └── mrl.go         # MRL compression
+│   │   └── incremental.go     # Incremental updates
 │   ├── service/               # Business logic layer
 │   │   ├── graph.go           # Graph service (queries, paths)
-│   │   ├── virtual.go         # Virtual triple materialization
+│   │   ├── pathfinder.go      # Weighted path finding
+│   │   ├── clustering.go      # Graph clustering
 │   │   └── ai/
 │   │       └── gemini.go      # Gemini AI integration
 │   ├── server/                # HTTP API handlers
 │   │   ├── server.go          # Gin server setup
-│   │   └── handlers.go        # Route handlers
+│   │   ├── handlers.go        # Route handlers
+│   │   └── handlers_backbone.go
 │   ├── datalog/               # Datalog parser & executor
-│   │   ├── parser.go          # Query parsing
-│   │   └── executor.go        # Query execution
-│   └── repl/                  # Interactive CLI
-│       └── repl.go            # Read-Eval-Print Loop
+│   ├── repl/                  # Interactive CLI
+│   │   ├── repl.go            # Read-Eval-Print Loop
+│   │   ├── executor.go        # Plan execution
+│   │   └── search.go          # Search functionality
+│   ├── mcp/                   # Model Context Protocol server
+│   └── common/                # Shared utilities
 └── internal/
     └── manager/               # Multi-project store manager
         └── store_manager.go   # Project isolation
@@ -137,7 +134,7 @@ git clone https://github.com/duynguyendang/gca.git
 cd gca
 
 # Install dependencies
-go mod download
+go mod tidy
 
 # Build binary
 go build -o gca .
@@ -449,6 +446,11 @@ export PORT=8080
 # Set to 'true' to skip embedding generation during ingestion 
 # and use mmap for vector snapshots during server/repl mode.
 export LOW_MEM=true
+
+# Optional: CORS allowed origins (comma-separated)
+# Only enforced in production (GIN_MODE=release)
+# Example: export CORS_ALLOW_ORIGINS="https://app.example.com,https://dashboard.example.com"
+export CORS_ALLOW_ORIGINS=""
 ```
 
 ### Low-Memory Mode
@@ -586,6 +588,183 @@ Contributions are welcome! Areas of focus:
 - **Distributed Storage**: Shard large graphs across multiple BadgerDB instances
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+---
+
+## 🚀 Roadmap
+
+This roadmap outlines planned features and improvements for GCA. Items are organized by priority and estimated timeline.
+
+### Phase 1: Core Enhancements (Near-term)
+
+#### 1.1 Incremental Ingestion ✅
+- **Description**: Re-ingest only changed files instead of full rebuild
+- **Implementation**: Track file hashes, detect changes, update affected triples
+- **Benefits**: 10-100x faster updates for large projects
+- **Status**: Completed
+
+**Usage:**
+```bash
+# Full ingestion (first time)
+./gca --ingest ./my-project ./data/my-project
+
+# Incremental ingestion (subsequent runs - only processes changed files)
+./gca --ingest --incremental ./my-project ./data/my-project
+# or
+./gca ingest -i ./my-project ./data/my-project
+```
+
+#### 1.2 Enhanced Datalog Engine ✅
+- **Description**: Add aggregation, sorting, and limit clauses
+- **Implementation**: Extend parser to support `count()`, `sum()`, `group by`
+- **Benefits**: More powerful queries without AI assistance
+- **Status**: Completed
+
+**New Query Syntax:**
+```prolog
+-- Limit results
+triples(?s, "calls", ?o) LIMIT 10
+
+-- Sort results
+triples(?s, "calls", ?o) ORDER BY ?s ASC
+triples(?s, "calls", ?o) ORDER BY ?s DESC
+
+-- Offset for pagination
+triples(?s, "calls", ?o) OFFSET 20 LIMIT 10
+
+-- Group by with aggregation
+triples(?s, "calls", ?o) GROUP BY ?s COUNT(?o) AS callCount
+
+-- Sum aggregation
+triples(?file, "imports", ?pkg), triples(?pkg, "has_loc", ?loc) GROUP BY ?pkg SUM(?loc) AS totalLines
+```
+
+#### 1.3 Query Performance Optimization  
+- **Description**: Implement join reordering, predicate pushdown, and query caching
+- **Implementation**: Analyze query patterns, optimize execution plans
+- **Benefits**: 2-10x faster complex joins
+- **Status**: Planned
+
+### Phase 2: Language & Framework Support (Medium-term)
+
+#### 2.1 Extended Language Support
+- **Description**: Add tree-sitter parsers for additional languages
+- **Priority Languages**:
+  - Java (enterprise backends)
+  - Rust (systems programming)
+  - C/C++ (embedded/performance)
+  - C# (.NET ecosystem)
+- **Status**: Planned
+
+#### 2.2 Framework-Specific Analysis
+- **Description**: Detect and analyze framework-specific patterns
+- **Frameworks**:
+  - React/Next.js component analysis
+  - Spring Boot dependency injection
+  - Django/Flask routing
+  - Express.js middleware chains
+- **Status**: Planned
+
+#### 2.3 Package Manager Integration
+- **Description**: Parse `package.json`, `go.mod`, `requirements.txt` for dependency graphs
+- **Implementation**: Extract external dependencies, build dependency networks
+- **Benefits**: Vulnerability scanning, upgrade planning
+- **Status**: Planned
+
+### Phase 3: AI & Intelligence (Medium-term)
+
+#### 3.1 Code Generation Capabilities
+- **Description**: Generate unit tests, documentation, refactoring suggestions
+- **Implementation**: Prompt engineering for generation tasks
+- **Benefits**: Developer productivity boost
+- **Status**: Planned
+
+#### 3.2 Semantic Code Navigation
+- **Description**: Natural language "find me the auth logic" navigation
+- **Implementation**: Enhanced embeddings with code-aware chunking
+- **Benefits**: Faster code discovery
+- **Status**: Planned
+
+### Phase 4: Scale & Distribution (Long-term)
+
+#### 4.1 Distributed Graph Storage
+- **Description**: Shard graphs across multiple BadgerDB instances
+- **Implementation**: Consistent hashing for node distribution
+- **Benefits**: Support projects with 1M+ files
+- **Status**: Planned
+
+#### 4.2 Real-time Collaboration
+- **Description**: WebSocket support for live graph updates
+- **Implementation**: Event-driven architecture with change streams
+- **Benefits**: Team-based code analysis sessions
+- **Status**: Planned
+
+#### 4.3 Plugin System
+- **Description**: Extensible architecture for custom analyzers
+- **Implementation**: Go plugin interface or WASM modules
+- **Benefits**: Community-driven analysis capabilities
+- **Status**: Planned
+
+---
+
+## 🧪 Testing
+
+GCA uses Go's standard testing framework. Run tests with:
+
+```bash
+# Run all tests
+go test ./...
+
+# Run specific package tests
+go test ./pkg/datalog/...
+go test ./pkg/server/...
+
+# Run with coverage
+go test -cover ./...
+
+# Run integration tests
+go test ./test/integration/...
+```
+
+### Test Coverage Areas
+
+| Package | Coverage Focus |
+|---------|---------------|
+| `pkg/datalog` | Parser, query execution, edge cases |
+| `pkg/server` | HTTP handlers, routing, CORS |
+| `pkg/service` | Graph operations, pathfinding, AI integration |
+| `pkg/ingest` | Code extraction, metadata parsing, incremental updates |
+| `pkg/repl` | Command parsing, session management |
+
+### Writing Tests
+
+When adding new features:
+
+1. **Unit Tests**: Test individual functions in `*_test.go` files
+2. **Integration Tests**: Add to `test/integration/` for end-to-end scenarios
+3. **Benchmark Tests**: Add `Benchmark*` functions for performance-critical code
+4. **Property-Based Tests**: Consider for complex transformations
+
+Example test structure:
+```go
+func TestFeature_Name(t *testing.T) {
+    // Arrange
+    input := setupTestData()
+    
+    // Act
+    result, err := YourFunction(input)
+    
+    // Assert
+    if err != nil {
+        t.Errorf("unexpected error: %v", err)
+    }
+    if result != expected {
+        t.Errorf("got %v, want %v", result, expected)
+    }
+}
+```
+
+---
 
 ## License
 

@@ -8,7 +8,6 @@ import (
 
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/store"
-	"github.com/google/mangle/ast"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -55,27 +54,19 @@ func main() {
 	err = s.AddDocument(symKey, symContent, nil, nil)
 	assert.NoError(t, err)
 
-	// Add Facts (Triples)
-	atom := ast.Atom{
-		Predicate: ast.PredicateSym{Symbol: "triples", Arity: 3},
-		Args: []ast.BaseTerm{
-			ast.Constant{Type: ast.StringType, Symbol: "main.go:main"},
-			ast.Constant{Type: ast.StringType, Symbol: "calls"},
-			ast.Constant{Type: ast.StringType, Symbol: "pkg/foo:Bar"},
-		},
-	}
-	s.Add(atom)
+	// Add Facts (Triples) using the MEB API
+	s.AddFact(meb.Fact{
+		Subject:   "main.go:main",
+		Predicate: "calls",
+		Object:    "pkg/foo:Bar",
+	})
 
 	// Add Defines fact
-	atomDefines := ast.Atom{
-		Predicate: ast.PredicateSym{Symbol: "triples", Arity: 3},
-		Args: []ast.BaseTerm{
-			ast.Constant{Type: ast.StringType, Symbol: "main.go"},
-			ast.Constant{Type: ast.StringType, Symbol: "defines"},
-			ast.Constant{Type: ast.StringType, Symbol: "main.go:main"},
-		},
-	}
-	s.Add(atomDefines)
+	s.AddFact(meb.Fact{
+		Subject:   "main.go",
+		Predicate: "defines",
+		Object:    "main.go:main",
+	})
 
 	// Add "pkg/foo:Bar" definition
 	barKey := string("pkg/foo:Bar")

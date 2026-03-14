@@ -10,8 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/duynguyendang/meb"
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/prompts"
+	"github.com/duynguyendang/meb"
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
 )
@@ -37,7 +38,7 @@ func ExecutePlan(ctx context.Context, cfg Config, s *meb.MEBStore, session *Exec
 		}
 
 		// Execute with timeout
-		results, err := executeWithTimeout(ctx, s, query, 30*time.Second)
+		results, err := executeWithTimeout(ctx, s, query, config.QueryTimeout)
 		if err != nil {
 			fmt.Printf("   ❌ Error: %v\n\n", err)
 
@@ -50,7 +51,7 @@ func ExecutePlan(ctx context.Context, cfg Config, s *meb.MEBStore, session *Exec
 			}
 
 			fmt.Printf("   💡 Trying alternative: %s\n", correctedQuery)
-			results, err = executeWithTimeout(ctx, s, correctedQuery, 30*time.Second)
+			results, err = executeWithTimeout(ctx, s, correctedQuery, config.QueryTimeout)
 			if err != nil {
 				fmt.Printf("   ❌ Alternative also failed: %v\n\n", err)
 				continue
@@ -71,7 +72,7 @@ func ExecutePlan(ctx context.Context, cfg Config, s *meb.MEBStore, session *Exec
 			}
 
 			fmt.Printf("   💡 Trying alternative: %s\n", correctedQuery)
-			results, err = executeWithTimeout(ctx, s, correctedQuery, 30*time.Second)
+			results, err = executeWithTimeout(ctx, s, correctedQuery, config.QueryTimeout)
 			if err != nil {
 				fmt.Printf("   ❌ Alternative failed: %v\n\n", err)
 				session.StoreResults(step.ID, []map[string]string{})

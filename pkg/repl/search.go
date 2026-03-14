@@ -164,23 +164,3 @@ func tokenize(s string) map[string]bool {
 	}
 	return tokens
 }
-
-// calculateJaccard calculates Jaccard index between two sets of tokens.
-// J(A, B) = |A ∩ B| / |A ∪ B|
-func calculateJaccard(setA, setB map[string]bool) float64 {
-	intersection := 0
-	union := len(setA)
-
-	for token := range setB {
-		if setA[token] {
-			intersection++
-		} else {
-			union++
-		}
-	}
-
-	if union == 0 {
-		return 0
-	}
-	return float64(intersection) / float64(union)
-}

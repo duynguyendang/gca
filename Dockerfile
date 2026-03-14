@@ -16,10 +16,10 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /root/
 COPY --from=builder /app/gca/gca /usr/local/bin/
 # Include your pre-ingested BadgerDB and vector data
-COPY --from=builder /app/gca/data /data 
+COPY --from=builder /app/gca/data /data
 # Copy prompts for AI service (relative to WORKDIR /root/)
 COPY --from=builder /app/gca/prompts ./prompts
 
-
-# Start in server mode
-ENTRYPOINT ["gca", "--server", "/data"] 
+# Start in server mode using Cobra CLI syntax
+# New syntax: gca server --data /data
+ENTRYPOINT ["gca", "server", "--data", "/data"] 

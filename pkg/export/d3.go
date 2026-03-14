@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/datalog"
 	"github.com/duynguyendang/meb"
 )
@@ -304,11 +305,7 @@ func (t *D3Transformer) generateDisplayName(id string) string {
 	// ID format: /path/to/file.go:Symbol or /path/to/file.go
 	// We want: file.go:Symbol
 
-	// Split by '/' to get the last segment (filename...)
-	parts := strings.Split(id, "/")
-	lastPart := parts[len(parts)-1]
-
-	return lastPart
+	return common.ExtractBaseName(id)
 }
 
 // getMetadata fetches has_kind, has_language, and has_source_code from the store.

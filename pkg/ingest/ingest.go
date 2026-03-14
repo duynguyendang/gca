@@ -16,21 +16,35 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/vector"
 )
 
-var symbolTable = make(map[string]string)
-var fileIndex = make(map[string]bool)
+type IngestState struct {
+	SymbolTable map[string]string
+	FileIndex   map[string]bool
+}
 
-const MaxWorkers = 2
+func NewIngestState() *IngestState {
+	return &IngestState{
+		SymbolTable: make(map[string]string),
+		FileIndex:   make(map[string]bool),
+	}
+}
 
 // Run executes the ingestion process with an optional projectName prefix.
 func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
+	state := NewIngestState()
+	return RunWithState(s, projectName, sourceDir, state)
+}
+
+// RunWithState executes the ingestion process with explicit state management.
+func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *IngestState) error {
+	SetIngestState(state)
 	ctx := context.Background()
 	ext := NewTreeSitterExtractor()
 
-	// Initialize embedding service for semantic doc search
 	var embeddingService *EmbeddingService
 	var embeddingErr error
 
@@ -42,10 +56,9 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 		log.Println("Embedding service initialized for semantic doc search")
 	}
 
-	// Pass 1: Collect Symbols and File Index
 	fmt.Printf("Pass 1: Collecting symbols and index for %s...\n", projectName)
-	symbolTable = make(map[string]string)
-	fileIndex = make(map[string]bool)
+	state.SymbolTable = make(map[string]string)
+	state.FileIndex = make(map[string]bool)
 
 	// Check for project metadata
 	var projectMeta *ProjectMetadata
@@ -96,14 +109,14 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 			if projectName != "" {
 				relPath = filepath.Join(projectName, relPath)
 			}
-			fileIndex[relPath] = true
+			state.FileIndex[relPath] = true
 
 			content, _ := os.ReadFile(path)
 			symbols, _ := ext.ExtractSymbols(path, content, relPath)
 			for _, sym := range symbols {
-				symbolTable[sym.Name] = sym.ID
+				state.SymbolTable[sym.Name] = sym.ID
 				if sym.Package != "" {
-					symbolTable[sym.Package+"."+sym.Name] = sym.ID
+					state.SymbolTable[sym.Package+"."+sym.Name] = sym.ID
 				}
 			}
 		}
@@ -121,8 +134,8 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 	var pass2Err atomic.Uint64
 
 	workerCount := runtime.NumCPU()
-	if workerCount > MaxWorkers {
-		workerCount = MaxWorkers
+	if workerCount > config.MaxWorkers {
+		workerCount = config.MaxWorkers
 	}
 
 	for i := 0; i < workerCount; i++ {
@@ -135,7 +148,7 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 			for path := range jobs {
 				rel, _ := filepath.Rel(sourceDir, path)
 				fmt.Printf("  Processing %s/%s...\n", projectName, rel)
-				if err := processFileIncremental(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta, &embeddingWg, sem); err != nil {
+				if err := processFileIncremental(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta, &embeddingWg, sem, state); err != nil {
 					log.Printf("Error: %v", err)
 					pass2Err.Add(1)
 				}
@@ -174,7 +187,7 @@ func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 	return nil
 }
 
-func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *EmbeddingService, path string, projectName string, sourceRoot string, meta *ProjectMetadata, embeddingWg *sync.WaitGroup, sem chan struct{}) error {
+func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *EmbeddingService, path string, projectName string, sourceRoot string, meta *ProjectMetadata, embeddingWg *sync.WaitGroup, sem chan struct{}, state *IngestState) error {
 	relPath, _ := filepath.Rel(sourceRoot, path)
 
 	// Apply Logical Path Mapping from Metadata
@@ -264,7 +277,7 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 						}
 
 						// Add a timeout to prevent hanging
-						ctxWithTimeout, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						ctxWithTimeout, cancel := context.WithTimeout(context.Background(), config.EmbeddingTimeout)
 						defer cancel()
 
 						log.Printf("Generating embedding for %s (len=%d)...", symbolID, len(text))
@@ -330,7 +343,7 @@ func processFileIncremental(ctx context.Context, s *meb.MEBStore, ext Extractor,
 	for _, f := range bundle.Facts {
 		if f.Predicate == "calls" {
 			if objStr, ok := f.Object.(string); ok {
-				if resolved, ok := symbolTable[objStr]; ok {
+				if resolved, ok := state.SymbolTable[objStr]; ok {
 					f.Object = resolved
 				}
 			}
