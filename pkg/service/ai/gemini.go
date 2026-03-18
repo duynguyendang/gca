@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/ooda"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/meb"
 	"github.com/google/generative-ai-go/genai"
@@ -668,4 +669,70 @@ func extractPotentialSymbols(query string) []string {
 	// Simple extraction: words >= 4 chars to avoid "are", "the", "any"
 	// Prefer CamelCase or underscores/dots
 	return symbolRegex.FindAllString(query, -1)
+}
+
+type GeminiModelAdapter struct {
+	service *GeminiService
+}
+
+func (m *GeminiModelAdapter) GenerateContent(ctx context.Context, prompt string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	log.Printf("Sending Prompt to Gemini:\n%s", prompt)
+
+	resp, err := m.service.getModel().GenerateContent(ctx, genai.Text(prompt))
+	if err != nil {
+		log.Printf("Gemini Request Failed:\n%s\nError: %v", prompt, err)
+		return "", err
+	}
+
+	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
+		return "No response from AI.", nil
+	}
+
+	var sb strings.Builder
+	for _, part := range resp.Candidates[0].Content.Parts {
+		if txt, ok := part.(genai.Text); ok {
+			sb.WriteString(string(txt))
+		}
+	}
+
+	return sb.String(), nil
+}
+
+type PromptLoaderAdapter struct {
+	service *GeminiService
+}
+
+func (l *PromptLoaderAdapter) LoadPrompt(name string) (*prompts.Prompt, error) {
+	p, err := prompts.LoadPrompt(name)
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+type StoreManagerAdapter struct {
+	service *GeminiService
+}
+
+func (m *StoreManagerAdapter) GetStore(projectID string) (*meb.MEBStore, error) {
+	return m.service.manager.GetStore(projectID)
+}
+
+func (s *GeminiService) HandleRequestOODA(ctx context.Context, req AIRequest) (string, error) {
+	storeManager := &StoreManagerAdapter{service: s}
+	promptLoader := &PromptLoaderAdapter{service: s}
+	model := &GeminiModelAdapter{service: s}
+
+	config := ooda.NewOODAConfig(storeManager, promptLoader, model)
+	loop := ooda.NewOODALoopFromConfig(config)
+
+	task := ooda.GCATask(req.Task)
+	if task == "" {
+		task = ooda.TaskChat
+	}
+
+	return ooda.RunOODATask(ctx, loop, req.ProjectID, req.Query, task, req.SymbolID, req.Data)
 }

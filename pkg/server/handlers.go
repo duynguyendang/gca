@@ -389,6 +389,10 @@ func (s *Server) handleFileCalls(c *gin.Context) {
 			depth = d
 		}
 	}
+	// Enforce max depth for performance
+	if depth > 2 {
+		depth = 2
+	}
 
 	graph, err := s.graphService.GetFileCalls(c.Request.Context(), projectID, id, depth)
 	if err != nil {

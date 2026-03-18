@@ -12,6 +12,7 @@ import (
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/common/errors"
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/duynguyendang/gca/pkg/repl"
 	"github.com/duynguyendang/meb"
@@ -72,29 +73,49 @@ func (s *GraphService) HydrateShallow(ctx context.Context, store *meb.MEBStore, 
 	return hydrated, nil
 }
 
-func (s *GraphService) Hydrate(ctx context.Context, store *meb.MEBStore, ids []string) ([]HydratedSymbol, error) {
+func (s *GraphService) Hydrate(ctx context.Context, store *meb.MEBStore, projectID string, ids []string) ([]HydratedSymbol, error) {
 	hydrated, err := s.HydrateShallow(ctx, store, ids)
 	if err != nil {
 		return nil, err
 	}
 	for i := range hydrated {
 		hs := &hydrated[i]
-		content, _ := store.GetContentByKey(hs.ID)
-		hs.Content = string(content)
 
-		// If the symbol itself doesn't have content stored, but we have a parent file and line numbers
-		if hs.Content == "" && strings.Contains(hs.ID, ":") {
+		// Try to get content by ID as-is
+		content, _ := store.GetContentByKey(hs.ID)
+		if len(content) == 0 {
+			// Try with leading slash
+			content, _ = store.GetContentByKey("/" + hs.ID)
+		}
+		// Try with project prefix (like GetSource does)
+		if len(content) == 0 && projectID != "" && !strings.HasPrefix(hs.ID, projectID+"/") {
+			prefixedID := projectID + "/" + hs.ID
+			content, _ = store.GetContentByKey(prefixedID)
+		}
+		if len(content) > 0 {
+			hs.Content = string(content)
+			continue
+		}
+
+		// If ID contains ":", try extracting file path
+		// e.g., "genkit/reflection.go:startReflectionServer" -> "genkit/reflection.go"
+		if strings.Contains(hs.ID, ":") {
 			parts := strings.Split(hs.ID, ":")
 			filePath := parts[0]
-			fileContentBytes, err := store.GetContentByKey(filePath)
-			if err == nil && len(fileContentBytes) > 0 {
-				startLineFloat, hasStart := hs.Metadata["start_line"].(int)
-				endLineFloat, hasEnd := hs.Metadata["end_line"].(int)
+			fileContentBytes, _ := store.GetContentByKey(filePath)
+			// Try with project prefix
+			if len(fileContentBytes) == 0 && projectID != "" && !strings.HasPrefix(filePath, projectID+"/") {
+				prefixedPath := projectID + "/" + filePath
+				fileContentBytes, _ = store.GetContentByKey(prefixedPath)
+			}
+			if len(fileContentBytes) > 0 {
+				startLine, hasStart := hs.Metadata["start_line"].(int)
+				endLine, hasEnd := hs.Metadata["end_line"].(int)
 
 				if hasStart && hasEnd {
 					lines := strings.Split(string(fileContentBytes), "\n")
-					start := startLineFloat - 1
-					end := endLineFloat
+					start := startLine - 1
+					end := endLine
 
 					if start < 0 {
 						start = 0
@@ -102,9 +123,11 @@ func (s *GraphService) Hydrate(ctx context.Context, store *meb.MEBStore, ids []s
 					if end > len(lines) {
 						end = len(lines)
 					}
-					if start <= end {
+					if start < end {
 						hs.Content = strings.Join(lines[start:end], "\n")
 					}
+				} else {
+					hs.Content = string(fileContentBytes)
 				}
 			}
 		}
@@ -307,7 +330,7 @@ func (s *GraphService) enrichNodes(ctx context.Context, store *meb.MEBStore, gra
 	if lazy {
 		hydrated, err = s.HydrateShallow(ctx, store, ids)
 	} else {
-		hydrated, err = s.Hydrate(ctx, store, ids)
+		hydrated, err = s.Hydrate(ctx, store, "", ids)
 	}
 
 	if err != nil {
@@ -437,16 +460,17 @@ func (s *GraphService) GetSymbol(ctx context.Context, projectID, docID string) (
 	}
 
 	ids := []string{string(docID)}
-	hydrated, err := s.Hydrate(ctx, store, ids) // lazy=false to fetch content
-	if err != nil || len(hydrated) == 0 {
+	hydrated, err := s.Hydrate(ctx, store, projectID, ids)
+	// Also try fallback if content is empty (facts might be stored with project prefix)
+	if err != nil || len(hydrated) == 0 || hydrated[0].Content == "" {
 		// If not found and projectID is set, try with project prefix
 		if projectID != "" && !strings.HasPrefix(docID, projectID+"/") {
 			prefixedDocID := projectID + "/" + docID
 			ids = []string{string(prefixedDocID)}
-			hydrated, err = s.Hydrate(ctx, store, ids)
+			hydrated, err = s.Hydrate(ctx, store, projectID, ids)
 		}
 
-		if err != nil || len(hydrated) == 0 {
+		if err != nil || len(hydrated) == 0 || hydrated[0].Content == "" {
 			return nil, fmt.Errorf("%w: symbol not found", errors.ErrNotFound)
 		}
 	}
@@ -1324,14 +1348,37 @@ func (s *GraphService) GetBackboneGraph(ctx context.Context, projectID string, a
 	return backbone, nil
 }
 
+// isValidFilePath checks if a string looks like a valid source file path
+func isValidFilePath(path string) bool {
+	if path == "" {
+		return false
+	}
+	// Must end with a known source file extension
+	for _, ext := range config.SourceFileExtensions {
+		if strings.HasSuffix(path, ext) {
+			return true
+		}
+	}
+	return false
+}
+
 // GetFileCalls returns a recursive file-to-file call graph starting from a specific file.
 func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID string, depth int) (*export.D3Graph, error) {
 	if depth <= 0 {
-		depth = 3 // Default depth
+		depth = 2 // Reduced default for performance
 	}
-	if depth > 5 {
-		depth = 5 // Max depth safety
+	if depth > 2 {
+		depth = 2 // Reduced max for performance (depth=3 is too slow)
 	}
+
+	// Check cache first
+	cacheKey := fmt.Sprintf("file_calls:%s:%d", fileID, depth)
+	s.cacheMu.RLock()
+	if cached, ok := s.projectMapCache[cacheKey]; ok {
+		s.cacheMu.RUnlock()
+		return cached, nil
+	}
+	s.cacheMu.RUnlock()
 
 	store, err := s.getStore(projectID)
 	if err != nil {
@@ -1368,79 +1415,62 @@ func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID strin
 		}
 
 		cleanCurrentFile := current.file
-		quotedCurrentFile := fmt.Sprintf("\"%s\"", cleanCurrentFile)
 
-		// 1. Find all symbols defined in this file
-		// query: triples(currentFile, "defines", ?s)
-		qDefines := fmt.Sprintf("triples(%s, \"defines\", ?s)", quotedCurrentFile)
-		resDefines, err := store.Query(ctx, qDefines)
-		if err != nil {
-			return nil, fmt.Errorf("failed to query definitions for %s: %w", cleanCurrentFile, err)
+		// Use Scan instead of Query for faster performance
+		// 1. Find all defines: Scan(currentFile, "defines", "", "")
+		var definedSymbols []string
+		for fact, _ := range store.Scan(cleanCurrentFile, "defines", "", "") {
+			if sym, ok := fact.Object.(string); ok {
+				definedSymbols = append(definedSymbols, sym)
+			}
 		}
 
-		if len(resDefines) == 0 {
+		if len(definedSymbols) == 0 {
 			continue
 		}
 
-		// 2. Find all calls FROM these symbols
-		// We can do this in batch or loop. Datalog might support join?
-		// query: triples(?s, "calls", ?o) WHERE ?s in defined_symbols
-		// To optimize, we can construct a large query or iterate.
-		// Constructing a large OR query might be slow or hit limits.
-		// Let's try to query calls from specific symbols.
-		// Or better: triples(?s, "calls", ?o), triples(CurrentFile, "defines", ?s)
-		// This joins inside the engine.
-		qCalls := fmt.Sprintf("triples(?s, \"calls\", ?o), triples(%s, \"defines\", ?s)", quotedCurrentFile)
-		resCalls, err := store.Query(ctx, qCalls)
-		if err != nil {
-			return nil, fmt.Errorf("failed to query calls for %s: %w", cleanCurrentFile, err)
+		// 2. Find all calls from these symbols
+		// Scan each symbol for "calls" predicate
+		filesToVisit := make(map[string]bool)
+		targetCalls := make(map[string]int) // targetFile -> count
+
+		for _, sym := range definedSymbols {
+			for fact, _ := range store.Scan(sym, "calls", "", "") {
+				targetSymbol, ok := fact.Object.(string)
+				if !ok {
+					continue
+				}
+
+				// Parse file path from targetSymbol (format: "path/to/file.go:Symbol")
+				parts := strings.SplitN(targetSymbol, ":", 2)
+				if len(parts) < 2 {
+					continue
+				}
+				targetFile := parts[0]
+
+				// Skip if not a valid file path (should end with common extensions)
+				if !isValidFilePath(targetFile) {
+					continue
+				}
+
+				// Skip self-references
+				if targetFile == cleanCurrentFile {
+					continue
+				}
+
+				targetCalls[targetFile]++
+			}
 		}
 
-		// 3. Process calls to find target files
-		// We need to resolve ?o to its file.
-		// We don't have a direct "defined_in" predicate easily accessible unless we query backwards?
-		// triples(?targetFile, "defines", ?o)
-		// Doing this for every ?o is N queries.
-		// Optimization: "triples(?targetFile, "defines", ?o)" where ?o is in our list.
-		// OR: The ID of ?o might contain the file path if valid convention used (path:symbol).
-		// We will rely on ID convention first for speed (Goal: <150ms).
-
-		filesToVisit := make(map[string]bool)
-
-		for _, row := range resCalls {
-			targetSymbol, ok := row["?o"].(string)
-			if !ok {
-				continue
-			}
-
-			// Parse file path from targetSymbol
-			// Format assumption: "path/to/file.go:Symbol" or "path/to/file.go:Type.Method"
-			parts := strings.SplitN(targetSymbol, ":", 2)
-			if len(parts) < 2 {
-				// Try to look up? For now skip if generic.
-				continue
-			}
-			targetFile := parts[0]
-
-			// Skip self-referential file calls (internal calls)
-			if targetFile == cleanCurrentFile {
-				continue
-			}
-
+		// Process collected calls
+		for targetFile, weight := range targetCalls {
 			// Add Link
 			linkKey := fmt.Sprintf("%s->%s", cleanCurrentFile, targetFile)
-			if _, exists := linksMap[linkKey]; !exists {
-				linksMap[linkKey] = export.D3Link{
-					Source:   cleanCurrentFile,
-					Target:   targetFile,
-					Relation: "calls_file",
-					Weight:   1,
-				}
-			} else {
-				// Increment weight?
-				l := linksMap[linkKey]
-				l.Weight++
-				linksMap[linkKey] = l
+			linksMap[linkKey] = export.D3Link{
+				Source:   cleanCurrentFile,
+				Target:   targetFile,
+				Relation: "calls_file",
+				Weight:   float64(weight),
 			}
 
 			// Add Target Node
@@ -1474,7 +1504,14 @@ func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID strin
 		links = append(links, l)
 	}
 
-	return &export.D3Graph{Nodes: nodes, Links: links}, nil
+	result := &export.D3Graph{Nodes: nodes, Links: links}
+
+	// Cache the result
+	s.cacheMu.Lock()
+	s.projectMapCache[cacheKey] = result
+	s.cacheMu.Unlock()
+
+	return result, nil
 }
 
 // GetFlowPath returns the shortest call graph path between two nodes (files or symbols).

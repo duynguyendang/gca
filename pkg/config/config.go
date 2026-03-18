@@ -56,6 +56,14 @@ const (
 	RetryCount = 3
 )
 
+// Supported source file extensions for validation
+var SourceFileExtensions = []string{
+	".go", ".ts", ".js", ".jsx", ".tsx",
+	".py", ".java", ".cpp", ".c", ".rs",
+	".swift", ".kt", ".scala", ".rb", ".php",
+	".cs", ".vue", ".svelte", ".html", ".css",
+}
+
 var PromptPaths = map[string]string{
 	"datalog":      "prompts/datalog.prompt",
 	"explain":      "prompts/explain_results.prompt",

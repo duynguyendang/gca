@@ -106,11 +106,25 @@ func (s *Server) handleAIAsk(c *gin.Context) {
 		return
 	}
 
-	answer, err := s.geminiService.HandleRequest(c.Request.Context(), req)
-	if err != nil {
-		log.Printf("AI Error: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+	useOODA := os.Getenv("USE_OODA_LOOP") == "true"
+
+	var answer string
+	var err error
+
+	if useOODA {
+		answer, err = s.geminiService.HandleRequestOODA(c.Request.Context(), req)
+		if err != nil {
+			log.Printf("AI OODA Error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	} else {
+		answer, err = s.geminiService.HandleRequest(c.Request.Context(), req)
+		if err != nil {
+			log.Printf("AI Error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"answer": answer})
