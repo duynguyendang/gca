@@ -14,7 +14,9 @@ import (
 	"github.com/duynguyendang/meb"
 )
 
-// FindShortestPath implements Dijkstra to find the shortest weighted path.
+// FindShortestPath implements Dijkstra's algorithm to find the shortest weighted path between two symbols.
+// It considers edge weights based on predicate types (calls, imports, defines, etc.).
+// Returns a D3Graph containing the path as nodes and links, or an error if the path cannot be found.
 func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID, endID string) (*export.D3Graph, error) {
 	store, err := s.getStore(projectID)
 	if err != nil {
@@ -170,9 +172,9 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 
 func (s *GraphService) getWeight(pred string) int {
 	switch pred {
-	case "calls", "calls_api", "handled_by", "references", "exports":
+	case config.PredicateCalls, config.PredicateCallsAPI, config.PredicateHandledBy, config.PredicateReferences, config.PredicateExports:
 		return config.PathfinderEdgeWeightFile
-	case "imports", "defines", "in_package":
+	case config.PredicateImports, config.PredicateDefines, config.PredicateInPackage:
 		return config.PathfinderEdgeWeightDir
 	}
 	return config.PathfinderEdgeWeightFunction
@@ -183,11 +185,11 @@ func (s *GraphService) getWeightedNeighbors(ctx context.Context, store *meb.MEBS
 
 	// Portals check (Logical jump)
 	if handler, ok := portals[nodeID]; ok {
-		neighbors[handler] = "handled_by"
+		neighbors[handler] = config.PredicateHandledBy
 	}
 
 	// 1. Outbound edges
-	for fact, err := range store.Scan(nodeID, "", "", "default") {
+	for fact, err := range store.Scan(nodeID, "", "", config.DefaultGraph) {
 		if err != nil {
 			continue
 		}
@@ -204,12 +206,12 @@ func (s *GraphService) getWeightedNeighbors(ctx context.Context, store *meb.MEBS
 	}
 
 	// 2. Inbound 'defines' (Structure Nav)
-	for fact, err := range store.Scan("", "defines", nodeID, "default") {
+	for fact, err := range store.Scan("", config.PredicateDefines, nodeID, config.DefaultGraph) {
 		if err != nil {
 			continue
 		}
 		parent := fact.Subject
-		pred := "parent_defines"
+		pred := config.PredicateParentDefines
 		if oldPred, exists := neighbors[parent]; !exists || s.getWeight(pred) < s.getWeight(oldPred) {
 			neighbors[parent] = pred
 		}

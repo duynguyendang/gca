@@ -8,11 +8,13 @@ import (
 
 	"github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/gin-gonic/gin"
 )
 
 // handleProjects returns a list of available projects.
-// handleProjects returns a list of available projects.
+// Query parameters: none
+// Response: JSON array of project objects with id, name, and metadata.
 func (s *Server) handleProjects(c *gin.Context) {
 	projects, err := s.graphService.ListProjects()
 	if err != nil {
@@ -24,6 +26,13 @@ func (s *Server) handleProjects(c *gin.Context) {
 }
 
 // handleQuery executes a Datalog query and returns the results in a graph format.
+// Request body: {"query": "<datalog query>"}
+// Query parameters:
+//   - project: project ID to query
+//   - lazy: enable lazy loading (default: false)
+//   - raw: return raw results instead of graph (default: false)
+//   - nocluster: disable auto-clustering (default: false)
+// Response: JSON graph with nodes and links, or raw query results.
 func (s *Server) handleQuery(c *gin.Context) {
 	var req struct {
 		Query string `json:"query"`
@@ -75,6 +84,11 @@ func (s *Server) handleQuery(c *gin.Context) {
 }
 
 // handleGraph returns a composite graph for a specific file.
+// Query parameters:
+//   - project: project ID
+//   - file: file ID to get graph for
+//   - lazy: enable lazy loading (default: false)
+// Response: JSON graph with nodes and links showing file relationships.
 func (s *Server) handleGraph(c *gin.Context) {
 	projectID := c.Query("project")
 	fileID := c.Query("file")
@@ -99,6 +113,12 @@ func (s *Server) handleGraph(c *gin.Context) {
 }
 
 // handleSource returns source code for a given file ID.
+// Query parameters:
+//   - project: project ID
+//   - id: file or symbol ID
+//   - start: optional start line number (1-based)
+//   - end: optional end line number
+// Response: Plain text source code for the specified range.
 func (s *Server) handleSource(c *gin.Context) {
 	id := c.Query("id")
 	projectID := c.Query("project")
@@ -189,6 +209,12 @@ func (s *Server) handlePredicates(c *gin.Context) {
 }
 
 // handleSymbols provides fast symbol search/autocomplete.
+// Query parameters:
+//   - project: project ID
+//   - q: search query string
+//   - p: predicate to filter by (default: "defines")
+//   - all: if set, search across all predicates
+// Response: JSON with symbols array containing matching symbol IDs.
 func (s *Server) handleSymbols(c *gin.Context) {
 	projectID := c.Query("project")
 	query := c.Query("q")
@@ -207,12 +233,7 @@ func (s *Server) handleSymbols(c *gin.Context) {
 
 	predicate := c.Query("p")
 	if predicate == "" && c.Query("all") != "true" {
-		predicate = "defines" // Hardcoded literal instead of importing meb? Or import meb just for constant if needed.
-		// meb is not imported yet, I removed it.
-		// Let's assume "defines" string or import meb if critical.
-		// The original code used "defines".
-		// GraphService doesn't expose constant.
-		// Let's just use string "defines".
+		predicate = config.PredicateDefines
 	}
 
 	results, err := s.graphService.SearchSymbols(projectID, query, predicate, 50)
@@ -403,7 +424,8 @@ func (s *Server) handleFileCalls(c *gin.Context) {
 	c.JSON(http.StatusOK, graph)
 }
 
-// handleError helper
+// handleError is a helper that converts errors to JSON responses.
+// It uses the errors.MapError function to convert errors to AppError with HTTP status codes.
 func handleError(c *gin.Context, err error) {
 	appErr := errors.MapError(err)
 	c.JSON(appErr.Code, gin.H{"error": appErr.Message})
@@ -458,7 +480,11 @@ func (s *Server) handleGraphPath(c *gin.Context) {
 }
 
 // handleSemanticSearch performs vector similarity search on embedded documentation.
-// GET /v1/semantic-search?project=X&q=query&k=10
+// Query parameters:
+//   - project: project ID
+//   - q: search query string
+//   - k: number of results to return (default: 10, max: 50)
+// Response: JSON with query, count, and results array of matching symbols.
 func (s *Server) handleSemanticSearch(c *gin.Context) {
 	projectID := c.Query("project")
 	query := c.Query("q")
@@ -591,4 +617,57 @@ func (s *Server) handleHybridCluster(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, result)
+}
+
+// handleGraphPaginated returns a paginated subset of the graph for lazy loading.
+// Query parameters:
+//   - project: project ID
+//   - query: Datalog query string
+//   - cursor: pagination cursor from previous response (optional)
+//   - limit: maximum nodes to return (default: 100, max: 1000)
+//   - offset: starting offset as alternative to cursor (optional)
+// Response: JSON graph with paginated nodes/links and next cursor.
+func (s *Server) handleGraphPaginated(c *gin.Context) {
+	projectID := c.Query("project")
+	query := c.Query("query")
+
+	if projectID == "" || query == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project or query parameter", nil))
+		return
+	}
+
+	// Get the full graph first (in production, this should be optimized to only fetch needed data)
+	graph, err := s.graphService.ExportGraph(c.Request.Context(), projectID, query, true, false)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	// Parse pagination options
+	cursorStr := c.Query("cursor")
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	offset, _ := strconv.Atoi(c.Query("offset"))
+
+	cursor, err := export.ParseCursor(cursorStr)
+	if err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Invalid cursor format", err))
+		return
+	}
+
+	// Use cursor offset if provided, otherwise use query offset
+	if cursor.Offset > 0 && offset == 0 {
+		offset = cursor.Offset
+	}
+	if limit > 0 {
+		cursor.Limit = limit
+	}
+
+	// Paginate the graph
+	opts := export.GraphPageOptions{
+		Limit:  cursor.Limit,
+		Offset: offset,
+	}
+
+	paginatedGraph, _ := graph.PaginateGraph(opts)
+	c.JSON(http.StatusOK, paginatedGraph)
 }

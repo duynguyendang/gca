@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/duynguyendang/gca/internal/manager"
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/service"
 	"github.com/duynguyendang/meb"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -375,7 +376,7 @@ func (ms *MCPServer) handleGetClusters(ctx context.Context, request mcp.CallTool
 	// Scanning everything
 	// NOTE: This might be slow on large DBs.
 	// Optimized approach: Only scan structural edges.
-	structuralPreds := []string{"calls", "imports", "defines"}
+	structuralPreds := []string{config.PredicateCalls, config.PredicateImports, config.PredicateDefines}
 
 	for _, pred := range structuralPreds {
 		for fact, err := range ms.store.Scan("", pred, "", "") {

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/meb"
 )
@@ -463,7 +464,7 @@ func formatGraphResults(data interface{}, key string) string {
 				target, _ := link["target"].(string)
 				relation, _ := link["relation"].(string)
 				if relation == "" {
-					relation = "calls"
+					relation = config.PredicateCalls
 				}
 				sb.WriteString(fmt.Sprintf("%d. `%s` **%s** `%s`\n", i+1, source, relation, target))
 			}

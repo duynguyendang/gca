@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/ooda"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/meb"
@@ -42,6 +43,9 @@ type GeminiService struct {
 	DefaultContextPrompt *prompts.Prompt
 }
 
+// NewGeminiService creates a new Gemini AI service with the given API key and store manager.
+// It loads all required prompt files from the prompts directory.
+// Returns a configured GeminiService or an error if initialization fails.
 func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreManager) (*GeminiService, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv("GEMINI_API_KEY")
@@ -93,7 +97,9 @@ func (s *GeminiService) getModel() *genai.GenerativeModel {
 	return model
 }
 
-// GetEmbedding generates an embedding vector for the given text using Gemini.
+// GetEmbedding generates an embedding vector for the given text using Gemini's embedding model.
+// The embedding can be used for semantic search and similarity comparisons.
+// Returns a 768-dimensional float32 vector or an error if generation fails.
 func (s *GeminiService) GetEmbedding(ctx context.Context, text string) ([]float32, error) {
 	if s.embeddingModel == nil {
 		return nil, fmt.Errorf("embedding model not initialized")
@@ -471,7 +477,7 @@ func formatGraphResults(data interface{}, key string) string {
 				target, _ := link["target"].(string)
 				relation, _ := link["relation"].(string)
 				if relation == "" {
-					relation = "calls"
+					relation = config.PredicateCalls
 				}
 				sb.WriteString(fmt.Sprintf("%d. `%s` **%s** `%s`\n", i+1, source, relation, target))
 			}
@@ -551,71 +557,79 @@ func (s *GeminiService) BuildPrompt(ctx context.Context, store *meb.MEBStore, qu
 		}
 	} else {
 		// 2. Semantic Context Discovery (from query)
-		// Find potential symbols in query and fetch their 1-hop context
-		// Optimization: Use LookupID (Exact Match) instead of SearchSymbols (Full Scan)
-
-		words := extractPotentialSymbols(query)
-		if len(words) > 0 {
-			// Limit to top 3 unique matches
-			seen := make(map[string]bool)
-			var matchedIDs []string
-
-			for _, word := range words {
-				if len(matchedIDs) >= 3 {
-					break
-				}
-				if seen[word] {
-					continue
-				}
-				seen[word] = true
-
-				// Fast Is-It-A-Symbol Check
-				// We check for exact match first.
-				// This avoids scanning millions of keys.
-				_, exists := store.LookupID(word)
-
-				// Try variations if exact match fails?
-				// e.g. "service" -> "pkg/service"?
-				// For now, keep it simple and fast.
-
-				if exists {
-					if word == symbolID {
-						continue
-					}
-					matchedIDs = append(matchedIDs, word)
-				}
-			}
-
-			if len(matchedIDs) > 0 {
-				results := make([]string, len(matchedIDs))
-				var wg sync.WaitGroup
-
-				for i, id := range matchedIDs {
-					wg.Add(1)
-					go func(idx int, symID string) {
-						defer wg.Done()
-						var localSb strings.Builder
-						localCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-						defer cancel()
-
-						if err := s.appendSymbolContext(localCtx, store, symID, &localSb); err == nil {
-							results[idx] = localSb.String()
-						}
-					}(i, id)
-				}
-				wg.Wait()
-
-				for _, result := range results {
-					contextBuilder.WriteString(result)
-				}
-			}
+		if err := s.buildSemanticContext(ctx, store, query, &contextBuilder); err != nil {
+			log.Printf("Failed to build semantic context: %v", err)
 		}
-
 	}
 
+	return s.formatPromptOutput(contextBuilder.String(), query)
+}
+
+// buildSemanticContext finds potential symbols in the query and fetches their context.
+func (s *GeminiService) buildSemanticContext(ctx context.Context, store *meb.MEBStore, query string, contextBuilder *strings.Builder) error {
+	words := extractPotentialSymbols(query)
+	if len(words) == 0 {
+		return nil
+	}
+
+	// Limit to top 3 unique matches
+	seen := make(map[string]bool)
+	var matchedIDs []string
+
+	for _, word := range words {
+		if len(matchedIDs) >= 3 {
+			break
+		}
+		if seen[word] {
+			continue
+		}
+		seen[word] = true
+
+		// Fast Is-It-A-Symbol Check
+		_, exists := store.LookupID(word)
+		if exists {
+			matchedIDs = append(matchedIDs, word)
+		}
+	}
+
+	if len(matchedIDs) == 0 {
+		return nil
+	}
+
+	return s.fetchMatchedSymbolContexts(ctx, store, matchedIDs, contextBuilder)
+}
+
+// fetchMatchedSymbolContexts fetches context for matched symbols in parallel.
+func (s *GeminiService) fetchMatchedSymbolContexts(ctx context.Context, store *meb.MEBStore, matchedIDs []string, contextBuilder *strings.Builder) error {
+	results := make([]string, len(matchedIDs))
+	var wg sync.WaitGroup
+
+	for i, id := range matchedIDs {
+		wg.Add(1)
+		go func(idx int, symID string) {
+			defer wg.Done()
+			var localSb strings.Builder
+			localCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+
+			if err := s.appendSymbolContext(localCtx, store, symID, &localSb); err == nil {
+				results[idx] = localSb.String()
+			}
+		}(i, id)
+	}
+	wg.Wait()
+
+	for _, result := range results {
+		contextBuilder.WriteString(result)
+	}
+	return nil
+}
+
+// formatPromptOutput formats the final prompt with the context and query.
+func (s *GeminiService) formatPromptOutput(context string, query string) (string, error) {
 	if s.DefaultContextPrompt != nil {
 		return s.DefaultContextPrompt.Execute(map[string]interface{}{
-			"Context": contextBuilder.String(),
+			"Context": context,
 			"Query":   query,
 		})
 	}
@@ -628,41 +642,56 @@ Assign context to the user's question using the provided Code and Graph informat
 ## User Question
 %s
 
-Answer concisely and accurately based on the code provided.`, contextBuilder.String(), query)
+Answer concisely and accurately based on the code provided.`, context, query)
 
 	return prompt, nil
 }
 
 func (s *GeminiService) appendSymbolContext(ctx context.Context, store *meb.MEBStore, symbolID string, sb *strings.Builder) error {
 	// 1. Fetch Symbol Content
-	contentBytes, err := store.GetContentByKey(string(symbolID))
+	content, err := s.getSymbolContent(store, symbolID)
 	if err != nil {
 		return err
 	}
-	content := string(contentBytes)
 
-	// 2. Run 1-hop Datalog queries
-	// Inbound: Who calls me?
-	inbound, err := store.Query(ctx, fmt.Sprintf(`triples(?s, "calls", "%s")`, symbolID))
+	// 2. Query symbol relationships
+	inbound, outbound, defines, err := s.querySymbolRelationships(ctx, store, symbolID)
 	if err != nil {
-		log.Printf("failed to query inbound calls for %s: %v", symbolID, err)
+		log.Printf("failed to query symbol relationships for %s: %v", symbolID, err)
 	}
+
+	// 3. Format symbol context
+	s.formatSymbolContext(symbolID, content, inbound, outbound, defines, sb)
+	return nil
+}
+
+// getSymbolContent retrieves the content for a given symbol ID.
+func (s *GeminiService) getSymbolContent(store *meb.MEBStore, symbolID string) (string, error) {
+	contentBytes, err := store.GetContentByKey(string(symbolID))
+	if err != nil {
+		return "", err
+	}
+	return string(contentBytes), nil
+}
+
+// querySymbolRelationships queries the graph for symbol relationships.
+func (s *GeminiService) querySymbolRelationships(ctx context.Context, store *meb.MEBStore, symbolID string) (inbound, outbound, defines []map[string]any, err error) {
+	// Inbound: Who calls me?
+	inbound, _ = store.Query(ctx, fmt.Sprintf(`triples(?s, "%s", "%s")`, config.PredicateCalls, symbolID))
 
 	// Outbound: Who do I call?
-	outbound, err := store.Query(ctx, fmt.Sprintf(`triples("%s", "calls", ?o)`, symbolID))
-	if err != nil {
-		log.Printf("failed to query outbound calls for %s: %v", symbolID, err)
-	}
+	outbound, _ = store.Query(ctx, fmt.Sprintf(`triples("%s", "%s", ?o)`, symbolID, config.PredicateCalls))
 
 	// Defines: What do I define? (For files)
-	defines, err := store.Query(ctx, fmt.Sprintf(`triples("%s", "defines", ?o)`, symbolID))
-	if err != nil {
-		log.Printf("failed to query defines for %s: %v", symbolID, err)
-	}
+	defines, _ = store.Query(ctx, fmt.Sprintf(`triples("%s", "%s", ?o)`, symbolID, config.PredicateDefines))
 
+	return inbound, outbound, defines, nil
+}
+
+// formatSymbolContext formats the symbol context into the provided builder.
+func (s *GeminiService) formatSymbolContext(symbolID string, content string, inbound, outbound, defines []map[string]any, sb *strings.Builder) {
 	sb.WriteString(fmt.Sprintf("\n### Symbol: %s\n", symbolID))
 	sb.WriteString("```go\n")
-	// Truncate content if too long?
 	if len(content) > 2000 {
 		sb.WriteString(content[:2000] + "\n... (truncated)")
 	} else {
@@ -706,7 +735,6 @@ func (s *GeminiService) appendSymbolContext(ctx context.Context, store *meb.MEBS
 		}
 	}
 	sb.WriteString("\n")
-	return nil
 }
 
 var symbolRegex = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9_.\/]{3,}\b`)

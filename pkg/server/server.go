@@ -9,6 +9,7 @@ import (
 
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/agent"
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/service"
 	"github.com/duynguyendang/gca/pkg/service/ai"
 	"github.com/gin-gonic/gin"
@@ -27,6 +28,7 @@ type Server struct {
 func NewServer(mgr *manager.StoreManager, sourceDir string, apiKey string) *Server {
 	r := gin.Default()
 	r.Use(CORSMiddleware())
+	r.Use(CompressionMiddleware())
 
 	svc := service.NewGraphService(mgr)
 
@@ -63,6 +65,7 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/api/health", s.healthCheck)
 	s.router.GET("/api/v1/projects", s.handleProjects)
 	s.router.GET("/api/v1/graph", s.handleGraph)
+	s.router.GET("/api/v1/graph/paginated", s.handleGraphPaginated) // Lazy loading support
 	s.router.GET("/api/v1/graph/manifest", s.handleGraphManifest)
 	s.router.GET("/api/v1/graph/map", s.handleGraphMap)
 	s.router.GET("/api/v1/graph/file-details", s.handleFileDetails)
@@ -163,7 +166,16 @@ func (s *Server) handleAgentExecute(c *gin.Context) {
 	modelAdapter := ai.NewGeminiModelAdapter(s.geminiService)
 	orch := agent.NewOrchestrator(modelAdapter, store)
 
-	predicateNames := []string{"defines", "calls", "imports", "has_doc", "in_package", "has_role", "has_tag", "kind"}
+	predicateNames := []string{
+		config.PredicateDefines,
+		config.PredicateCalls,
+		config.PredicateImports,
+		config.PredicateHasDoc,
+		config.PredicateInPackage,
+		config.PredicateHasRole,
+		config.PredicateHasTag,
+		config.PredicateKind,
+	}
 
 	ctx := c.Request.Context()
 	session, err := orch.Run(ctx, req.ProjectID, req.Query, predicateNames)

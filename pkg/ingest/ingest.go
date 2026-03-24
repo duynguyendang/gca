@@ -73,22 +73,22 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 			// Create Project Node
 			s.AddFact(meb.Fact{
 				Subject:   string(projectMeta.Name),
-				Predicate: "type",
+				Predicate: config.PredicateType,
 				Object:    "project",
-				Graph:     "default",
+				Graph:     config.DefaultGraph,
 			})
 			s.AddFact(meb.Fact{
 				Subject:   string(projectMeta.Name),
 				Predicate: "description",
 				Object:    projectMeta.Description,
-				Graph:     "default",
+				Graph:     config.DefaultGraph,
 			})
 			for _, tag := range projectMeta.Tags {
 				s.AddFact(meb.Fact{
 					Subject:   string(projectMeta.Name),
-					Predicate: "has_tag",
+					Predicate: config.PredicateHasTag,
 					Object:    tag,
-					Graph:     "default",
+					Graph:     config.DefaultGraph,
 				})
 			}
 		}
@@ -253,7 +253,7 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 		docFactsFound := 0
 
 		for _, fact := range bundle.Facts {
-			if fact.Predicate == "has_doc" {
+			if fact.Predicate == config.PredicateHasDoc {
 				docFactsFound++
 				docText, ok := fact.Object.(string)
 				log.Printf("DEBUG: Found doc for %s (len=%d)", fact.Subject, len(docText))
@@ -323,7 +323,7 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 	if meta != nil && meta.Components != nil {
 		for _, comp := range meta.Components {
 			if strings.Contains(relPath, comp.Path) {
-				finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: "has_tag", Object: comp.Type, Graph: fileGraph})
+				finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateHasTag, Object: comp.Type, Graph: fileGraph})
 				tagged = true
 				break // Assume one component per file for now
 			}
@@ -333,18 +333,18 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 	if !tagged {
 		if strings.HasSuffix(relPath, ".go") {
 			// fmt.Printf("DEBUG: Tagging %s as backend\n", relPath)
-			finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: "has_tag", Object: "backend", Graph: fileGraph})
+			finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateHasTag, Object: "backend", Graph: fileGraph})
 		} else if strings.HasSuffix(relPath, ".ts") || strings.HasSuffix(relPath, ".tsx") {
 			// fmt.Printf("DEBUG: Tagging %s as frontend\n", relPath)
-			finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: "has_tag", Object: "frontend", Graph: fileGraph})
+			finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateHasTag, Object: "frontend", Graph: fileGraph})
 		}
 	}
 
 	// Make sure file has type "file"
-	finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: "type", Object: "file", Graph: fileGraph})
+	finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateType, Object: config.SymbolKindFile, Graph: fileGraph})
 
 	for _, f := range bundle.Facts {
-		if f.Predicate == "calls" {
+		if f.Predicate == config.PredicateCalls {
 			if objStr, ok := f.Object.(string); ok {
 				if resolved, ok := state.SymbolTable[objStr]; ok {
 					f.Object = resolved
@@ -389,18 +389,18 @@ func isSupportedFile(path string) bool {
 func TagRoles(s *meb.MEBStore) error {
 	ctx := context.Background()
 	// Tag API handlers
-	res, _ := s.Query(ctx, `triples(?url, "handled_by", ?h)`)
+	res, _ := s.Query(ctx, fmt.Sprintf(`triples(?url, "%s", ?h)`, config.PredicateHandledBy))
 	for _, r := range res {
 		h, _ := r["?h"].(string)
-		s.AddFact(meb.Fact{Subject: string(h), Predicate: "has_role", Object: "api_handler", Graph: "virtual"})
+		s.AddFact(meb.Fact{Subject: string(h), Predicate: config.PredicateHasRole, Object: config.RoleAPIHandler, Graph: "virtual"})
 	}
 	// Tag Contracts
-	res, _ = s.Query(ctx, `triples(?s, "in_package", ?pkg)`)
+	res, _ = s.Query(ctx, fmt.Sprintf(`triples(?s, "%s", ?pkg)`, config.PredicateInPackage))
 	for _, r := range res {
 		p, _ := r["?pkg"].(string)
 		sID, _ := r["?s"].(string)
 		if strings.Contains(p, "types") || strings.Contains(p, "models") || strings.Contains(p, "meb") || strings.Contains(p, "ast") {
-			s.AddFact(meb.Fact{Subject: string(sID), Predicate: "has_role", Object: "data_contract", Graph: "virtual"})
+			s.AddFact(meb.Fact{Subject: string(sID), Predicate: config.PredicateHasRole, Object: config.RoleDataContract, Graph: "virtual"})
 		}
 	}
 	return nil

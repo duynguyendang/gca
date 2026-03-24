@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/meb"
 	sitter "github.com/tree-sitter/go-tree-sitter"
 	golang "github.com/tree-sitter/tree-sitter-go/bindings/go"
@@ -66,7 +67,8 @@ type TreeSitterExtractor struct {
 	parser *sitter.Parser
 }
 
-// NewTreeSitterExtractor creates a new extractor instance.
+// NewTreeSitterExtractor creates a new extractor instance for parsing source code.
+// Returns a TreeSitterExtractor configured for multi-language parsing.
 func NewTreeSitterExtractor() *TreeSitterExtractor {
 	parser := sitter.NewParser()
 	return &TreeSitterExtractor{parser: parser}
@@ -88,7 +90,10 @@ func (e *TreeSitterExtractor) GetParser(ext string) *sitter.Language {
 	}
 }
 
-// ExtractSymbols parses the content and returns a list of symbols.
+// ExtractSymbols parses the source code content and returns a list of symbols.
+// It uses tree-sitter to parse the AST based on the file extension.
+// Supported languages: Go, Python, JavaScript, TypeScript, JSX, TSX.
+// Returns a list of Symbol structs containing function, class, and type definitions.
 func (e *TreeSitterExtractor) ExtractSymbols(filename string, content []byte, relPath string) ([]Symbol, error) {
 	ext := filepath.Ext(filename)
 	lang := e.GetParser(ext)
@@ -148,7 +153,9 @@ func (e *TreeSitterExtractor) ExtractSymbols(filename string, content []byte, re
 	return symbols, nil
 }
 
-// ExtractReferences parses the content and returns a list of references (calls, imports, etc).
+// ExtractReferences parses the source code content and returns a list of references.
+// References include function calls, imports, and string literal references.
+// Returns a list of Reference structs containing subject-predicate-object triples.
 func (e *TreeSitterExtractor) ExtractReferences(filename string, content []byte, relPath string) ([]Reference, error) {
 	ext := filepath.Ext(filename)
 	if ext == ".md" {
@@ -216,18 +223,18 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 	// Emit File-Level Facts (once)
 	bundle.Facts = append(bundle.Facts, meb.Fact{
 		Subject:   string(relPath),
-		Predicate: "in_package",
+		Predicate: config.PredicateInPackage,
 		Object:    filePackage,
-		Graph:     "default",
+		Graph:     config.DefaultGraph,
 	})
 
 	tags := e.deriveTags(relPath)
 	for _, tag := range tags {
 		bundle.Facts = append(bundle.Facts, meb.Fact{
 			Subject:   string(relPath),
-			Predicate: "has_tag",
+			Predicate: config.PredicateHasTag,
 			Object:    tag,
-			Graph:     "default",
+			Graph:     config.DefaultGraph,
 		})
 	}
 
@@ -256,9 +263,9 @@ func (e *TreeSitterExtractor) processMarkdownFile(relPath string, content []byte
 			},
 		}},
 		Facts: []meb.Fact{
-			{Subject: string(relPath), Predicate: "type", Object: "document", Graph: "default"},
-			{Subject: string(relPath), Predicate: "has_doc", Object: string(content), Graph: "default"},
-			{Subject: string(relPath), Predicate: "in_package", Object: "root", Graph: "default"},
+			{Subject: string(relPath), Predicate: config.PredicateType, Object: config.TypeDocument, Graph: config.DefaultGraph},
+			{Subject: string(relPath), Predicate: config.PredicateHasDoc, Object: string(content), Graph: config.DefaultGraph},
+			{Subject: string(relPath), Predicate: config.PredicateInPackage, Object: config.DefaultPackageRoot, Graph: config.DefaultGraph},
 		},
 	}
 }
@@ -282,19 +289,19 @@ func (e *TreeSitterExtractor) processSymbols(bundle *AnalysisBundle, symbols []S
 
 		// Create Facts
 		bundle.Facts = append(bundle.Facts,
-			meb.Fact{Subject: string(sym.ID), Predicate: "type", Object: sym.Type, Graph: "default"},
-			meb.Fact{Subject: string(relPath), Predicate: "defines", Object: sym.ID, Graph: "default"},
-			meb.Fact{Subject: string(sym.ID), Predicate: "in_package", Object: filePackage, Graph: "default"},
-			meb.Fact{Subject: string(sym.ID), Predicate: "name", Object: sym.Name, Graph: "default"},
+			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateType, Object: sym.Type, Graph: config.DefaultGraph},
+			meb.Fact{Subject: string(relPath), Predicate: config.PredicateDefines, Object: sym.ID, Graph: config.DefaultGraph},
+			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateInPackage, Object: filePackage, Graph: config.DefaultGraph},
+			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateName, Object: sym.Name, Graph: config.DefaultGraph},
 		)
 
 		// Role Tagging
 		if sym.Type == TypeStruct || sym.Type == TypeInterface || sym.Type == TypeClass {
 			bundle.Facts = append(bundle.Facts, meb.Fact{
 				Subject:   string(sym.ID),
-				Predicate: "has_role",
-				Object:    "data_contract",
-				Graph:     "default",
+				Predicate: config.PredicateHasRole,
+				Object:    config.RoleDataContract,
+				Graph:     config.DefaultGraph,
 			})
 		}
 
@@ -302,9 +309,9 @@ func (e *TreeSitterExtractor) processSymbols(bundle *AnalysisBundle, symbols []S
 		if sym.Type == TypeMethod && strings.HasPrefix(sym.Name, "handle") {
 			bundle.Facts = append(bundle.Facts, meb.Fact{
 				Subject:   string(sym.ID),
-				Predicate: "has_role",
-				Object:    "api_handler",
-				Graph:     "default",
+				Predicate: config.PredicateHasRole,
+				Object:    config.RoleAPIHandler,
+				Graph:     config.DefaultGraph,
 			})
 		}
 
@@ -312,18 +319,18 @@ func (e *TreeSitterExtractor) processSymbols(bundle *AnalysisBundle, symbols []S
 		if strings.Contains(lowerPkg, "util") || strings.Contains(lowerPkg, "helper") || strings.Contains(strings.ToLower(sym.Name), "util") {
 			bundle.Facts = append(bundle.Facts, meb.Fact{
 				Subject:   string(sym.ID),
-				Predicate: "has_role",
-				Object:    "utility",
-				Graph:     "default",
+				Predicate: config.PredicateHasRole,
+				Object:    config.RoleUtility,
+				Graph:     config.DefaultGraph,
 			})
 		}
 
 		if sym.DocComment != "" {
 			bundle.Facts = append(bundle.Facts, meb.Fact{
 				Subject:   string(sym.ID),
-				Predicate: "has_doc",
+				Predicate: config.PredicateHasDoc,
 				Object:    sym.DocComment,
-				Graph:     "default",
+				Graph:     config.DefaultGraph,
 			})
 		}
 	}
@@ -340,7 +347,7 @@ func (e *TreeSitterExtractor) addFacts(bundle *AnalysisBundle, relPath string, r
 			Subject:   string(subj),
 			Predicate: ref.Predicate,
 			Object:    ref.Object,
-			Graph:     "default",
+			Graph:     config.DefaultGraph,
 		})
 	}
 }
@@ -349,7 +356,7 @@ func (e *TreeSitterExtractor) addFacts(bundle *AnalysisBundle, relPath string, r
 func (e *TreeSitterExtractor) derivePackage(relPath string) string {
 	dir := filepath.Dir(relPath)
 	if dir == "." || dir == "/" {
-		return "root"
+		return config.DefaultPackageRoot
 	}
 	// Sanitize path to look like a package (e.g. pkg/ingest -> pkg.ingest)
 	return strings.ReplaceAll(dir, string(filepath.Separator), ".")
@@ -485,7 +492,7 @@ func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relP
 				if callee != "" && !isStdLibCall(callee, "go") {
 					*refs = append(*refs, Reference{
 						Subject:   currentScope,
-						Predicate: "calls",
+						Predicate: config.PredicateCalls,
 						Object:    callee,
 						Line:      lineFromOffset(content, n.StartByte()),
 					})
@@ -502,8 +509,8 @@ func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relP
 			}
 			*refs = append(*refs, Reference{
 				Subject:   subj,
-				Predicate: "references", // New predicate
-				Object:    strVal,       // The string value itself
+				Predicate: config.PredicateReferences,
+				Object:    strVal,
 				Line:      lineFromOffset(content, n.StartByte()),
 			})
 		}
@@ -512,7 +519,7 @@ func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relP
 		if currentScope != "" && !isGoBuiltIn(name) {
 			*refs = append(*refs, Reference{
 				Subject:   currentScope,
-				Predicate: "references",
+				Predicate: config.PredicateReferences,
 				Object:    name,
 				Line:      lineFromOffset(content, n.StartByte()),
 			})
@@ -522,7 +529,7 @@ func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relP
 		if currentScope != "" {
 			*refs = append(*refs, Reference{
 				Subject:   currentScope,
-				Predicate: "references",
+				Predicate: config.PredicateReferences,
 				Object:    name,
 				Line:      lineFromOffset(content, n.StartByte()),
 			})
@@ -610,7 +617,7 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 				resolvedImp := resolveImportPath(relPath, imp)
 				*refs = append(*refs, Reference{
 					Subject:   relPath,
-					Predicate: "imports",
+					Predicate: config.PredicateImports,
 					Object:    resolvedImp,
 					Line:      lineFromOffset(content, n.StartByte()),
 				})
@@ -621,7 +628,7 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 					resolvedImp := resolveImportPath(relPath, imp)
 					*refs = append(*refs, Reference{
 						Subject:   relPath,
-						Predicate: "imports",
+						Predicate: config.PredicateImports,
 						Object:    resolvedImp,
 						Line:      lineFromOffset(content, n.StartByte()),
 					})
@@ -636,7 +643,7 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 			resolvedMod := resolveImportPath(relPath, modName)
 			*refs = append(*refs, Reference{
 				Subject:   relPath,
-				Predicate: "imports",
+				Predicate: config.PredicateImports,
 				Object:    resolvedMod,
 				Line:      lineFromOffset(content, n.StartByte()),
 			})
@@ -649,7 +656,7 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 				if !isStdLibCall(callee, "python") {
 					*refs = append(*refs, Reference{
 						Subject:   currentScope,
-						Predicate: "calls",
+						Predicate: config.PredicateCalls,
 						Object:    callee,
 						Line:      lineFromOffset(content, n.StartByte()),
 					})
@@ -795,7 +802,7 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 			resolvedSrc := resolveImportPath(relPath, src)
 			*refs = append(*refs, Reference{
 				Subject:   relPath,
-				Predicate: "imports",
+				Predicate: config.PredicateImports,
 				Object:    resolvedSrc,
 				Line:      lineFromOffset(content, n.StartByte()),
 			})
@@ -808,7 +815,7 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 				if len(callee) < 1024 && !isStdLibCall(callee, "js") {
 					*refs = append(*refs, Reference{
 						Subject:   currentScope,
-						Predicate: "calls",
+						Predicate: config.PredicateCalls,
 						Object:    callee,
 						Line:      lineFromOffset(content, n.StartByte()),
 					})
@@ -824,7 +831,7 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 			}
 			*refs = append(*refs, Reference{
 				Subject:   subj,
-				Predicate: "references",
+				Predicate: config.PredicateReferences,
 				Object:    strVal,
 				Line:      lineFromOffset(content, n.StartByte()),
 			})
@@ -839,7 +846,7 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 			}
 			*refs = append(*refs, Reference{
 				Subject:   subj,
-				Predicate: "references",
+				Predicate: config.PredicateReferences,
 				Object:    strVal,
 				Line:      lineFromOffset(content, n.StartByte()),
 			})
@@ -857,7 +864,7 @@ func (e *TreeSitterExtractor) addImportRef(content []byte, node *sitter.Node, re
 		impPath := clean(pathNode.Utf8Text(content))
 		*refs = append(*refs, Reference{
 			Subject:   relPath,
-			Predicate: "imports",
+			Predicate: config.PredicateImports,
 			Object:    impPath,
 			Line:      lineFromOffset(content, node.StartByte()),
 		})

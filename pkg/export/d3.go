@@ -40,6 +40,26 @@ type D3Link struct {
 type D3Graph struct {
 	Nodes []D3Node `json:"nodes"`
 	Links []D3Link `json:"links"`
+	// Cursor-based pagination for lazy loading
+	NextCursor string `json:"next_cursor,omitempty"`
+	HasMore    bool   `json:"has_more,omitempty"`
+	TotalNodes int    `json:"total_nodes,omitempty"`
+	TotalLinks int    `json:"total_links,omitempty"`
+}
+
+// GraphCursor represents a pagination cursor for lazy loading graphs.
+type GraphCursor struct {
+	Offset     int    `json:"offset"`
+	Limit      int    `json:"limit"`
+	LastNodeID string `json:"last_node_id,omitempty"`
+	SortBy     string `json:"sort_by,omitempty"` // "id", "name", "kind"
+}
+
+// GraphPageOptions configures pagination for graph loading.
+type GraphPageOptions struct {
+	Cursor string `json:"cursor,omitempty"`
+	Limit  int    `json:"limit"`  // Maximum nodes to return (default: 100)
+	Offset int    `json:"offset"` // Starting offset (alternative to cursor)
 }
 
 // D3Transformer handles the conversion of query results to D3 graph format.
@@ -373,4 +393,92 @@ func SaveD3Graph(graph *D3Graph, filename string) error {
 	encoder := json.NewEncoder(f)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(graph)
+}
+
+// PaginateGraph returns a paginated subset of the graph for lazy loading.
+// It applies the pagination options to the nodes and links, returning only
+// the requested page along with cursor information for subsequent requests.
+func (g *D3Graph) PaginateGraph(opts GraphPageOptions) (*D3Graph, string) {
+	// Set default limit if not specified
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 100 // Default page size
+	}
+	if limit > 1000 {
+		limit = 1000 // Maximum page size
+	}
+
+	offset := opts.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	// Calculate pagination bounds for nodes
+	startNode := offset
+	endNode := offset + limit
+	if startNode >= len(g.Nodes) {
+		return &D3Graph{
+			Nodes:      []D3Node{},
+			Links:      []D3Link{},
+			HasMore:    false,
+			TotalNodes: len(g.Nodes),
+			TotalLinks: len(g.Links),
+		}, ""
+	}
+	if endNode > len(g.Nodes) {
+		endNode = len(g.Nodes)
+	}
+
+	// Get paginated nodes
+	paginatedNodes := g.Nodes[startNode:endNode]
+
+	// Create a set of node IDs in this page for link filtering
+	nodeIDSet := make(map[string]bool)
+	for _, node := range paginatedNodes {
+		nodeIDSet[node.ID] = true
+	}
+
+	// Filter links to only include those between nodes in this page
+	var paginatedLinks []D3Link
+	for _, link := range g.Links {
+		if nodeIDSet[link.Source] && nodeIDSet[link.Target] {
+			paginatedLinks = append(paginatedLinks, link)
+		}
+	}
+
+	// Generate next cursor
+	hasMore := endNode < len(g.Nodes)
+	var nextCursor string
+	if hasMore {
+		cursor := GraphCursor{
+			Offset: endNode,
+			Limit:  limit,
+		}
+		cursorBytes, _ := json.Marshal(cursor)
+		nextCursor = string(cursorBytes)
+	}
+
+	return &D3Graph{
+		Nodes:      paginatedNodes,
+		Links:      paginatedLinks,
+		NextCursor: nextCursor,
+		HasMore:    hasMore,
+		TotalNodes: len(g.Nodes),
+		TotalLinks: len(g.Links),
+	}, nextCursor
+}
+
+// ParseCursor decodes a cursor string into a GraphCursor struct.
+func ParseCursor(cursorStr string) (*GraphCursor, error) {
+	if cursorStr == "" {
+		return &GraphCursor{Offset: 0, Limit: 100}, nil
+	}
+
+	var cursor GraphCursor
+	err := json.Unmarshal([]byte(cursorStr), &cursor)
+	if err != nil {
+		return nil, fmt.Errorf("invalid cursor format: %w", err)
+	}
+
+	return &cursor, nil
 }

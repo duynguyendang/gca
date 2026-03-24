@@ -11,6 +11,11 @@ const (
 	PredicateStartLine   = "start_line"
 	PredicateEndLine     = "end_line"
 	PredicateInPackage   = "in_package"
+	PredicateHasDoc      = "has_doc"
+	PredicateHasComment  = "has_comment"
+	PredicateHasRole     = "has_role"
+	PredicateHasTag      = "has_tag"
+	PredicateKind        = "kind"
 )
 
 // File depth limits
@@ -72,4 +77,37 @@ const (
 	DefaultVectorSearchLimit = 10
 )
 
+// Graph constants
+const (
+	DefaultGraph = "default"
+)
+
 // Note: File extensions are defined in config.go as SourceFileExtensions
+
+// Role predicates for semantic classification
+const (
+	RoleDataContract = "data_contract"
+	RoleAPIHandler   = "api_handler"
+	RoleUtility      = "utility"
+)
+
+// Additional predicates
+const (
+	PredicateName       = "name"
+	PredicateReferences = "references"
+)
+
+// Special values
+const (
+	DefaultPackageRoot = "root"
+	TypeDocument       = "document"
+)
+
+// Additional predicates for pathfinder and virtual relations
+const (
+	PredicateCallsAPI     = "calls_api"
+	PredicateHandledBy    = "handled_by"
+	PredicateExports      = "exports"
+	PredicateParentDefines = "parent_defines"
+	PredicateExposesModel  = "exposes_model"
+)

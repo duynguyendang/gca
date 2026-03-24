@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/common"
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
 )
 
@@ -67,7 +68,7 @@ func (s *GraphService) GetFileBackbone(ctx context.Context, projectID, fileID st
 		// Add Link
 		linkKey := common.MakeLinkKey(cleanFileID, targetFile)
 		if _, exists := linksMap[linkKey]; !exists {
-			linksMap[linkKey] = export.D3Link{Source: cleanFileID, Target: targetFile, Relation: "calls", Weight: 1}
+			linksMap[linkKey] = export.D3Link{Source: cleanFileID, Target: targetFile, Relation: config.PredicateCalls, Weight: 1}
 		} else {
 			l := linksMap[linkKey]
 			l.Weight++
@@ -105,7 +106,7 @@ func (s *GraphService) GetFileBackbone(ctx context.Context, projectID, fileID st
 		// Add Link
 		linkKey := common.MakeLinkKey(callerFile, cleanFileID)
 		if _, exists := linksMap[linkKey]; !exists {
-			linksMap[linkKey] = export.D3Link{Source: callerFile, Target: cleanFileID, Relation: "calls", Weight: 1}
+			linksMap[linkKey] = export.D3Link{Source: callerFile, Target: cleanFileID, Relation: config.PredicateCalls, Weight: 1}
 		} else {
 			l := linksMap[linkKey]
 			l.Weight++
