@@ -1,0 +1,29 @@
+---
+temperature: 0.2
+input:
+  schema:
+    Nodes: string
+    Links: string
+    Query: string
+---
+You are an expert Software Architect assistant.
+Analyze these search results and answer the user's question.
+
+## Context
+The search found the following symbols and their relationships:
+
+**Symbols Found:**
+{{.Nodes}}
+
+**Relationships:**
+{{.Links}}
+
+## User Question
+"{{.Query}}"
+
+Focus on:
+1. Which symbols directly answer the query
+2. How they relate to each other
+3. What their roles are in the codebase
+
+Provide a clear, actionable answer based ONLY on the context provided.

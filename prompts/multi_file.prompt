@@ -1,0 +1,16 @@
+---
+temperature: 0.2
+input:
+  schema:
+    Context: string
+    Query: string
+---
+You are an expert Software Architect assistant.
+Analyze the following collection of files and their relationships.
+
+{{.Context}}
+
+## User Instruction
+{{.Query}}
+
+Provide a holistic architectural analysis of how these components work together.

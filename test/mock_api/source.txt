@@ -1,0 +1,98 @@
+from typing import TypedDict, List, Dict, Any, Optional
+from enum import Enum
+import os
+from datetime import datetime
+
+class WorkflowStatus(Enum):
+    INITIALIZED = "initialized"
+    PLANNING = "planning"
+    IN_PROGRESS = "in_progress"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class WorkflowState(TypedDict):
+    """Workflow state with project folder support"""
+    project_folder: str  # Base folder for project-specific files
+    """Represents the state of the workflow graph."""
+    groups: List[Dict[str, Any]] # Configuration for all groups and their steps
+    steps: List[Dict[str, Any]] # Flat list of all steps for easy lookup by index
+    current_group_index: Optional[int] # Index of the currently selected group
+    current_step_in_group_index: Optional[int] # Index of the current step within the selected group
+    outputs: Dict[str, str]           # Accumulated outputs {step_name: output_file_path}
+    user_choice: str                  # Raw input from the user ('exit', group number, or invalid)
+    error: Optional[str]              # Error message from the last executed step
+    run_mode: Optional[str]           # Mode for running steps ('continue_group' or None)
+    status: WorkflowStatus            # Current status of the workflow
+    last_updated: str                 # Timestamp of the last state update (ISO 8601)
+
+class WorkflowStateManager:
+    def __init__(self, state: Optional[WorkflowState] = None):
+        if state:
+            self._state = state
+        else:
+            self._state = self._initialize_new_state()
+
+    def _initialize_new_state(self) -> WorkflowState:
+        return WorkflowState(
+            project_folder="",
+            groups=[],
+            steps=[],
+            current_group_index=None,
+            current_step_in_group_index=None,
+            outputs={},
+            user_choice="",
+            error=None,
+            run_mode=None,
+            status=WorkflowStatus.INITIALIZED,
+            last_updated=datetime.now().isoformat()
+        )
+
+    def get_state(self) -> WorkflowState:
+        return self._state
+
+    def update_state(self, new_data: Dict[str, Any]):
+        # Validate transitions here if needed
+        for key, value in new_data.items():
+            if key in self._state:
+                self._state[key] = value
+        self._state['last_updated'] = datetime.now().isoformat()
+
+    def transition_status(self, new_status: WorkflowStatus):
+        if not self._validate_transition(self._state['status'], new_status):
+            raise ValueError(f"Invalid state transition from {self._state['status']} to {new_status}")
+        self._state['status'] = new_status
+        self._state['last_updated'] = datetime.now().isoformat()
+
+    def _validate_transition(self, current_status: WorkflowStatus, new_status: WorkflowStatus) -> bool:
+        # Define valid state transitions
+        valid_transitions = {
+            WorkflowStatus.INITIALIZED: {WorkflowStatus.PLANNING, WorkflowStatus.FAILED},
+            WorkflowStatus.PLANNING: {WorkflowStatus.IN_PROGRESS, WorkflowStatus.FAILED},
+            WorkflowStatus.IN_PROGRESS: {WorkflowStatus.PAUSED, WorkflowStatus.COMPLETED, WorkflowStatus.FAILED},
+            WorkflowStatus.PAUSED: {WorkflowStatus.IN_PROGRESS, WorkflowStatus.COMPLETED, WorkflowStatus.FAILED},
+            WorkflowStatus.COMPLETED: {WorkflowStatus.INITIALIZED}, # Allow reset for new workflow
+            WorkflowStatus.FAILED: {WorkflowStatus.INITIALIZED} # Allow reset after failure
+        }
+        return new_status in valid_transitions.get(current_status, set())
+
+    def save_state(self, file_path: str):
+        # This is a placeholder. In a real scenario, you'd use a proper serialization library (e.g., json, pickle)
+        # and handle file I/O errors.
+        import json
+        with open(file_path, 'w') as f:
+            # Convert Enum to its value for JSON serialization
+            serializable_state = self._state.copy()
+            serializable_state['status'] = serializable_state['status'].value
+            json.dump(serializable_state, f, indent=4)
+
+    @classmethod
+    def load_state(cls, file_path: str) -> Optional['WorkflowStateManager']:
+        import json
+        if not os.path.exists(file_path):
+            return None
+        with open(file_path, 'r') as f:
+            loaded_data = json.load(f)
+            # Convert status string back to Enum
+            loaded_data['status'] = WorkflowStatus(loaded_data['status'])
+            return cls(state=loaded_data)

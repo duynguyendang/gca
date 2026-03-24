@@ -1,0 +1,219 @@
+package service
+
+import (
+	"context"
+	"strconv"
+	"strings"
+
+	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/export"
+	"github.com/duynguyendang/meb"
+)
+
+// HydrateShallow performs shallow hydration of symbols (metadata only, no content).
+func (s *GraphService) HydrateShallow(ctx context.Context, store *meb.MEBStore, ids []string) ([]HydratedSymbol, error) {
+	var hydrated []HydratedSymbol
+	for _, id := range ids {
+		hs := HydratedSymbol{ID: id, Metadata: make(map[string]interface{})}
+		for fact, _ := range store.Scan(id, config.PredicateHasKind, "", "") {
+			if str, ok := fact.Object.(string); ok {
+				hs.Kind = str
+				break
+			}
+		}
+		for fact, _ := range store.Scan(id, config.PredicateHasLanguage, "", "") {
+			if str, ok := fact.Object.(string); ok {
+				hs.Metadata["language"] = str
+				break
+			}
+		}
+		for fact, _ := range store.Scan(id, config.PredicateStartLine, "", "") {
+			if num, ok := fact.Object.(int); ok {
+				hs.Metadata["start_line"] = num
+			} else if floatNum, ok := fact.Object.(float64); ok {
+				hs.Metadata["start_line"] = int(floatNum)
+			} else if strNum, ok := fact.Object.(string); ok {
+				if parsed, err := strconv.Atoi(strNum); err == nil {
+					hs.Metadata["start_line"] = parsed
+				}
+			}
+		}
+		for fact, _ := range store.Scan(id, config.PredicateEndLine, "", "") {
+			if num, ok := fact.Object.(int); ok {
+				hs.Metadata["end_line"] = num
+			} else if floatNum, ok := fact.Object.(float64); ok {
+				hs.Metadata["end_line"] = int(floatNum)
+			} else if strNum, ok := fact.Object.(string); ok {
+				if parsed, err := strconv.Atoi(strNum); err == nil {
+					hs.Metadata["end_line"] = parsed
+				}
+			}
+		}
+
+		hydrated = append(hydrated, hs)
+	}
+	return hydrated, nil
+}
+
+// Hydrate performs full hydration of symbols (metadata + content).
+func (s *GraphService) Hydrate(ctx context.Context, store *meb.MEBStore, projectID string, ids []string) ([]HydratedSymbol, error) {
+	hydrated, err := s.HydrateShallow(ctx, store, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range hydrated {
+		hs := &hydrated[i]
+
+		content, _ := store.GetContentByKey(hs.ID)
+		if len(content) == 0 {
+			content, _ = store.GetContentByKey("/" + hs.ID)
+		}
+		if len(content) == 0 && projectID != "" && !strings.HasPrefix(hs.ID, projectID+"/") {
+			prefixedID := projectID + "/" + hs.ID
+			content, _ = store.GetContentByKey(prefixedID)
+		}
+		if len(content) > 0 {
+			hs.Content = string(content)
+			continue
+		}
+
+		if strings.Contains(hs.ID, ":") {
+			parts := strings.Split(hs.ID, ":")
+			filePath := parts[0]
+			fileContentBytes, _ := store.GetContentByKey(filePath)
+			if len(fileContentBytes) == 0 && projectID != "" && !strings.HasPrefix(filePath, projectID+"/") {
+				prefixedPath := projectID + "/" + filePath
+				fileContentBytes, _ = store.GetContentByKey(prefixedPath)
+			}
+			if len(fileContentBytes) > 0 {
+				startLine, hasStart := hs.Metadata["start_line"].(int)
+				endLine, hasEnd := hs.Metadata["end_line"].(int)
+
+				if hasStart && hasEnd {
+					lines := strings.Split(string(fileContentBytes), "\n")
+					start := startLine - 1
+					end := endLine
+
+					if start < 0 {
+						start = 0
+					}
+					if end > len(lines) {
+						end = len(lines)
+					}
+					if start < end {
+						hs.Content = strings.Join(lines[start:end], "\n")
+					}
+				} else {
+					hs.Content = string(fileContentBytes)
+				}
+			}
+		}
+	}
+	return hydrated, nil
+}
+
+// enrichNodes populates node content and kind from the store.
+func (s *GraphService) enrichNodes(ctx context.Context, store *meb.MEBStore, graph *export.D3Graph, lazy bool) error {
+	ids := make([]string, len(graph.Nodes))
+	for i, n := range graph.Nodes {
+		ids[i] = string(n.ID)
+	}
+
+	var hydrated []HydratedSymbol
+	var err error
+
+	if lazy {
+		hydrated, err = s.HydrateShallow(ctx, store, ids)
+	} else {
+		hydrated, err = s.Hydrate(ctx, store, "", ids)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	hMap := make(map[string]HydratedSymbol)
+	for _, h := range hydrated {
+		hMap[h.ID] = h
+	}
+
+	for i := range graph.Nodes {
+		n := &graph.Nodes[i]
+		if h, ok := hMap[string(n.ID)]; ok {
+			n.Code = h.Content
+			if h.Kind != "" {
+				n.Kind = h.Kind
+			}
+			if len(h.Children) > 0 {
+				n.Children = s.mapChildren(h.Children)
+			}
+
+			if n.Metadata == nil {
+				n.Metadata = make(map[string]string)
+			}
+			if pkg, ok := h.Metadata["package"].(string); ok {
+				n.Metadata["package"] = pkg
+			}
+			if tags, ok := h.Metadata["tags"].([]string); ok {
+				n.Metadata["tags"] = strings.Join(tags, ",")
+			} else if tags, ok := h.Metadata["tags"].([]interface{}); ok {
+				var strTags []string
+				for _, t := range tags {
+					if s, ok := t.(string); ok {
+						strTags = append(strTags, s)
+					}
+				}
+				n.Metadata["tags"] = strings.Join(strTags, ",")
+			} else if tags, ok := h.Metadata["tags"].(string); ok {
+				n.Metadata["tags"] = tags
+			}
+		}
+	}
+	return nil
+}
+
+// mapChildren recursively maps hydrated symbols to D3 nodes.
+func (s *GraphService) mapChildren(hydrated []HydratedSymbol) []export.D3Node {
+	if len(hydrated) == 0 {
+		return nil
+	}
+	nodes := make([]export.D3Node, len(hydrated))
+	for i, h := range hydrated {
+		parts := strings.Split(string(h.ID), "/")
+		name := parts[len(parts)-1]
+
+		nodes[i] = export.D3Node{
+			ID:       string(h.ID),
+			Name:     name,
+			Kind:     h.Kind,
+			Code:     h.Content,
+			Children: s.mapChildren(h.Children),
+		}
+
+		if lang, ok := h.Metadata["language"].(string); ok {
+			nodes[i].Language = lang
+			nodes[i].Group = lang
+		}
+
+		if nodes[i].Metadata == nil {
+			nodes[i].Metadata = make(map[string]string)
+		}
+		if pkg, ok := h.Metadata["package"].(string); ok {
+			nodes[i].Metadata["package"] = pkg
+		}
+		if tags, ok := h.Metadata["tags"].([]string); ok {
+			nodes[i].Metadata["tags"] = strings.Join(tags, ",")
+		} else if tags, ok := h.Metadata["tags"].([]interface{}); ok {
+			var strTags []string
+			for _, t := range tags {
+				if s, ok := t.(string); ok {
+					strTags = append(strTags, s)
+				}
+			}
+			nodes[i].Metadata["tags"] = strings.Join(strTags, ",")
+		} else if tags, ok := h.Metadata["tags"].(string); ok {
+			nodes[i].Metadata["tags"] = tags
+		}
+	}
+	return nodes
+}

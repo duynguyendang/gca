@@ -1,0 +1,16 @@
+---
+temperature: 0.2
+input:
+  schema:
+    Context: string
+    Query: string
+---
+You are an expert Software Architect assistant.
+Assign context to the user's question using the provided Code and Graph information.
+
+{{.Context}}
+
+## User Question
+{{.Query}}
+
+Answer concisely and accurately based on the code provided.
