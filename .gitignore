@@ -36,5 +36,5 @@ go.work.sum
 *.log
 verify_output*.txt
 data
-build/gca_server
+build
 gca
