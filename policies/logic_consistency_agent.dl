@@ -1,0 +1,272 @@
+% GCA Logic & Consistency Agent - GenePool Rules
+% Neuro-Symbolic formal verification and consistency checking
+
+% ============================================================
+% Agent Metadata
+% ============================================================
+
+agent_metadata("logic_consistency_agent", "Logic & Consistency Agent").
+agent_metadata("logic_consistency_agent", "description", "Formal verification, contract validation, type safety, and consistency checking").
+agent_metadata("logic_consistency_agent", "category", "logic").
+agent_metadata("logic_consistency_agent", "version", "1.0").
+
+% ============================================================
+% Query Definitions
+% ============================================================
+
+% Find dead code (unreachable branches)
+query_metadata("logic_dead_code", "Detect dead code and unreachable branches").
+query_metadata("logic_dead_code", "category", "logic").
+query_metadata("logic_dead_code", "tier", "2").
+query_metadata("logic_dead_code", "severity", "medium").
+
+query("logic_dead_code", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_branch", Branch),
+    \+ triples(Branch, "is_reachable", "true"),
+    Issue = issue("dead_code", Symbol, "Unreachable branch detected").
+
+query("logic_dead_code", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "calls", Target),
+    \+ triples(_, "defines", Target),
+    Issue = issue("dead_code", Symbol, "Call to undefined function").
+
+% Find type safety issues
+query_metadata("logic_type_safety", "Detect type safety issues").
+query_metadata("logic_type_safety", "category", "logic").
+query_metadata("logic_type_safety", "tier", "2").
+query_metadata("logic_type_safety", "severity", "high").
+
+query("logic_type_safety", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_type", Type),
+    triples(Symbol, "assigns_value", Value),
+    triples(Value, "has_type", ValueType),
+    Type \= ValueType,
+    Issue = issue("type_mismatch", Symbol, "Type mismatch in assignment").
+
+query("logic_type_safety", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "calls", Target),
+    triples(Target, "requires_type", RequiredType),
+    triples(Symbol, "passes_argument", Arg),
+    triples(Arg, "has_type", ArgType),
+    RequiredType \= ArgType,
+    Issue = issue("type_mismatch", Symbol, "Argument type mismatch").
+
+% Find null safety issues
+query_metadata("logic_null_safety", "Detect null safety issues").
+query_metadata("logic_null_safety", "category", "logic").
+query_metadata("logic_null_safety", "tier", "2").
+query_metadata("logic_null_safety", "severity", "high").
+
+query("logic_null_safety", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "accesses_field", Field),
+    \+ triples(Symbol, "checks_null", Field),
+    triples(Field, "can_be_null", "true"),
+    Issue = issue("null_safety", Symbol, "Potential null pointer access").
+
+query("logic_null_safety", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "calls", Target),
+    triples(Target, "returns_null", "true"),
+    \+ triples(Symbol, "checks_return_null", _),
+    Issue = issue("null_safety", Symbol, "Unchecked null return value").
+
+% Find contract violations (pre/post conditions)
+query_metadata("logic_contract_violation", "Detect contract violations").
+query_metadata("logic_contract_violation", "category", "logic").
+query_metadata("logic_contract_violation", "tier", "2").
+query_metadata("logic_contract_violation", "severity", "high").
+
+query("logic_contract_violation", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_precondition", Precondition),
+    \+ triples(Symbol, "validates_precondition", Precondition),
+    Issue = issue("contract_violation", Symbol, "Precondition not validated").
+
+query("logic_contract_violation", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_postcondition", Postcondition),
+    \+ triples(Symbol, "ensures_postcondition", Postcondition),
+    Issue = issue("contract_violation", Symbol, "Postcondition not ensured").
+
+% Find consistency issues across distributed components
+query_metadata("logic_consistency", "Detect consistency issues across components").
+query_metadata("logic_consistency", "category", "logic").
+query_metadata("logic_consistency", "tier", "3").
+query_metadata("logic_consistency", "severity", "high").
+
+query("logic_consistency", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "implements_interface", Interface),
+    triples(Interface, "requires_method", Method),
+    \+ triples(Symbol, "implements_method", Method),
+    Issue = issue("consistency", Symbol, "Missing interface method implementation").
+
+query("logic_consistency", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "uses_schema", Schema),
+    triples(Schema, "has_field", Field),
+    triples(Symbol, "accesses_field", AccessedField),
+    Field \= AccessedField,
+    \+ triples(Schema, "has_field", AccessedField),
+    Issue = issue("consistency", Symbol, "Accessing non-existent schema field").
+
+% Find temporal logic issues (state machines)
+query_metadata("logic_temporal", "Detect temporal logic issues in state machines").
+query_metadata("logic_temporal", "category", "logic").
+query_metadata("logic_temporal", "tier", "3").
+query_metadata("logic_temporal", "severity", "high").
+
+query("logic_temporal", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_state", State),
+    triples(State, "transitions_to", NextState),
+    \+ triples(NextState, "is_valid_state", "true"),
+    Issue = issue("temporal", Symbol, "Transition to invalid state").
+
+query("logic_temporal", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_state", State),
+    triples(State, "requires_guard", Guard),
+    \+ triples(State, "has_guard", Guard),
+    Issue = issue("temporal", Symbol, "Missing transition guard").
+
+% Find formal specification verification issues
+query_metadata("logic_formal_verification", "Verify against formal specifications").
+query_metadata("logic_formal_verification", "category", "logic").
+query_metadata("logic_formal_verification", "tier", "3").
+query_metadata("logic_formal_verification", "severity", "critical").
+
+query("logic_formal_verification", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_specification", Spec),
+    triples(Spec, "has_property", Property),
+    \+ triples(Symbol, "satisfies_property", Property),
+    Issue = issue("formal_verification", Symbol, "Does not satisfy specification property").
+
+query("logic_formal_verification", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_invariant", Invariant),
+    \+ triples(Symbol, "maintains_invariant", Invariant),
+    Issue = issue("formal_verification", Symbol, "Invariant violation detected").
+
+% ============================================================
+% Composite Logic Analysis
+% ============================================================
+
+% Comprehensive logic scan for a file
+query_metadata("logic_scan_file", "Perform comprehensive logic and consistency scan").
+query_metadata("logic_scan_file", "category", "logic").
+query_metadata("logic_scan_file", "tier", "3").
+
+query("logic_scan_file", FileID, Report) :-
+    findall(Issue, (
+        query("logic_dead_code", FileID, Issue)
+        ; query("logic_type_safety", FileID, Issue)
+        ; query("logic_null_safety", FileID, Issue)
+        ; query("logic_contract_violation", FileID, Issue)
+        ; query("logic_consistency", FileID, Issue)
+        ; query("logic_temporal", FileID, Issue)
+        ; query("logic_formal_verification", FileID, Issue)
+    ), Issues),
+    length(Issues, Count),
+    Report = logic_report(FileID, Count, Issues).
+
+% Logic consistency score calculation
+query_metadata("logic_consistency_score", "Calculate logic consistency score for a file").
+query_metadata("logic_consistency_score", "category", "logic").
+query_metadata("logic_consistency_score", "tier", "3").
+
+query("logic_consistency_score", FileID, Score) :-
+    aggregate(count, query("logic_dead_code", FileID, _), DeadCount),
+    aggregate(count, query("logic_type_safety", FileID, _), TypeCount),
+    aggregate(count, query("logic_null_safety", FileID, _), NullCount),
+    aggregate(count, query("logic_contract_violation", FileID, _), ContractCount),
+    aggregate(count, query("logic_consistency", FileID, _), ConsistencyCount),
+    aggregate(count, query("logic_temporal", FileID, _), TemporalCount),
+    aggregate(count, query("logic_formal_verification", FileID, _), FormalCount),
+    Score is DeadCount * 3 + TypeCount * 8 + NullCount * 7 + ContractCount * 9 + ConsistencyCount * 6 + TemporalCount * 7 + FormalCount * 10.
+
+% ============================================================
+% Contract Definitions
+% ============================================================
+
+% Define contract patterns
+contract_pattern("precondition", "Input validation before execution").
+contract_pattern("postcondition", "Output validation after execution").
+contract_pattern("invariant", "Condition that must always hold").
+contract_pattern("requires", "Required pre-state").
+contract_pattern("ensures", "Guaranteed post-state").
+
+% ============================================================
+% Type System Patterns
+% ============================================================
+
+% Define type system patterns
+type_pattern("type_annotation", "Explicit type annotation").
+type_pattern("type_inference", "Inferred type from context").
+type_pattern("type_cast", "Type casting operation").
+type_pattern("type_check", "Runtime type checking").
+type_pattern("generic_type", "Generic type parameter").
+
+% ============================================================
+% State Machine Patterns
+% ============================================================
+
+% Define state machine patterns
+state_pattern("initial_state", "Starting state of state machine").
+state_pattern("final_state", "Terminal state of state machine").
+state_pattern("transition", "State transition with guard").
+state_pattern("guard", "Condition for state transition").
+state_pattern("action", "Action performed on transition").
+
+% ============================================================
+% Remediation Suggestions
+% ============================================================
+
+% Suggest remediation for logic issues
+query_metadata("logic_remediation", "Get remediation suggestions for logic issues").
+query_metadata("logic_remediation", "category", "logic").
+query_metadata("logic_remediation", "tier", "2").
+
+query("logic_remediation", Issue, Remediation) :-
+    issue(Type, Symbol, Description),
+    remediation(Type, Remediation).
+
+remediation("dead_code", "Remove unreachable code or fix control flow").
+remediation("type_mismatch", "Ensure type compatibility or add type conversion").
+remediation("null_safety", "Add null checks or use optional types").
+remediation("contract_violation", "Implement contract validation logic").
+remediation("consistency", "Ensure interface/schema compliance").
+remediation("temporal", "Add state transition guards and validation").
+remediation("formal_verification", "Implement specification compliance checks").
+
+% ============================================================
+% Formal Verification Helpers
+% ============================================================
+
+% Check if symbol satisfies property
+satisfies_property(Symbol, Property) :-
+    triples(Symbol, "satisfies_property", Property).
+
+% Check if symbol maintains invariant
+maintains_invariant(Symbol, Invariant) :-
+    triples(Symbol, "maintains_invariant", Invariant).
+
+% Check if state transition is valid
+valid_transition(FromState, ToState, Guard) :-
+    triples(FromState, "transitions_to", ToState),
+    triples(FromState, "has_guard", Guard),
+    triples(Guard, "is_satisfied", "true").
+
+% Check if interface is fully implemented
+fully_implements(Symbol, Interface) :-
+    triples(Symbol, "implements_interface", Interface),
+    forall(
+        triples(Interface, "requires_method", Method),
+        triples(Symbol, "implements_method", Method)
+    ).

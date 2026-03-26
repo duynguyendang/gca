@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"html"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,6 +12,228 @@ import (
 	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/gin-gonic/gin"
 )
+
+// validateAndSanitizeQuery validates and sanitizes a Datalog query string
+func validateAndSanitizeQuery(query string) (string, error) {
+	if query == "" {
+		return "", fmt.Errorf("query cannot be empty")
+	}
+
+	// Trim whitespace
+	query = strings.TrimSpace(query)
+
+	// Check for excessively long queries
+	if len(query) > 10000 {
+		return "", fmt.Errorf("query exceeds maximum length of 10000 characters")
+	}
+
+	// Sanitize HTML entities to prevent XSS
+	query = html.EscapeString(query)
+
+	// Check for potentially dangerous patterns
+	dangerousPatterns := []string{
+		"<script",
+		"javascript:",
+		"onload=",
+		"onerror=",
+		"onclick=",
+	}
+
+	lowerQuery := strings.ToLower(query)
+	for _, pattern := range dangerousPatterns {
+		if strings.Contains(lowerQuery, pattern) {
+			return "", fmt.Errorf("query contains potentially dangerous content")
+		}
+	}
+
+	return query, nil
+}
+
+// validateProjectID validates a project ID
+func validateProjectID(projectID string) error {
+	if projectID == "" {
+		return fmt.Errorf("project ID cannot be empty")
+	}
+
+	// Check for path traversal attempts
+	if strings.Contains(projectID, "..") || strings.Contains(projectID, "/") || strings.Contains(projectID, "\\") {
+		return fmt.Errorf("invalid project ID format")
+	}
+
+	// Check for excessively long project IDs
+	if len(projectID) > 255 {
+		return fmt.Errorf("project ID exceeds maximum length")
+	}
+
+	return nil
+}
+
+// validateSymbolID validates a symbol ID
+func validateSymbolID(symbolID string) error {
+	if symbolID == "" {
+		return fmt.Errorf("symbol ID cannot be empty")
+	}
+
+	// Check for path traversal attempts
+	if strings.Contains(symbolID, "..") {
+		return fmt.Errorf("invalid symbol ID format")
+	}
+
+	// Check for excessively long symbol IDs
+	if len(symbolID) > 1000 {
+		return fmt.Errorf("symbol ID exceeds maximum length")
+	}
+
+	return nil
+}
+
+// validateIDs validates a list of IDs
+func validateIDs(ids []string) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("IDs list cannot be empty")
+	}
+
+	if len(ids) > 1000 {
+		return fmt.Errorf("too many IDs (maximum 1000)")
+	}
+
+	for _, id := range ids {
+		if err := validateSymbolID(id); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateEmbedding validates an embedding vector
+func validateEmbedding(embedding []float32) error {
+	if len(embedding) == 0 {
+		return fmt.Errorf("embedding cannot be empty")
+	}
+
+	// Check for reasonable embedding dimensions
+	if len(embedding) > 10000 {
+		return fmt.Errorf("embedding dimensions exceed maximum")
+	}
+
+	return nil
+}
+
+// validateLimit validates a limit parameter
+func validateLimit(limit int, maxLimit int) error {
+	if limit <= 0 {
+		return fmt.Errorf("limit must be positive")
+	}
+
+	if limit > maxLimit {
+		return fmt.Errorf("limit exceeds maximum of %d", maxLimit)
+	}
+
+	return nil
+}
+
+// validateOffset validates an offset parameter
+func validateOffset(offset int) error {
+	if offset < 0 {
+		return fmt.Errorf("offset cannot be negative")
+	}
+
+	if offset > 1000000 {
+		return fmt.Errorf("offset exceeds maximum")
+	}
+
+	return nil
+}
+
+// validateCursor validates a cursor string
+func validateCursor(cursor string) error {
+	if cursor == "" {
+		return nil // Empty cursor is valid
+	}
+
+	// Check for excessively long cursors
+	if len(cursor) > 1000 {
+		return fmt.Errorf("cursor exceeds maximum length")
+	}
+
+	// Check for dangerous patterns
+	dangerousPatterns := []string{
+		"<script",
+		"javascript:",
+		"onload=",
+		"onerror=",
+	}
+
+	lowerCursor := strings.ToLower(cursor)
+	for _, pattern := range dangerousPatterns {
+		if strings.Contains(lowerCursor, pattern) {
+			return fmt.Errorf("cursor contains potentially dangerous content")
+		}
+	}
+
+	return nil
+}
+
+// sanitizeString sanitizes a string input
+func sanitizeString(input string) string {
+	// Trim whitespace
+	input = strings.TrimSpace(input)
+
+	// Sanitize HTML entities
+	input = html.EscapeString(input)
+
+	return input
+}
+
+// validateDepth validates a depth parameter
+func validateDepth(depth int) error {
+	if depth < 0 {
+		return fmt.Errorf("depth cannot be negative")
+	}
+
+	if depth > 10 {
+		return fmt.Errorf("depth exceeds maximum of 10")
+	}
+
+	return nil
+}
+
+// validateClusters validates a clusters parameter
+func validateClusters(clusters int) error {
+	if clusters <= 0 {
+		return fmt.Errorf("clusters must be positive")
+	}
+
+	if clusters > 100 {
+		return fmt.Errorf("clusters exceeds maximum of 100")
+	}
+
+	return nil
+}
+
+// isValidQueryPattern checks if a query pattern is valid
+func isValidQueryPattern(query string) bool {
+	// Basic validation - query should contain parentheses for Datalog
+	if !strings.Contains(query, "(") || !strings.Contains(query, ")") {
+		return false
+	}
+
+	// Check for balanced parentheses
+	count := 0
+	for _, char := range query {
+		if char == '(' {
+			count++
+		} else if char == ')' {
+			count--
+		}
+		if count < 0 {
+			return false
+		}
+	}
+
+	return count == 0
+}
 
 // handleProjects returns a list of available projects.
 // Query parameters: none
@@ -32,6 +255,7 @@ func (s *Server) handleProjects(c *gin.Context) {
 //   - lazy: enable lazy loading (default: false)
 //   - raw: return raw results instead of graph (default: false)
 //   - nocluster: disable auto-clustering (default: false)
+//
 // Response: JSON graph with nodes and links, or raw query results.
 func (s *Server) handleQuery(c *gin.Context) {
 	var req struct {
@@ -42,13 +266,24 @@ func (s *Server) handleQuery(c *gin.Context) {
 		return
 	}
 
+	// Validate and sanitize query
+	sanitizedQuery, err := validateAndSanitizeQuery(req.Query)
+	if err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+
 	// If query is empty, return empty graph to prevent frontend crashes
-	if strings.TrimSpace(req.Query) == "" {
+	if sanitizedQuery == "" {
 		c.JSON(http.StatusOK, gin.H{"nodes": []interface{}{}, "links": []interface{}{}})
 		return
 	}
 
 	projectID := c.Query("project")
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
 	lazy := c.Query("lazy") == "true"
 	raw := c.Query("raw") == "true"
 	autocluster := c.Query("nocluster") != "true" // Auto-cluster by default unless ?nocluster=true
@@ -88,18 +323,19 @@ func (s *Server) handleQuery(c *gin.Context) {
 //   - project: project ID
 //   - file: file ID to get graph for
 //   - lazy: enable lazy loading (default: false)
+//
 // Response: JSON graph with nodes and links showing file relationships.
 func (s *Server) handleGraph(c *gin.Context) {
 	projectID := c.Query("project")
 	fileID := c.Query("file")
 	lazy := c.Query("lazy") == "true"
 
-	if projectID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
-	if fileID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing file ID", nil))
+	if err := validateSymbolID(fileID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
 
@@ -118,13 +354,18 @@ func (s *Server) handleGraph(c *gin.Context) {
 //   - id: file or symbol ID
 //   - start: optional start line number (1-based)
 //   - end: optional end line number
+//
 // Response: Plain text source code for the specified range.
 func (s *Server) handleSource(c *gin.Context) {
 	id := c.Query("id")
 	projectID := c.Query("project")
 
-	if projectID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+	if err := validateSymbolID(id); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
 
@@ -175,6 +416,10 @@ func (s *Server) handleSource(c *gin.Context) {
 // handleSummary returns the project summary.
 func (s *Server) handleSummary(c *gin.Context) {
 	projectID := c.Query("project")
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
 	summary, err := s.graphService.GenerateSummary(projectID)
 	if err != nil {
 		handleError(c, err)
@@ -200,6 +445,11 @@ func (s *Server) handlePredicates(c *gin.Context) {
 		return
 	}
 
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+
 	results, err := s.graphService.GetPredicates(projectID)
 	if err != nil {
 		handleError(c, err)
@@ -214,6 +464,7 @@ func (s *Server) handlePredicates(c *gin.Context) {
 //   - q: search query string
 //   - p: predicate to filter by (default: "defines")
 //   - all: if set, search across all predicates
+//
 // Response: JSON with symbols array containing matching symbol IDs.
 func (s *Server) handleSymbols(c *gin.Context) {
 	projectID := c.Query("project")
@@ -231,9 +482,30 @@ func (s *Server) handleSymbols(c *gin.Context) {
 		return
 	}
 
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+
+	// Validate and sanitize query parameter
+	query = sanitizeString(query)
+	if len(query) > 500 {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "query exceeds maximum length", nil))
+		return
+	}
+
 	predicate := c.Query("p")
 	if predicate == "" && c.Query("all") != "true" {
 		predicate = config.PredicateDefines
+	}
+
+	// Validate predicate parameter
+	if predicate != "" {
+		predicate = sanitizeString(predicate)
+		if len(predicate) > 100 {
+			handleError(c, errors.NewAppError(http.StatusBadRequest, "predicate exceeds maximum length", nil))
+			return
+		}
 	}
 
 	results, err := s.graphService.SearchSymbols(projectID, query, predicate, 50)
@@ -251,9 +523,27 @@ func (s *Server) handleFiles(c *gin.Context) {
 	projectID := c.Query("project")
 	prefix := c.Query("prefix")
 
-	if projectID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
+	}
+
+	// Validate and sanitize prefix parameter
+	if prefix != "" {
+		// Sanitize the prefix
+		prefix = sanitizeString(prefix)
+
+		// Check for path traversal attempts
+		if strings.Contains(prefix, "..") || strings.Contains(prefix, "\\") {
+			handleError(c, errors.NewAppError(http.StatusBadRequest, "Invalid prefix format", nil))
+			return
+		}
+
+		// Check for excessively long prefixes
+		if len(prefix) > 500 {
+			handleError(c, errors.NewAppError(http.StatusBadRequest, "prefix exceeds maximum length", nil))
+			return
+		}
 	}
 
 	files, err := s.graphService.ListFiles(projectID)
@@ -288,8 +578,8 @@ func (s *Server) handleFiles(c *gin.Context) {
 // handleGraphMap returns a high-level view of file dependencies.
 func (s *Server) handleGraphMap(c *gin.Context) {
 	projectID := c.Query("project")
-	if projectID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
 
@@ -316,8 +606,8 @@ func (s *Server) handleGraphMap(c *gin.Context) {
 // handleGraphManifest returns a compressed project manifest for the AI.
 func (s *Server) handleGraphManifest(c *gin.Context) {
 	projectID := c.Query("project")
-	if projectID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
 
@@ -335,12 +625,12 @@ func (s *Server) handleFileDetails(c *gin.Context) {
 	projectID := c.Query("project")
 	fileID := c.Query("file")
 
-	if projectID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
-	if fileID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing file ID", nil))
+	if err := validateSymbolID(fileID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
 
@@ -357,8 +647,12 @@ func (s *Server) handleFileDetails(c *gin.Context) {
 func (s *Server) handleHydrate(c *gin.Context) {
 	projectID := c.Query("project")
 	id := c.Query("id")
-	if id == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing id parameter", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+	if err := validateSymbolID(id); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
 
@@ -374,8 +668,8 @@ func (s *Server) handleHydrate(c *gin.Context) {
 // handleGraphBackbone returns a filtered graph showing only cross-file dependencies.
 func (s *Server) handleGraphBackbone(c *gin.Context) {
 	projectID := c.Query("project")
-	if projectID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
 
@@ -395,12 +689,12 @@ func (s *Server) handleFileCalls(c *gin.Context) {
 	id := c.Query("id")
 	depthStr := c.Query("depth")
 
-	if projectID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
-	if id == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing id parameter", nil))
+	if err := validateSymbolID(id); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
 
@@ -437,12 +731,16 @@ func (s *Server) handleFlowPath(c *gin.Context) {
 	from := c.Query("from")
 	to := c.Query("to")
 
-	if projectID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
-	if from == "" || to == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing from/to parameters", nil))
+	if err := validateSymbolID(from); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+	if err := validateSymbolID(to); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
 
@@ -461,12 +759,16 @@ func (s *Server) handleGraphPath(c *gin.Context) {
 	source := c.Query("source")
 	target := c.Query("target")
 
-	if projectID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
-	if source == "" || target == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing source/target parameters", nil))
+	if err := validateSymbolID(source); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+	if err := validateSymbolID(target); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
 
@@ -484,6 +786,7 @@ func (s *Server) handleGraphPath(c *gin.Context) {
 //   - project: project ID
 //   - q: search query string
 //   - k: number of results to return (default: 10, max: 50)
+//
 // Response: JSON with query, count, and results array of matching symbols.
 func (s *Server) handleSemanticSearch(c *gin.Context) {
 	projectID := c.Query("project")
@@ -498,8 +801,19 @@ func (s *Server) handleSemanticSearch(c *gin.Context) {
 		k = 50 // Cap results
 	}
 
-	if projectID == "" || query == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project or q parameter", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+	if query == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing q parameter", nil))
+		return
+	}
+
+	// Validate and sanitize query
+	query = sanitizeString(query)
+	if len(query) > 1000 {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "query exceeds maximum length", nil))
 		return
 	}
 
@@ -528,8 +842,19 @@ func (s *Server) handleGraphCluster(c *gin.Context) {
 	projectID := c.Query("project")
 	query := c.Query("query")
 
-	if projectID == "" || query == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project or query parameter", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+	if query == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing query parameter", nil))
+		return
+	}
+
+	// Validate and sanitize query
+	query = sanitizeString(query)
+	if len(query) > 10000 {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "query exceeds maximum length", nil))
 		return
 	}
 
@@ -553,8 +878,14 @@ func (s *Server) handleGraphSubgraph(c *gin.Context) {
 	}
 
 	projectID := c.Query("project")
-	if projectID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+
+	// Validate IDs list
+	if err := validateIDs(req.Ids); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
 
@@ -570,8 +901,8 @@ func (s *Server) handleGraphSubgraph(c *gin.Context) {
 // handleGraphCommunities returns the hierarchical community structure.
 func (s *Server) handleGraphCommunities(c *gin.Context) {
 	projectID := c.Query("project")
-	if projectID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
 
@@ -587,8 +918,8 @@ func (s *Server) handleGraphCommunities(c *gin.Context) {
 // handleHybridCluster performs k-means clustering on vector results while preserving community structure.
 func (s *Server) handleHybridCluster(c *gin.Context) {
 	projectID := c.Query("project")
-	if projectID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project ID", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
 		return
 	}
 
@@ -603,11 +934,30 @@ func (s *Server) handleHybridCluster(c *gin.Context) {
 		return
 	}
 
+	// Validate embedding
+	if err := validateEmbedding(req.Embedding); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+
+	// Validate and set default values for limit and clusters
 	if req.Limit <= 0 {
 		req.Limit = 100
 	}
 	if req.Clusters <= 0 {
 		req.Clusters = 5
+	}
+
+	// Validate limit
+	if err := validateLimit(req.Limit, 1000); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+
+	// Validate clusters
+	if err := validateClusters(req.Clusters); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
 	}
 
 	result, err := s.graphService.GetHybridClusters(c.Request.Context(), projectID, req.Embedding, req.Limit, req.Clusters)
@@ -626,13 +976,18 @@ func (s *Server) handleHybridCluster(c *gin.Context) {
 //   - cursor: pagination cursor from previous response (optional)
 //   - limit: maximum nodes to return (default: 100, max: 1000)
 //   - offset: starting offset as alternative to cursor (optional)
+//
 // Response: JSON graph with paginated nodes/links and next cursor.
 func (s *Server) handleGraphPaginated(c *gin.Context) {
 	projectID := c.Query("project")
 	query := c.Query("query")
 
-	if projectID == "" || query == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing project or query parameter", nil))
+	if err := validateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+	if query == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing query parameter", nil))
 		return
 	}
 

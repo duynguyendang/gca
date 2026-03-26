@@ -1,0 +1,303 @@
+% GCA Performance & Scalability Agent - GenePool Rules
+% Performance bottleneck prediction and scalability analysis
+
+% ============================================================
+% Agent Metadata
+% ============================================================
+
+agent_metadata("performance_agent", "Performance & Scalability Agent").
+agent_metadata("performance_agent", "description", "Performance bottleneck prediction, memory leak detection, concurrency issues").
+agent_metadata("performance_agent", "category", "performance").
+agent_metadata("performance_agent", "version", "1.0").
+
+% ============================================================
+% Query Definitions
+% ============================================================
+
+% Find potential performance bottlenecks
+query_metadata("performance_bottleneck", "Detect potential performance bottlenecks").
+query_metadata("performance_bottleneck", "category", "performance").
+query_metadata("performance_bottleneck", "tier", "2").
+query_metadata("performance_bottleneck", "severity", "high").
+
+query("performance_bottleneck", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_complexity", "O(n^2)"),
+    Issue = issue("bottleneck", Symbol, "Quadratic time complexity detected").
+
+query("performance_bottleneck", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_complexity", "O(n^3)"),
+    Issue = issue("bottleneck", Symbol, "Cubic time complexity detected").
+
+query("performance_bottleneck", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_complexity", "O(2^n)"),
+    Issue = issue("bottleneck", Symbol, "Exponential time complexity detected").
+
+query("performance_bottleneck", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "calls", Target),
+    triples(Target, "is_expensive", "true"),
+    Issue = issue("bottleneck", Symbol, "Call to expensive operation").
+
+% Find memory leak risks
+query_metadata("performance_memory_leak", "Detect potential memory leaks").
+query_metadata("performance_memory_leak", "category", "performance").
+query_metadata("performance_memory_leak", "tier", "2").
+query_metadata("performance_memory_leak", "severity", "high").
+
+query("performance_memory_leak", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "allocates_memory", Resource),
+    \+ triples(Symbol, "deallocates_memory", Resource),
+    Issue = issue("memory_leak", Symbol, "Memory allocation without deallocation").
+
+query("performance_memory_leak", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "opens_resource", Resource),
+    \+ triples(Symbol, "closes_resource", Resource),
+    Issue = issue("memory_leak", Symbol, "Resource opened without closing").
+
+query("performance_memory_leak", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "creates_goroutine", _),
+    \+ triples(Symbol, "waits_for_goroutine", _),
+    Issue = issue("memory_leak", Symbol, "Goroutine created without synchronization").
+
+% Find concurrency issues
+query_metadata("performance_concurrency", "Detect concurrency issues").
+query_metadata("performance_concurrency", "category", "performance").
+query_metadata("performance_concurrency", "tier", "2").
+query_metadata("performance_concurrency", "severity", "critical").
+
+query("performance_concurrency", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "accesses_shared_state", State),
+    \+ triples(Symbol, "uses_lock", State),
+    Issue = issue("race_condition", Symbol, "Shared state access without synchronization").
+
+query("performance_concurrency", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "acquires_lock", Lock),
+    \+ triples(Symbol, "releases_lock", Lock),
+    Issue = issue("deadlock", Symbol, "Lock acquired without release").
+
+query("performance_concurrency", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "acquires_lock", Lock1),
+    triples(Symbol, "acquires_lock", Lock2),
+    Lock1 \= Lock2,
+    \+ triples(Symbol, "acquires_locks_in_order", _),
+    Issue = issue("deadlock", Symbol, "Potential deadlock from lock ordering").
+
+% Find database query performance issues
+query_metadata("performance_database", "Detect database query performance issues").
+query_metadata("performance_database", "category", "performance").
+query_metadata("performance_database", "tier", "2").
+query_metadata("performance_database", "severity", "high").
+
+query("performance_database", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "executes_query", Query),
+    triples(Query, "has_pattern", "n_plus_one"),
+    Issue = issue("n_plus_one", Symbol, "N+1 query problem detected").
+
+query("performance_database", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "executes_query", Query),
+    triples(Query, "has_pattern", "missing_index"),
+    Issue = issue("missing_index", Symbol, "Query without proper indexing").
+
+query("performance_database", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "executes_query", Query),
+    triples(Query, "has_pattern", "full_table_scan"),
+    Issue = issue("full_table_scan", Symbol, "Full table scan detected").
+
+% Find network performance issues
+query_metadata("performance_network", "Detect network performance issues").
+query_metadata("performance_network", "category", "performance").
+query_metadata("performance_network", "tier", "2").
+query_metadata("performance_network", "severity", "medium").
+
+query("performance_network", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "makes_request", Request),
+    triples(Request, "has_pattern", "sequential_requests"),
+    Issue = issue("sequential_requests", Symbol, "Sequential network requests").
+
+query("performance_network", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "makes_request", Request),
+    \+ triples(Request, "uses_cache", _),
+    Issue = issue("no_caching", Symbol, "Network request without caching").
+
+% Find algorithmic inefficiencies
+query_metadata("performance_algorithm", "Detect algorithmic inefficiencies").
+query_metadata("performance_algorithm", "category", "performance").
+query_metadata("performance_algorithm", "tier", "2").
+query_metadata("performance_algorithm", "severity", "medium").
+
+query("performance_algorithm", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_pattern", "nested_loop"),
+    Issue = issue("nested_loop", Symbol, "Nested loop detected").
+
+query("performance_algorithm", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_pattern", "repeated_computation"),
+    Issue = issue("repeated_computation", Symbol, "Repeated computation without memoization").
+
+query("performance_algorithm", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_pattern", "inefficient_data_structure"),
+    Issue = issue("inefficient_data_structure", Symbol, "Inefficient data structure usage").
+
+% Find resource usage issues
+query_metadata("performance_resource", "Detect resource usage issues").
+query_metadata("performance_resource", "category", "performance").
+query_metadata("performance_resource", "tier", "2").
+query_metadata("performance_resource", "severity", "medium").
+
+query("performance_resource", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "reads_file", File),
+    \+ triples(Symbol, "uses_buffering", File),
+    Issue = issue("unbuffered_io", Symbol, "Unbuffered file I/O").
+
+query("performance_resource", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "creates_temp_file", _),
+    \+ triples(Symbol, "cleans_up_temp_file", _),
+    Issue = issue("temp_file_leak", Symbol, "Temporary file not cleaned up").
+
+% ============================================================
+% Composite Performance Analysis
+% ============================================================
+
+% Comprehensive performance scan for a file
+query_metadata("performance_scan_file", "Perform comprehensive performance scan").
+query_metadata("performance_scan_file", "category", "performance").
+query_metadata("performance_scan_file", "tier", "3").
+
+query("performance_scan_file", FileID, Report) :-
+    findall(Issue, (
+        query("performance_bottleneck", FileID, Issue)
+        ; query("performance_memory_leak", FileID, Issue)
+        ; query("performance_concurrency", FileID, Issue)
+        ; query("performance_database", FileID, Issue)
+        ; query("performance_network", FileID, Issue)
+        ; query("performance_algorithm", FileID, Issue)
+        ; query("performance_resource", FileID, Issue)
+    ), Issues),
+    length(Issues, Count),
+    Report = performance_report(FileID, Count, Issues).
+
+% Performance risk score calculation
+query_metadata("performance_risk_score", "Calculate performance risk score for a file").
+query_metadata("performance_risk_score", "category", "performance").
+query_metadata("performance_risk_score", "tier", "3").
+
+query("performance_risk_score", FileID, Score) :-
+    aggregate(count, query("performance_bottleneck", FileID, _), BottleneckCount),
+    aggregate(count, query("performance_memory_leak", FileID, _), MemoryCount),
+    aggregate(count, query("performance_concurrency", FileID, _), ConcurrencyCount),
+    aggregate(count, query("performance_database", FileID, _), DatabaseCount),
+    aggregate(count, query("performance_network", FileID, _), NetworkCount),
+    aggregate(count, query("performance_algorithm", FileID, _), AlgorithmCount),
+    aggregate(count, query("performance_resource", FileID, _), ResourceCount),
+    Score is BottleneckCount * 9 + MemoryCount * 8 + ConcurrencyCount * 10 + DatabaseCount * 7 + NetworkCount * 5 + AlgorithmCount * 6 + ResourceCount * 4.
+
+% ============================================================
+% Performance Pattern Definitions
+% ============================================================
+
+% Define performance patterns to detect
+performance_pattern("O(n^2)", "Quadratic time complexity").
+performance_pattern("O(n^3)", "Cubic time complexity").
+performance_pattern("O(2^n)", "Exponential time complexity").
+performance_pattern("nested_loop", "Nested loop structure").
+performance_pattern("repeated_computation", "Repeated computation without caching").
+performance_pattern("inefficient_data_structure", "Inefficient data structure").
+performance_pattern("n_plus_one", "N+1 query problem").
+performance_pattern("missing_index", "Missing database index").
+performance_pattern("full_table_scan", "Full table scan").
+performance_pattern("sequential_requests", "Sequential network requests").
+performance_pattern("no_caching", "No caching strategy").
+performance_pattern("unbuffered_io", "Unbuffered I/O operations").
+
+% ============================================================
+% Resource Management Patterns
+% ============================================================
+
+% Define resource management patterns
+resource_pattern("memory_allocation", "Memory allocation").
+resource_pattern("file_handle", "File handle").
+resource_pattern("database_connection", "Database connection").
+resource_pattern("network_connection", "Network connection").
+resource_pattern("goroutine", "Goroutine").
+resource_pattern("lock", "Mutex/lock").
+resource_pattern("channel", "Channel").
+
+% ============================================================
+% Remediation Suggestions
+% ============================================================
+
+% Suggest remediation for performance issues
+query_metadata("performance_remediation", "Get remediation suggestions for performance issues").
+query_metadata("performance_remediation", "category", "performance").
+query_metadata("performance_remediation", "tier", "2").
+
+query("performance_remediation", Issue, Remediation) :-
+    issue(Type, Symbol, Description),
+    remediation(Type, Remediation).
+
+remediation("bottleneck", "Optimize algorithm or use more efficient data structure").
+remediation("memory_leak", "Ensure proper resource cleanup with defer/finally").
+remediation("race_condition", "Add synchronization primitives (mutex, channel)").
+remediation("deadlock", "Use consistent lock ordering or lock-free data structures").
+remediation("n_plus_one", "Use batch queries or eager loading").
+remediation("missing_index", "Add appropriate database indexes").
+remediation("full_table_scan", "Add WHERE clause or index").
+remediation("sequential_requests", "Use concurrent requests or batch processing").
+remediation("no_caching", "Implement caching strategy").
+remediation("nested_loop", "Optimize loop structure or use hash-based lookup").
+remediation("repeated_computation", "Add memoization or caching").
+remediation("inefficient_data_structure", "Use appropriate data structure for use case").
+remediation("unbuffered_io", "Use buffered I/O operations").
+remediation("temp_file_leak", "Ensure temporary files are cleaned up").
+
+% ============================================================
+% Load Testing Scenario Generation
+% ============================================================
+
+% Generate load testing scenarios
+query_metadata("performance_load_test_scenario", "Generate load testing scenarios").
+query_metadata("performance_load_test_scenario", "category", "performance").
+query_metadata("performance_load_test_scenario", "tier", "3").
+
+query("performance_load_test_scenario", FileID, Scenario) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_role", "api_handler"),
+    triples(Symbol, "handles_endpoint", Endpoint),
+    Scenario = load_test_scenario(Endpoint, "concurrent_users", 100).
+
+query("performance_load_test_scenario", FileID, Scenario) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "executes_query", Query),
+    Scenario = load_test_scenario(Query, "query_load", 1000).
+
+% ============================================================
+% Historical Performance Analysis
+% ============================================================
+
+% Analyze historical performance data
+query_metadata("performance_historical_analysis", "Analyze historical performance trends").
+query_metadata("performance_historical_analysis", "category", "performance").
+query_metadata("performance_historical_analysis", "tier", "3").
+
+query("performance_historical_analysis", Symbol, Trend) :-
+    triples(Symbol, "has_performance_metric", Metric),
+    triples(Metric, "has_history", History),
+    triples(History, "trend", Trend).

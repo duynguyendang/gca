@@ -1,0 +1,278 @@
+% GCA Security Agent - GenePool Rules
+% Automated security vulnerability detection and analysis
+
+% ============================================================
+% Agent Metadata
+% ============================================================
+
+agent_metadata("security_agent", "Security Agent").
+agent_metadata("security_agent", "description", "OWASP vulnerability detection, secret leak detection, dangerous code patterns").
+agent_metadata("security_agent", "category", "security").
+agent_metadata("security_agent", "version", "1.0").
+
+% ============================================================
+% Query Definitions
+% ============================================================
+
+% Find SQL injection vulnerabilities
+query_metadata("security_sql_injection", "Detect potential SQL injection vulnerabilities").
+query_metadata("security_sql_injection", "category", "security").
+query_metadata("security_sql_injection", "tier", "2").
+query_metadata("security_sql_injection", "severity", "critical").
+
+query("security_sql_injection", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "calls", Target),
+    triples(Target, "has_pattern", "sql_concatenation"),
+    Vulnerability = vulnerability("sql_injection", Symbol, "Critical", "SQL injection via string concatenation").
+
+query("security_sql_injection", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "calls", Target),
+    triples(Target, "has_pattern", "raw_sql_query"),
+    Vulnerability = vulnerability("sql_injection", Symbol, "Critical", "Raw SQL query without parameterization").
+
+% Find XSS vulnerabilities
+query_metadata("security_xss", "Detect potential XSS vulnerabilities").
+query_metadata("security_xss", "category", "security").
+query_metadata("security_xss", "tier", "2").
+query_metadata("security_xss", "severity", "high").
+
+query("security_xss", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "calls", Target),
+    triples(Target, "has_pattern", "html_injection"),
+    Vulnerability = vulnerability("xss", Symbol, "High", "Potential XSS via HTML injection").
+
+query("security_xss", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "calls", Target),
+    triples(Target, "has_pattern", "dom_manipulation"),
+    \+ triples(Target, "has_sanitization", _),
+    Vulnerability = vulnerability("xss", Symbol, "High", "DOM manipulation without sanitization").
+
+% Find CSRF vulnerabilities
+query_metadata("security_csrf", "Detect potential CSRF vulnerabilities").
+query_metadata("security_csrf", "category", "security").
+query_metadata("security_csrf", "tier", "2").
+query_metadata("security_csrf", "severity", "high").
+
+query("security_csrf", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_role", "api_handler"),
+    triples(Symbol, "handles_method", "POST"),
+    \+ triples(Symbol, "has_csrf_protection", _),
+    Vulnerability = vulnerability("csrf", Symbol, "High", "POST handler without CSRF protection").
+
+query("security_csrf", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_role", "api_handler"),
+    triples(Symbol, "handles_method", "PUT"),
+    \+ triples(Symbol, "has_csrf_protection", _),
+    Vulnerability = vulnerability("csrf", Symbol, "High", "PUT handler without CSRF protection").
+
+% Find secret/credential leaks
+query_metadata("security_secret_leak", "Detect hardcoded secrets and credentials").
+query_metadata("security_secret_leak", "category", "security").
+query_metadata("security_secret_leak", "tier", "2").
+query_metadata("security_secret_leak", "severity", "critical").
+
+query("security_secret_leak", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_pattern", "hardcoded_password"),
+    Vulnerability = vulnerability("secret_leak", Symbol, "Critical", "Hardcoded password detected").
+
+query("security_secret_leak", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_pattern", "hardcoded_api_key"),
+    Vulnerability = vulnerability("secret_leak", Symbol, "Critical", "Hardcoded API key detected").
+
+query("security_secret_leak", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_pattern", "hardcoded_token"),
+    Vulnerability = vulnerability("secret_leak", Symbol, "Critical", "Hardcoded token detected").
+
+query("security_secret_leak", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_pattern", "hardcoded_secret"),
+    Vulnerability = vulnerability("secret_leak", Symbol, "Critical", "Hardcoded secret detected").
+
+% Find dangerous code patterns
+query_metadata("security_dangerous_pattern", "Detect dangerous code patterns").
+query_metadata("security_dangerous_pattern", "category", "security").
+query_metadata("security_dangerous_pattern", "tier", "2").
+query_metadata("security_dangerous_pattern", "severity", "high").
+
+query("security_dangerous_pattern", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "calls", Target),
+    triples(Target, "has_pattern", "eval_execution"),
+    Vulnerability = vulnerability("dangerous_pattern", Symbol, "High", "Use of eval() function").
+
+query("security_dangerous_pattern", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "calls", Target),
+    triples(Target, "has_pattern", "unsafe_deserialization"),
+    Vulnerability = vulnerability("dangerous_pattern", Symbol, "High", "Unsafe deserialization").
+
+query("security_dangerous_pattern", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "calls", Target),
+    triples(Target, "has_pattern", "command_injection"),
+    Vulnerability = vulnerability("dangerous_pattern", Symbol, "Critical", "Command injection vulnerability").
+
+% Find dependency vulnerabilities
+query_metadata("security_dependency_vulnerability", "Detect vulnerable dependencies").
+query_metadata("security_dependency_vulnerability", "category", "security").
+query_metadata("security_dependency_vulnerability", "tier", "2").
+query_metadata("security_dependency_vulnerability", "severity", "high").
+
+query("security_dependency_vulnerability", FileID, Vulnerability) :-
+    triples(FileID, "imports", Dependency),
+    triples(Dependency, "has_cve", CVE),
+    triples(CVE, "severity", Severity),
+    Vulnerability = vulnerability("dependency_vulnerability", Dependency, Severity, "Dependency has known CVE").
+
+% Find insecure cryptographic practices
+query_metadata("security_weak_crypto", "Detect weak cryptographic practices").
+query_metadata("security_weak_crypto", "category", "security").
+query_metadata("security_weak_crypto", "tier", "2").
+query_metadata("security_weak_crypto", "severity", "high").
+
+query("security_weak_crypto", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "calls", Target),
+    triples(Target, "has_pattern", "md5_hash"),
+    Vulnerability = vulnerability("weak_crypto", Symbol, "High", "Use of MD5 hash (insecure)").
+
+query("security_weak_crypto", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "calls", Target),
+    triples(Target, "has_pattern", "sha1_hash"),
+    Vulnerability = vulnerability("weak_crypto", Symbol, "Medium", "Use of SHA1 hash (consider SHA256)").
+
+query("security_weak_crypto", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "calls", Target),
+    triples(Target, "has_pattern", "weak_random"),
+    Vulnerability = vulnerability("weak_crypto", Symbol, "High", "Use of weak random number generator").
+
+% Find authentication/authorization issues
+query_metadata("security_auth_issue", "Detect authentication and authorization issues").
+query_metadata("security_auth_issue", "category", "security").
+query_metadata("security_auth_issue", "tier", "2").
+query_metadata("security_auth_issue", "severity", "critical").
+
+query("security_auth_issue", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_role", "api_handler"),
+    \+ triples(Symbol, "requires_authentication", _),
+    Vulnerability = vulnerability("auth_issue", Symbol, "Critical", "API handler without authentication").
+
+query("security_auth_issue", FileID, Vulnerability) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_role", "api_handler"),
+    triples(Symbol, "requires_authentication", "true"),
+    \+ triples(Symbol, "has_authorization", _),
+    Vulnerability = vulnerability("auth_issue", Symbol, "High", "Authenticated endpoint without authorization check").
+
+% ============================================================
+% Composite Security Analysis
+% ============================================================
+
+% Comprehensive security scan for a file
+query_metadata("security_scan_file", "Perform comprehensive security scan on a file").
+query_metadata("security_scan_file", "category", "security").
+query_metadata("security_scan_file", "tier", "3").
+query_metadata("security_scan_file", "severity", "critical").
+
+query("security_scan_file", FileID, Report) :-
+    findall(Vuln, (
+        query("security_sql_injection", FileID, Vuln)
+        ; query("security_xss", FileID, Vuln)
+        ; query("security_csrf", FileID, Vuln)
+        ; query("security_secret_leak", FileID, Vuln)
+        ; query("security_dangerous_pattern", FileID, Vuln)
+        ; query("security_dependency_vulnerability", FileID, Vuln)
+        ; query("security_weak_crypto", FileID, Vuln)
+        ; query("security_auth_issue", FileID, Vuln)
+    ), Vulnerabilities),
+    length(Vulnerabilities, Count),
+    Report = security_report(FileID, Count, Vulnerabilities).
+
+% Security risk score calculation
+query_metadata("security_risk_score", "Calculate security risk score for a file").
+query_metadata("security_risk_score", "category", "security").
+query_metadata("security_risk_score", "tier", "3").
+
+query("security_risk_score", FileID, Score) :-
+    aggregate(count, query("security_sql_injection", FileID, _), SqlCount),
+    aggregate(count, query("security_xss", FileID, _), XssCount),
+    aggregate(count, query("security_csrf", FileID, _), CsrfCount),
+    aggregate(count, query("security_secret_leak", FileID, _), SecretCount),
+    aggregate(count, query("security_dangerous_pattern", FileID, _), DangerousCount),
+    aggregate(count, query("security_dependency_vulnerability", FileID, _), DepCount),
+    aggregate(count, query("security_weak_crypto", FileID, _), CryptoCount),
+    aggregate(count, query("security_auth_issue", FileID, _), AuthCount),
+    Score is SqlCount * 10 + XssCount * 8 + CsrfCount * 8 + SecretCount * 10 + DangerousCount * 9 + DepCount * 7 + CryptoCount * 6 + AuthCount * 10.
+
+% ============================================================
+% Security Audit Report Generation
+% ============================================================
+
+% Generate security audit report for a project
+query_metadata("security_audit_report", "Generate comprehensive security audit report").
+query_metadata("security_audit_report", "category", "security").
+query_metadata("security_audit_report", "tier", "3").
+
+query("security_audit_report", ProjectID, Report) :-
+    triples(ProjectID, "has_file", FileID),
+    findall(FileVulns, (
+        triples(ProjectID, "has_file", FileID),
+        findall(Vuln, query("security_scan_file", FileID, Vuln), FileVulns)
+    ), AllVulns),
+    flatten(AllVulns, FlatVulns),
+    length(FlatVulns, TotalVulns),
+    Report = audit_report(ProjectID, TotalVulns, FlatVulns).
+
+% ============================================================
+% Security Pattern Definitions
+% ============================================================
+
+% Define security patterns to detect
+security_pattern("sql_concatenation", "String concatenation in SQL queries").
+security_pattern("raw_sql_query", "Raw SQL query execution").
+security_pattern("html_injection", "HTML injection without sanitization").
+security_pattern("dom_manipulation", "DOM manipulation without validation").
+security_pattern("hardcoded_password", "Hardcoded password in source code").
+security_pattern("hardcoded_api_key", "Hardcoded API key in source code").
+security_pattern("hardcoded_token", "Hardcoded token in source code").
+security_pattern("hardcoded_secret", "Hardcoded secret in source code").
+security_pattern("eval_execution", "Use of eval() function").
+security_pattern("unsafe_deserialization", "Unsafe deserialization").
+security_pattern("command_injection", "Command injection vulnerability").
+security_pattern("md5_hash", "Use of MD5 hash algorithm").
+security_pattern("sha1_hash", "Use of SHA1 hash algorithm").
+security_pattern("weak_random", "Use of weak random number generator").
+
+% ============================================================
+% Remediation Suggestions
+% ============================================================
+
+% Suggest remediation for vulnerabilities
+query_metadata("security_remediation", "Get remediation suggestions for vulnerabilities").
+query_metadata("security_remediation", "category", "security").
+query_metadata("security_remediation", "tier", "2").
+
+query("security_remediation", Vulnerability, Remediation) :-
+    vulnerability(Type, Symbol, Severity, Description),
+    remediation(Type, Remediation).
+
+remediation("sql_injection", "Use parameterized queries or prepared statements").
+remediation("xss", "Implement input validation and output encoding").
+remediation("csrf", "Add CSRF tokens to state-changing requests").
+remediation("secret_leak", "Move secrets to environment variables or secret manager").
+remediation("dangerous_pattern", "Avoid eval() and unsafe functions; use safe alternatives").
+remediation("dependency_vulnerability", "Update dependency to patched version").
+remediation("weak_crypto", "Use strong cryptographic algorithms (SHA256, AES)").
+remediation("auth_issue", "Implement proper authentication and authorization checks").

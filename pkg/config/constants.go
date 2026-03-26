@@ -84,6 +84,12 @@ const (
 
 // Note: File extensions are defined in config.go as SourceFileExtensions
 
+// Policy and GenePool paths
+const (
+	GenePoolPath = "policies/queries.dl"
+	PolicyPath   = "policies"
+)
+
 // Role predicates for semantic classification
 const (
 	RoleDataContract = "data_contract"

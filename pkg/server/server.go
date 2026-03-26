@@ -5,21 +5,68 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/agent"
 	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/registry"
 	"github.com/duynguyendang/gca/pkg/service"
 	"github.com/duynguyendang/gca/pkg/service/ai"
+	manglesdk "github.com/duynguyendang/manglekit/sdk"
 	"github.com/gin-gonic/gin"
 )
+
+// CORSConfig holds CORS configuration
+type CORSConfig struct {
+	AllowOrigins     []string
+	AllowMethods     []string
+	AllowHeaders     []string
+	ExposeHeaders    []string
+	AllowCredentials bool
+	MaxAge           int
+}
+
+// DefaultCORSConfig returns a secure default CORS configuration
+func DefaultCORSConfig() CORSConfig {
+	return CORSConfig{
+		AllowOrigins: []string{
+			"http://localhost:3000",
+			"http://localhost:5173",
+			"http://localhost:8080",
+		},
+		AllowMethods: []string{
+			"GET",
+			"POST",
+			"PUT",
+			"DELETE",
+			"OPTIONS",
+		},
+		AllowHeaders: []string{
+			"Origin",
+			"Content-Type",
+			"Accept",
+			"Authorization",
+			"X-Requested-With",
+			"X-Request-ID",
+		},
+		ExposeHeaders: []string{
+			"Content-Length",
+			"X-Request-ID",
+		},
+		AllowCredentials: true,
+		MaxAge:           86400, // 24 hours
+	}
+}
 
 // Server holds the state for the REST API server.
 type Server struct {
 	manager       *manager.StoreManager
 	graphService  *service.GraphService
 	geminiService *ai.GeminiService
+	mangleClient  *manglesdk.Client
+	queryService  *registry.QueryService
 	sourceDir     string
 	router        *gin.Engine
 }
@@ -28,6 +75,8 @@ type Server struct {
 func NewServer(mgr *manager.StoreManager, sourceDir string, apiKey string) *Server {
 	r := gin.Default()
 	r.Use(CORSMiddleware())
+	r.Use(RateLimitMiddleware())
+	r.Use(ValidationMiddleware())
 	r.Use(CompressionMiddleware())
 
 	svc := service.NewGraphService(mgr)
@@ -40,10 +89,42 @@ func NewServer(mgr *manager.StoreManager, sourceDir string, apiKey string) *Serv
 		log.Println("Gemini Service initialized successfully")
 	}
 
+	// Initialize Manglekit Client for GenePool queries
+	mangleClient, err := manglesdk.NewClient(context.Background())
+	if err != nil {
+		log.Printf("Warning: Failed to initialize Manglekit Client: %v. Query features disabled.", err)
+		mangleClient = nil
+	} else {
+		log.Println("Manglekit Client initialized successfully")
+
+		// Load query policies
+		policyPath := config.GenePoolPath
+		if err := mangleClient.Engine().LoadPolicy(context.Background(), policyPath); err != nil {
+			log.Printf("Warning: Failed to load query policies from %s: %v", policyPath, err)
+		} else {
+			log.Printf("Query policies loaded from %s", policyPath)
+		}
+	}
+
+	// Initialize Query Service
+	var queryService *registry.QueryService
+	if mangleClient != nil {
+		queryRegistry := registry.NewQueryRegistry(mangleClient.Engine())
+		policyPath := config.GenePoolPath
+		if err := queryRegistry.LoadQueriesFromGenePool(context.Background(), policyPath); err != nil {
+			log.Printf("Warning: Failed to load query registry: %v", err)
+		} else {
+			log.Println("Query registry initialized successfully")
+		}
+		queryService = registry.NewQueryService(queryRegistry)
+	}
+
 	s := &Server{
 		manager:       mgr,
 		graphService:  svc,
 		geminiService: geminiSvc,
+		mangleClient:  mangleClient,
+		queryService:  queryService,
 		sourceDir:     sourceDir,
 		router:        r,
 	}
@@ -92,6 +173,12 @@ func (s *Server) setupRoutes() {
 
 	// Agent Endpoint (multi-step reasoning)
 	s.router.POST("/api/v1/agent/execute", s.handleAgentExecute)
+
+	// Query Registry (GenePool pre-defined queries)
+	if s.queryService != nil {
+		s.queryService.AddRoute(s.router)
+		log.Println("Query service routes registered")
+	}
 }
 
 // AI Handler
@@ -111,6 +198,21 @@ func (s *Server) handleAIAsk(c *gin.Context) {
 	if req.ProjectID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ProjectID is required"})
 		return
+	}
+
+	// Validate ProjectID
+	if err := ValidateProjectID(req.ProjectID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate and sanitize Query
+	if req.Query != "" {
+		if err := ValidateQuery(req.Query); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		req.Query = SanitizeString(req.Query)
 	}
 
 	useOODA := os.Getenv("USE_OODA_LOOP") == "true"
@@ -156,6 +258,19 @@ func (s *Server) handleAgentExecute(c *gin.Context) {
 		return
 	}
 
+	// Validate ProjectID
+	if err := ValidateProjectID(req.ProjectID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate and sanitize Query
+	if err := ValidateQuery(req.Query); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.Query = SanitizeString(req.Query)
+
 	store, err := s.manager.GetStore(req.ProjectID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "project not found: " + req.ProjectID})
@@ -197,35 +312,54 @@ func (s *Server) healthCheck(c *gin.Context) {
 	c.Status(http.StatusOK)
 }
 
-// CORSMiddleware handles CORS headers.
+// CORSMiddleware handles CORS headers with a secure policy.
 func CORSMiddleware() gin.HandlerFunc {
-	allowOrigins := os.Getenv("CORS_ALLOW_ORIGINS")
-	isProduction := os.Getenv("GIN_MODE") == "release"
+	config := DefaultCORSConfig()
+
+	// Override with environment variables if provided
+	if envOrigins := os.Getenv("CORS_ALLOW_ORIGINS"); envOrigins != "" {
+		config.AllowOrigins = strings.Split(envOrigins, ",")
+		for i := range config.AllowOrigins {
+			config.AllowOrigins[i] = strings.TrimSpace(config.AllowOrigins[i])
+		}
+	}
 
 	return func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
 
-		if isProduction && allowOrigins != "" {
-			allowedList := strings.Split(allowOrigins, ",")
-			allowed := false
-			for _, allowedOrigin := range allowedList {
-				if strings.TrimSpace(allowedOrigin) == origin {
+		// Check if origin is allowed
+		allowed := false
+		for _, allowedOrigin := range config.AllowOrigins {
+			if allowedOrigin == "*" {
+				// Wildcard is only allowed in development
+				if os.Getenv("GIN_MODE") != "release" {
 					allowed = true
 					break
 				}
+			} else if strings.EqualFold(allowedOrigin, origin) {
+				allowed = true
+				break
 			}
-			if allowed {
-				c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
-				c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-			}
-		} else if !isProduction || origin != "" {
+		}
+
+		if allowed {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		// Set other CORS headers
+		c.Writer.Header().Set("Access-Control-Allow-Methods", strings.Join(config.AllowMethods, ", "))
+		c.Writer.Header().Set("Access-Control-Allow-Headers", strings.Join(config.AllowHeaders, ", "))
+		c.Writer.Header().Set("Access-Control-Expose-Headers", strings.Join(config.ExposeHeaders, ", "))
+
+		if config.AllowCredentials {
 			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
 
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, Project-Id")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+		if config.MaxAge > 0 {
+			c.Writer.Header().Set("Access-Control-Max-Age", strconv.Itoa(config.MaxAge))
+		}
 
+		// Handle preflight requests
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return

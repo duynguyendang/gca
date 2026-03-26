@@ -1,0 +1,310 @@
+% GCA Technical Debt & Quality Agent - GenePool Rules
+% Technical debt tracking, code quality enforcement, and standards compliance
+
+% ============================================================
+% Agent Metadata
+% ============================================================
+
+agent_metadata("quality_agent", "Technical Debt & Quality Agent").
+agent_metadata("quality_agent", "description", "Technical debt tracking, cyclomatic complexity, code duplication, standards compliance").
+agent_metadata("quality_agent", "category", "quality").
+agent_metadata("quality_agent", "version", "1.0").
+
+% ============================================================
+% Query Definitions
+% ============================================================
+
+% Find high cyclomatic complexity
+query_metadata("quality_cyclomatic_complexity", "Detect high cyclomatic complexity").
+query_metadata("quality_cyclomatic_complexity", "category", "quality").
+query_metadata("quality_cyclomatic_complexity", "tier", "2").
+query_metadata("quality_cyclomatic_complexity", "severity", "medium").
+
+query("quality_cyclomatic_complexity", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_cyclomatic_complexity", Complexity),
+    Complexity > 15,
+    Issue = issue("high_complexity", Symbol, "Cyclomatic complexity exceeds threshold (15)").
+
+query("quality_cyclomatic_complexity", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_cyclomatic_complexity", Complexity),
+    Complexity > 10,
+    Complexity =< 15,
+    Issue = issue("medium_complexity", Symbol, "Cyclomatic complexity is high (10-15)").
+
+% Find code duplication
+query_metadata("quality_code_duplication", "Detect code duplication").
+query_metadata("quality_code_duplication", "category", "quality").
+query_metadata("quality_code_duplication", "tier", "2").
+query_metadata("quality_code_duplication", "severity", "medium").
+
+query("quality_code_duplication", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_duplicate", Duplicate),
+    triples(Duplicate, "similarity_score", Score),
+    Score > 0.9,
+    Issue = issue("duplication", Symbol, "High code duplication detected").
+
+query("quality_code_duplication", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_duplicate", Duplicate),
+    triples(Duplicate, "similarity_score", Score),
+    Score > 0.7,
+    Score =< 0.9,
+    Issue = issue("duplication", Symbol, "Moderate code duplication detected").
+
+% Find documentation gaps
+query_metadata("quality_documentation", "Detect documentation gaps").
+query_metadata("quality_documentation", "category", "quality").
+query_metadata("quality_documentation", "tier", "2").
+query_metadata("quality_documentation", "severity", "low").
+
+query("quality_documentation", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "is_exported", "true"),
+    \+ triples(Symbol, "has_doc_comment", _),
+    Issue = issue("missing_documentation", Symbol, "Exported symbol lacks documentation").
+
+query("quality_documentation", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_role", "api_handler"),
+    \+ triples(Symbol, "has_api_documentation", _),
+    Issue = issue("missing_api_docs", Symbol, "API handler lacks documentation").
+
+% Find test coverage gaps
+query_metadata("quality_test_coverage", "Detect test coverage gaps").
+query_metadata("quality_test_coverage", "category", "quality").
+query_metadata("quality_test_coverage", "tier", "2").
+query_metadata("quality_test_coverage", "severity", "medium").
+
+query("quality_test_coverage", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "is_exported", "true"),
+    \+ triples(Symbol, "has_test", _),
+    Issue = issue("missing_tests", Symbol, "Exported symbol lacks tests").
+
+query("quality_test_coverage", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_role", "api_handler"),
+    \+ triples(Symbol, "has_integration_test", _),
+    Issue = issue("missing_integration_test", Symbol, "API handler lacks integration test").
+
+% Find FPT coding standards violations
+query_metadata("quality_fpt_standards", "Detect FPT coding standards violations").
+query_metadata("quality_fpt_standards", "category", "quality").
+query_metadata("quality_fpt_standards", "tier", "2").
+query_metadata("quality_fpt_standards", "severity", "medium").
+
+query("quality_fpt_standards", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_name", Name),
+    \+ triples(Symbol, "follows_naming_convention", _),
+    Issue = issue("naming_convention", Symbol, "Symbol does not follow naming convention").
+
+query("quality_fpt_standards", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_line_count", LineCount),
+    LineCount > 100,
+    Issue = issue("function_length", Symbol, "Function exceeds 100 lines").
+
+query("quality_fpt_standards", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_parameter_count", ParamCount),
+    ParamCount > 5,
+    Issue = issue("parameter_count", Symbol, "Function has too many parameters").
+
+% Find code smells
+query_metadata("quality_code_smell", "Detect code smells").
+query_metadata("quality_code_smell", "category", "quality").
+query_metadata("quality_code_smell", "tier", "2").
+query_metadata("quality_code_smell", "severity", "medium").
+
+query("quality_code_smell", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_pattern", "god_class"),
+    Issue = issue("god_class", Symbol, "God class detected (too many responsibilities)").
+
+query("quality_code_smell", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_pattern", "long_method"),
+    Issue = issue("long_method", Symbol, "Long method detected").
+
+query("quality_code_smell", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_pattern", "deep_nesting"),
+    Issue = issue("deep_nesting", Symbol, "Deep nesting detected").
+
+query("quality_code_smell", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "has_pattern", "magic_number"),
+    Issue = issue("magic_number", Symbol, "Magic number detected").
+
+% Find dependency issues
+query_metadata("quality_dependency", "Detect dependency issues").
+query_metadata("quality_dependency", "category", "quality").
+query_metadata("quality_dependency", "tier", "2").
+query_metadata("quality_dependency", "severity", "medium").
+
+query("quality_dependency", FileID, Issue) :-
+    triples(FileID, "imports", Dependency),
+    triples(Dependency, "is_unused", "true"),
+    Issue = issue("unused_import", FileID, "Unused import detected").
+
+query("quality_dependency", FileID, Issue) :-
+    triples(FileID, "imports", Dependency),
+    triples(Dependency, "is_deprecated", "true"),
+    Issue = issue("deprecated_import", FileID, "Deprecated dependency imported").
+
+% Find error handling issues
+query_metadata("quality_error_handling", "Detect error handling issues").
+query_metadata("quality_error_handling", "category", "quality").
+query_metadata("quality_error_handling", "tier", "2").
+query_metadata("quality_error_handling", "severity", "medium").
+
+query("quality_error_handling", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "calls", Target),
+    triples(Target, "can_return_error", "true"),
+    \+ triples(Symbol, "handles_error", Target),
+    Issue = issue("unhandled_error", Symbol, "Error not handled").
+
+query("quality_error_handling", FileID, Issue) :-
+    triples(FileID, "defines", Symbol),
+    triples(Symbol, "handles_error", Error),
+    triples(Error, "has_pattern", "bare_return"),
+    Issue = issue("bare_error_return", Symbol, "Bare error return without context").
+
+% ============================================================
+% Composite Quality Analysis
+% ============================================================
+
+% Comprehensive quality scan for a file
+query_metadata("quality_scan_file", "Perform comprehensive quality scan").
+query_metadata("quality_scan_file", "category", "quality").
+query_metadata("quality_scan_file", "tier", "3").
+
+query("quality_scan_file", FileID, Report) :-
+    findall(Issue, (
+        query("quality_cyclomatic_complexity", FileID, Issue)
+        ; query("quality_code_duplication", FileID, Issue)
+        ; query("quality_documentation", FileID, Issue)
+        ; query("quality_test_coverage", FileID, Issue)
+        ; query("quality_fpt_standards", FileID, Issue)
+        ; query("quality_code_smell", FileID, Issue)
+        ; query("quality_dependency", FileID, Issue)
+        ; query("quality_error_handling", FileID, Issue)
+    ), Issues),
+    length(Issues, Count),
+    Report = quality_report(FileID, Count, Issues).
+
+% Quality score calculation (SQALE model)
+query_metadata("quality_score", "Calculate quality score for a file (SQALE model)").
+query_metadata("quality_score", "category", "quality").
+query_metadata("quality_score", "tier", "3").
+
+query("quality_score", FileID, Score) :-
+    aggregate(count, query("quality_cyclomatic_complexity", FileID, _), ComplexityCount),
+    aggregate(count, query("quality_code_duplication", FileID, _), DuplicationCount),
+    aggregate(count, query("quality_documentation", FileID, _), DocCount),
+    aggregate(count, query("quality_test_coverage", FileID, _), TestCount),
+    aggregate(count, query("quality_fpt_standards", FileID, _), StandardsCount),
+    aggregate(count, query("quality_code_smell", FileID, _), SmellCount),
+    aggregate(count, query("quality_dependency", FileID, _), DepCount),
+    aggregate(count, query("quality_error_handling", FileID, _), ErrorCount),
+    Score is ComplexityCount * 5 + DuplicationCount * 4 + DocCount * 2 + TestCount * 3 + StandardsCount * 3 + SmellCount * 4 + DepCount * 2 + ErrorCount * 5.
+
+% ============================================================
+% Technical Debt Quantification
+% ============================================================
+
+% Calculate technical debt in hours
+query_metadata("quality_technical_debt", "Calculate technical debt in hours").
+query_metadata("quality_technical_debt", "category", "quality").
+query_metadata("quality_technical_debt", "tier", "3").
+
+query("quality_technical_debt", FileID, DebtHours) :-
+    aggregate(count, query("quality_cyclomatic_complexity", FileID, _), ComplexityCount),
+    aggregate(count, query("quality_code_duplication", FileID, _), DuplicationCount),
+    aggregate(count, query("quality_code_smell", FileID, _), SmellCount),
+    aggregate(count, query("quality_error_handling", FileID, _), ErrorCount),
+    DebtHours is ComplexityCount * 2 + DuplicationCount * 1.5 + SmellCount * 1 + ErrorCount * 0.5.
+
+% ============================================================
+% Quality Pattern Definitions
+% ============================================================
+
+% Define quality patterns to detect
+quality_pattern("god_class", "Class with too many responsibilities").
+quality_pattern("long_method", "Method exceeding recommended length").
+quality_pattern("deep_nesting", "Deeply nested code blocks").
+quality_pattern("magic_number", "Unexplained numeric literal").
+quality_pattern("bare_return", "Error return without context").
+quality_pattern("unused_import", "Imported but unused module").
+quality_pattern("deprecated_import", "Import of deprecated module").
+
+% ============================================================
+% Naming Convention Patterns
+% ============================================================
+
+% Define naming convention patterns
+naming_convention("camelCase", "camelCase for variables and functions").
+naming_convention("PascalCase", "PascalCase for types and classes").
+naming_convention("snake_case", "snake_case for constants").
+naming_convention("UPPER_SNAKE_CASE", "UPPER_SNAKE_CASE for global constants").
+
+% ============================================================
+% Remediation Suggestions
+% ============================================================
+
+% Suggest remediation for quality issues
+query_metadata("quality_remediation", "Get remediation suggestions for quality issues").
+query_metadata("quality_remediation", "category", "quality").
+query_metadata("quality_remediation", "tier", "2").
+
+query("quality_remediation", Issue, Remediation) :-
+    issue(Type, Symbol, Description),
+    remediation(Type, Remediation).
+
+remediation("high_complexity", "Refactor function into smaller, focused functions").
+remediation("medium_complexity", "Consider breaking down complex logic").
+remediation("duplication", "Extract common code into reusable functions").
+remediation("missing_documentation", "Add Go doc comments for exported symbols").
+remediation("missing_api_docs", "Add OpenAPI/Swagger documentation").
+remediation("missing_tests", "Add unit tests for exported functions").
+remediation("missing_integration_test", "Add integration tests for API endpoints").
+remediation("naming_convention", "Follow project naming conventions").
+remediation("function_length", "Break long functions into smaller ones").
+remediation("parameter_count", "Use struct or options pattern for many parameters").
+remediation("god_class", "Split class into focused, single-responsibility classes").
+remediation("long_method", "Extract methods for logical blocks").
+remediation("deep_nesting", "Use early returns or extract nested logic").
+remediation("magic_number", "Extract to named constants").
+remediation("unused_import", "Remove unused imports").
+remediation("deprecated_import", "Update to non-deprecated alternative").
+remediation("unhandled_error", "Add proper error handling").
+remediation("bare_error_return", "Wrap errors with context using fmt.Errorf").
+
+% ============================================================
+% Quality Metrics Tracking
+% ============================================================
+
+% Track quality metrics over time
+query_metadata("quality_metrics_history", "Track quality metrics over time").
+query_metadata("quality_metrics_history", "category", "quality").
+query_metadata("quality_metrics_history", "tier", "3").
+
+query("quality_metrics_history", FileID, Metrics) :-
+    triples(FileID, "has_quality_metric", Metric),
+    triples(Metric, "has_timestamp", Timestamp),
+    triples(Metric, "has_value", Value),
+    Metrics = quality_metric(FileID, Timestamp, Value).
+
+% Calculate quality trend
+query_metadata("quality_trend", "Calculate quality trend for a file").
+query_metadata("quality_trend", "category", "quality").
+query_metadata("quality_trend", "tier", "3").
+
+query("quality_trend", FileID, Trend) :-
+    triples(FileID, "has_quality_metric", Metric),
+    triples(Metric, "has_trend", Trend).

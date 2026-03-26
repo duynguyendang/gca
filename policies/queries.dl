@@ -1,0 +1,20 @@
+% GCA Query Registry
+
+Decl triples(S, P, O).
+Decl query_metadata(Name, Description).
+Decl query_metadata(Name, Key, Value).
+Decl query(Name, Arg1, Arg2).
+
+query_metadata("find_defines", "Find all symbols defined in a file").
+query_metadata("find_defines", "category", "structural").
+query_metadata("find_defines", "tier", "1").
+
+query_metadata("find_imports", "Find all imports for a file").
+query_metadata("find_imports", "category", "structural").
+query_metadata("find_imports", "tier", "1").
+
+query("find_defines", FileID, Symbol) :-
+    triples(FileID, "defines", Symbol).
+
+query("find_imports", FileID, Target) :-
+    triples(FileID, "imports", Target).

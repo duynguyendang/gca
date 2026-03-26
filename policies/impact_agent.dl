@@ -1,0 +1,323 @@
+% GCA Impact Analysis Agent - GenePool Rules
+% Dependency graph analysis, change propagation, and blast radius calculation
+
+% ============================================================
+% Agent Metadata
+% ============================================================
+
+agent_metadata("impact_agent", "Impact Analysis Agent").
+agent_metadata("impact_agent", "description", "Dependency graph analysis, change propagation, blast radius calculation").
+agent_metadata("impact_agent", "category", "impact").
+agent_metadata("impact_agent", "version", "1.0").
+
+% ============================================================
+% Query Definitions
+% ============================================================
+
+% Find direct dependencies
+query_metadata("impact_direct_dependencies", "Find direct dependencies of a symbol").
+query_metadata("impact_direct_dependencies", "category", "impact").
+query_metadata("impact_direct_dependencies", "tier", "1").
+
+query("impact_direct_dependencies", Symbol, Dependency) :-
+    triples(Symbol, "calls", Dependency).
+
+query("impact_direct_dependencies", Symbol, Dependency) :-
+    triples(Symbol, "imports", Dependency).
+
+query("impact_direct_dependencies", Symbol, Dependency) :-
+    triples(Symbol, "uses_type", Dependency).
+
+% Find transitive dependencies
+query_metadata("impact_transitive_dependencies", "Find all transitive dependencies").
+query_metadata("impact_transitive_dependencies", "category", "impact").
+query_metadata("impact_transitive_dependencies", "tier", "2").
+
+query("impact_transitive_dependencies", Symbol, Dependency) :-
+    query("impact_direct_dependencies", Symbol, Dependency).
+
+query("impact_transitive_dependencies", Symbol, Dependency) :-
+    query("impact_direct_dependencies", Symbol, Intermediate),
+    query("impact_transitive_dependencies", Intermediate, Dependency).
+
+% Find reverse dependencies (what depends on this symbol)
+query_metadata("impact_reverse_dependencies", "Find what depends on a symbol").
+query_metadata("impact_reverse_dependencies", "category", "impact").
+query_metadata("impact_reverse_dependencies", "tier", "1").
+
+query("impact_reverse_dependencies", Symbol, Dependent) :-
+    triples(Dependent, "calls", Symbol).
+
+query("impact_reverse_dependencies", Symbol, Dependent) :-
+    triples(Dependent, "imports", Symbol).
+
+query("impact_reverse_dependencies", Symbol, Dependent) :-
+    triples(Dependent, "uses_type", Symbol).
+
+% Find transitive reverse dependencies
+query_metadata("impact_transitive_reverse_dependencies", "Find all transitive reverse dependencies").
+query_metadata("impact_transitive_reverse_dependencies", "category", "impact").
+query_metadata("impact_transitive_reverse_dependencies", "tier", "2").
+
+query("impact_transitive_reverse_dependencies", Symbol, Dependent) :-
+    query("impact_reverse_dependencies", Symbol, Dependent).
+
+query("impact_transitive_reverse_dependencies", Symbol, Dependent) :-
+    query("impact_reverse_dependencies", Symbol, Intermediate),
+    query("impact_transitive_reverse_dependencies", Intermediate, Dependent).
+
+% Calculate blast radius (number of affected symbols)
+query_metadata("impact_blast_radius", "Calculate blast radius for a change").
+query_metadata("impact_blast_radius", "category", "impact").
+query_metadata("impact_blast_radius", "tier", "2").
+
+query("impact_blast_radius", Symbol, Radius) :-
+    aggregate(count, query("impact_transitive_reverse_dependencies", Symbol, _), Radius).
+
+% Find affected files
+query_metadata("impact_affected_files", "Find files affected by a change").
+query_metadata("impact_affected_files", "category", "impact").
+query_metadata("impact_affected_files", "tier", "2").
+
+query("impact_affected_files", Symbol, FileID) :-
+    query("impact_transitive_reverse_dependencies", Symbol, Dependent),
+    triples(FileID, "defines", Dependent).
+
+% Find affected services
+query_metadata("impact_affected_services", "Find services affected by a change").
+query_metadata("impact_affected_services", "category", "impact").
+query_metadata("impact_affected_services", "tier", "3").
+
+query("impact_affected_services", Symbol, Service) :-
+    query("impact_affected_files", Symbol, FileID),
+    triples(FileID, "belongs_to_service", Service).
+
+% Find critical path dependencies
+query_metadata("impact_critical_path", "Find critical path dependencies").
+query_metadata("impact_critical_path", "category", "impact").
+query_metadata("impact_critical_path", "tier", "3").
+
+query("impact_critical_path", Symbol, Path) :-
+    path(Symbol, Target, Path),
+    triples(Target, "is_critical", "true").
+
+% Path definition for dependency traversal
+path(A, B, [A, B]) :-
+    query("impact_direct_dependencies", A, B).
+
+path(A, B, [A, X | Rest]) :-
+    query("impact_direct_dependencies", A, X),
+    path(X, B, Rest).
+
+% Find circular dependencies
+query_metadata("impact_circular_dependency", "Detect circular dependencies").
+query_metadata("impact_circular_dependency", "category", "impact").
+query_metadata("impact_circular_dependency", "tier", "2").
+query_metadata("impact_circular_dependency", "severity", "high").
+
+query("impact_circular_dependency", Symbol, Cycle) :-
+    query("impact_transitive_dependencies", Symbol, Dependency),
+    query("impact_transitive_dependencies", Dependency, Symbol),
+    Cycle = circular_dependency(Symbol, Dependency).
+
+% Find dependency depth
+query_metadata("impact_dependency_depth", "Calculate dependency depth").
+query_metadata("impact_dependency_depth", "category", "impact").
+query_metadata("impact_dependency_depth", "tier", "2").
+
+query("impact_dependency_depth", Symbol, Depth) :-
+    path(Symbol, _, Path),
+    length(Path, Depth).
+
+% Find high-impact symbols (many dependents)
+query_metadata("impact_high_impact_symbols", "Find high-impact symbols").
+query_metadata("impact_high_impact_symbols", "category", "impact").
+query_metadata("impact_high_impact_symbols", "tier", "2").
+
+query("impact_high_impact_symbols", Symbol, Impact) :-
+    triples(_, "defines", Symbol),
+    aggregate(count, query("impact_reverse_dependencies", Symbol, _), Impact),
+    Impact > 10.
+
+% Find low-impact symbols (few dependents)
+query_metadata("impact_low_impact_symbols", "Find low-impact symbols").
+query_metadata("impact_low_impact_symbols", "category", "impact").
+query_metadata("impact_low_impact_symbols", "tier", "2").
+
+query("impact_low_impact_symbols", Symbol, Impact) :-
+    triples(_, "defines", Symbol),
+    aggregate(count, query("impact_reverse_dependencies", Symbol, _), Impact),
+    Impact =< 2.
+
+% ============================================================
+% Composite Impact Analysis
+% ============================================================
+
+% Comprehensive impact analysis for a symbol
+query_metadata("impact_analysis_symbol", "Perform comprehensive impact analysis for a symbol").
+query_metadata("impact_analysis_symbol", "category", "impact").
+query_metadata("impact_analysis_symbol", "tier", "3").
+
+query("impact_analysis_symbol", Symbol, Report) :-
+    query("impact_blast_radius", Symbol, Radius),
+    findall(File, query("impact_affected_files", Symbol, File), Files),
+    findall(Service, query("impact_affected_services", Symbol, Service), Services),
+    findall(Cycle, query("impact_circular_dependency", Symbol, Cycle), Cycles),
+    Report = impact_report(Symbol, Radius, Files, Services, Cycles).
+
+% Impact risk score calculation
+query_metadata("impact_risk_score", "Calculate impact risk score for a change").
+query_metadata("impact_risk_score", "category", "impact").
+query_metadata("impact_risk_score", "tier", "3").
+
+query("impact_risk_score", Symbol, Score) :-
+    query("impact_blast_radius", Symbol, Radius),
+    aggregate(count, query("impact_affected_services", Symbol, _), ServiceCount),
+    aggregate(count, query("impact_circular_dependency", Symbol, _), CycleCount),
+    Score is Radius * 2 + ServiceCount * 10 + CycleCount * 15.
+
+% ============================================================
+% Change Impact Prediction
+% ============================================================
+
+% Predict impact of a change
+query_metadata("impact_change_prediction", "Predict impact of a code change").
+query_metadata("impact_change_prediction", "category", "impact").
+query_metadata("impact_change_prediction", "tier", "3").
+
+query("impact_change_prediction", Symbol, Prediction) :-
+    query("impact_blast_radius", Symbol, Radius),
+    Radius > 50,
+    Prediction = high_impact("Change affects many symbols", Radius).
+
+query("impact_change_prediction", Symbol, Prediction) :-
+    query("impact_blast_radius", Symbol, Radius),
+    Radius > 10,
+    Radius =< 50,
+    Prediction = medium_impact("Change affects moderate number of symbols", Radius).
+
+query("impact_change_prediction", Symbol, Prediction) :-
+    query("impact_blast_radius", Symbol, Radius),
+    Radius =< 10,
+    Prediction = low_impact("Change affects few symbols", Radius).
+
+% ============================================================
+% Regression Risk Assessment
+% ============================================================
+
+% Assess regression risk
+query_metadata("impact_regression_risk", "Assess regression risk for a change").
+query_metadata("impact_regression_risk", "category", "impact").
+query_metadata("impact_regression_risk", "tier", "3").
+
+query("impact_regression_risk", Symbol, Risk) :-
+    query("impact_blast_radius", Symbol, Radius),
+    aggregate(count, query("impact_affected_services", Symbol, _), ServiceCount),
+    Radius > 20,
+    ServiceCount > 2,
+    Risk = high_risk("High regression risk due to wide impact").
+
+query("impact_regression_risk", Symbol, Risk) :-
+    query("impact_blast_radius", Symbol, Radius),
+    aggregate(count, query("impact_affected_services", Symbol, _), ServiceCount),
+    Radius > 10,
+    Radius =< 20,
+    ServiceCount =< 2,
+    Risk = medium_risk("Medium regression risk").
+
+query("impact_regression_risk", Symbol, Risk) :-
+    query("impact_blast_radius", Symbol, Radius),
+    Radius =< 10,
+    Risk = low_risk("Low regression risk").
+
+% ============================================================
+% Test Selection Based on Impact
+% ============================================================
+
+% Select tests to run based on impact
+query_metadata("impact_test_selection", "Select tests to run based on impact").
+query_metadata("impact_test_selection", "category", "impact").
+query_metadata("impact_test_selection", "tier", "3").
+
+query("impact_test_selection", Symbol, Test) :-
+    query("impact_affected_files", Symbol, FileID),
+    triples(FileID, "has_test", Test).
+
+query("impact_test_selection", Symbol, Test) :-
+    query("impact_transitive_reverse_dependencies", Symbol, Dependent),
+    triples(Dependent, "has_test", Test).
+
+% ============================================================
+% Dependency Graph Visualization
+% ============================================================
+
+% Generate dependency graph data
+query_metadata("impact_dependency_graph", "Generate dependency graph data for visualization").
+query_metadata("impact_dependency_graph", "category", "impact").
+query_metadata("impact_dependency_graph", "tier", "3").
+
+query("impact_dependency_graph", Symbol, Graph) :-
+    findall(Node, (
+        triples(_, "defines", Node),
+        query("impact_transitive_dependencies", Symbol, Node)
+    ), Nodes),
+    findall(Edge, (
+        query("impact_direct_dependencies", Source, Target),
+        member(Source, Nodes),
+        member(Target, Nodes),
+        Edge = edge(Source, Target)
+    ), Edges),
+    Graph = dependency_graph(Nodes, Edges).
+
+% ============================================================
+% Impact Pattern Definitions
+% ============================================================
+
+% Define impact patterns
+impact_pattern("direct_dependency", "Direct dependency relationship").
+impact_pattern("transitive_dependency", "Transitive dependency relationship").
+impact_pattern("reverse_dependency", "Reverse dependency relationship").
+impact_pattern("circular_dependency", "Circular dependency relationship").
+impact_pattern("critical_path", "Critical path dependency").
+
+% ============================================================
+% Remediation Suggestions
+% ============================================================
+
+% Suggest remediation for impact issues
+query_metadata("impact_remediation", "Get remediation suggestions for impact issues").
+query_metadata("impact_remediation", "category", "impact").
+query_metadata("impact_remediation", "tier", "2").
+
+query("impact_remediation", Issue, Remediation) :-
+    issue(Type, Symbol, Description),
+    remediation(Type, Remediation).
+
+remediation("circular_dependency", "Refactor to break circular dependency").
+remediation("high_impact", "Consider gradual rollout and extensive testing").
+remediation("medium_impact", "Run affected tests and monitor closely").
+remediation("low_impact", "Standard testing should be sufficient").
+
+% ============================================================
+% Impact Metrics Tracking
+% ============================================================
+
+% Track impact metrics over time
+query_metadata("impact_metrics_history", "Track impact metrics over time").
+query_metadata("impact_metrics_history", "category", "impact").
+query_metadata("impact_metrics_history", "tier", "3").
+
+query("impact_metrics_history", Symbol, Metrics) :-
+    triples(Symbol, "has_impact_metric", Metric),
+    triples(Metric, "has_timestamp", Timestamp),
+    triples(Metric, "has_value", Value),
+    Metrics = impact_metric(Symbol, Timestamp, Value).
+
+% Calculate impact trend
+query_metadata("impact_trend", "Calculate impact trend for a symbol").
+query_metadata("impact_trend", "category", "impact").
+query_metadata("impact_trend", "tier", "3").
+
+query("impact_trend", Symbol, Trend) :-
+    triples(Symbol, "has_impact_metric", Metric),
+    triples(Metric, "has_trend", Trend).
