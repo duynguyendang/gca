@@ -34,7 +34,7 @@ const (
 type StoreManager struct {
 	baseDir       string
 	projects      *lru.Cache[string, *meb.MEBStore]
-	mu            sync.RWMutex
+	mu            sync.Mutex // Protects all access to projects cache
 	profile       MemoryProfile
 	readOnly      bool
 	cachedList    []ProjectMetadata
@@ -44,6 +44,7 @@ type StoreManager struct {
 // NewStoreManager creates a new StoreManager.
 func NewStoreManager(baseDir string, profile MemoryProfile, readOnly bool) *StoreManager {
 	// Create LRU cache with eviction callback to close stores
+	// Note: All access to this cache must be protected by StoreManager.mu
 	cache, _ := lru.NewWithEvict[string, *meb.MEBStore](MaxOpenStores, func(key string, value *meb.MEBStore) {
 		_ = value.Close()
 	})
@@ -58,16 +59,10 @@ func NewStoreManager(baseDir string, profile MemoryProfile, readOnly bool) *Stor
 
 // GetStore retrieves a store by project ID, opening it if necessary.
 func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
-	// Fast path: check if exists in LRU
-	// lru.Get updates recency
-	if s, ok := sm.projects.Get(projectID); ok {
-		return s, nil
-	}
-
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Double-check under lock
+	// Check if exists in LRU (under lock for thread safety)
 	if s, ok := sm.projects.Get(projectID); ok {
 		return s, nil
 	}
@@ -80,16 +75,6 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 	// Open in ReadOnly mode if configured
 	cfg := store.DefaultConfig(projectDir)
 	cfg.ReadOnly = sm.readOnly
-	// If ReadOnly, we don't need BypassLockGuard typically, but for safety in server mode:
-	// cfg.BypassLockGuard = sm.readOnly
-	// Actually, BypassLockGuard is for multiple processes.
-	// If we are strictly ReadOnly, we might fail if a lock exists (e.g. ingestion running).
-	// Let's keep BypassLockGuard true if we want to read even if locked?
-	// No, standard ReadOnly usually respects locks or bypasses.
-	// Let's rely on standard config, but set ReadOnly.
-	if !sm.readOnly {
-		cfg.ReadOnly = false
-	}
 
 	// Apply Memory Profile
 	if sm.profile == MemoryProfileLow {
@@ -113,25 +98,15 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 
 // ListProjects returns a list of available projects.
 func (sm *StoreManager) ListProjects() ([]ProjectMetadata, error) {
-	sm.mu.RLock()
+	sm.mu.Lock()
 	if time.Since(sm.lastListBuild) < ProjectListTTL && sm.cachedList != nil {
 		// Return copy to be safe
 		list := make([]ProjectMetadata, len(sm.cachedList))
 		copy(list, sm.cachedList)
-		sm.mu.RUnlock()
+		sm.mu.Unlock()
 		return list, nil
 	}
-	sm.mu.RUnlock()
-
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	// Double-check
-	if time.Since(sm.lastListBuild) < ProjectListTTL && sm.cachedList != nil {
-		list := make([]ProjectMetadata, len(sm.cachedList))
-		copy(list, sm.cachedList)
-		return list, nil
-	}
+	sm.mu.Unlock()
 
 	entries, err := os.ReadDir(sm.baseDir)
 	if err != nil {
@@ -162,8 +137,10 @@ func (sm *StoreManager) ListProjects() ([]ProjectMetadata, error) {
 		}
 	}
 
+	sm.mu.Lock()
 	sm.cachedList = projects
 	sm.lastListBuild = time.Now()
+	sm.mu.Unlock()
 
 	return projects, nil
 }

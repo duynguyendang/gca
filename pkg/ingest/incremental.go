@@ -85,10 +85,8 @@ func getFileGraphName(relPath string) string {
 }
 
 // deleteFileFacts removes all facts associated with a specific file.
-// Uses the file's graph context for efficient batch deletion.
 func deleteFileFacts(s *meb.MEBStore, relPath string) error {
-	graphName := getFileGraphName(relPath)
-	if err := s.DeleteGraph(graphName); err != nil {
+	if err := s.DeleteFactsBySubject(relPath); err != nil {
 		log.Printf("Warning: Failed to delete facts for file %s: %v", relPath, err)
 		return err
 	}
@@ -129,20 +127,17 @@ func RunIncrementalWithState(s *meb.MEBStore, projectName string, sourceDir stri
 				Subject:   string(projectMeta.Name),
 				Predicate: "type",
 				Object:    "project",
-				Graph:     "default",
 			})
 			s.AddFact(meb.Fact{
 				Subject:   string(projectMeta.Name),
 				Predicate: "description",
 				Object:    projectMeta.Description,
-				Graph:     "default",
 			})
 			for _, tag := range projectMeta.Tags {
 				s.AddFact(meb.Fact{
 					Subject:   string(projectMeta.Name),
 					Predicate: "has_tag",
 					Object:    tag,
-					Graph:     "default",
 				})
 			}
 		}

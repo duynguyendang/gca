@@ -10,41 +10,41 @@ import (
 
 // MemoryStats captures memory usage statistics at a point in time.
 type MemoryStats struct {
-	HeapAlloc     uint64  `json:"heap_alloc"`      // Bytes allocated and not yet freed
-	HeapSys       uint64  `json:"heap_sys"`        // Bytes obtained from system
-	HeapIdle      uint64  `json:"heap_idle"`       // Bytes in idle spans
-	HeapInuse     uint64  `json:"heap_inuse"`      // Bytes in non-idle spans
-	HeapReleased  uint64  `json:"heap_released"`   // Bytes released to OS
-	HeapObjects   uint64  `json:"heap_objects"`    // Total number of allocated objects
-	StackInuse    uint64  `json:"stack_inuse"`     // Bytes used by stack spans
-	MSpanInuse    uint64  `json:"mspan_inuse"`     // Bytes used by mspan structures
-	MCacheInuse   uint64  `json:"mcache_inuse"`    // Bytes used by mcache structures
-	BuckHashSys   uint64  `json:"buckhash_sys"`    // Bytes used by bucket hash table
-	GCSys         uint64  `json:"gc_sys"`          // Bytes used for garbage collection metadata
-	NextGC        uint64  `json:"next_gc"`         // Next GC target heap size
-	LastGC        uint64  `json:"last_gc"`         // Last GC time (nanoseconds since epoch)
-	PauseTotalNs  uint64  `json:"pause_total_ns"`  // Total GC pause time
-	NumGC         uint32  `json:"num_gc"`          // Number of GC cycles
-	NumGoroutine  int     `json:"num_goroutine"`   // Current number of goroutines
-	Timestamp     int64   `json:"timestamp"`       // Unix timestamp when stats were captured
+	HeapAlloc    uint64 `json:"heap_alloc"`     // Bytes allocated and not yet freed
+	HeapSys      uint64 `json:"heap_sys"`       // Bytes obtained from system
+	HeapIdle     uint64 `json:"heap_idle"`      // Bytes in idle spans
+	HeapInuse    uint64 `json:"heap_inuse"`     // Bytes in non-idle spans
+	HeapReleased uint64 `json:"heap_released"`  // Bytes released to OS
+	HeapObjects  uint64 `json:"heap_objects"`   // Total number of allocated objects
+	StackInuse   uint64 `json:"stack_inuse"`    // Bytes used by stack spans
+	MSpanInuse   uint64 `json:"mspan_inuse"`    // Bytes used by mspan structures
+	MCacheInuse  uint64 `json:"mcache_inuse"`   // Bytes used by mcache structures
+	BuckHashSys  uint64 `json:"buckhash_sys"`   // Bytes used by bucket hash table
+	GCSys        uint64 `json:"gc_sys"`         // Bytes used for garbage collection metadata
+	NextGC       uint64 `json:"next_gc"`        // Next GC target heap size
+	LastGC       uint64 `json:"last_gc"`        // Last GC time (nanoseconds since epoch)
+	PauseTotalNs uint64 `json:"pause_total_ns"` // Total GC pause time
+	NumGC        uint32 `json:"num_gc"`         // Number of GC cycles
+	NumGoroutine int    `json:"num_goroutine"`  // Current number of goroutines
+	Timestamp    int64  `json:"timestamp"`      // Unix timestamp when stats were captured
 }
 
 // MemoryDelta shows the change in memory usage between two snapshots.
 type MemoryDelta struct {
-	AllocDelta     int64   `json:"alloc_delta"`      // Change in heap allocation
-	ObjectsDelta   int64   `json:"objects_delta"`    // Change in number of objects
-	GoroutineDelta int     `json:"goroutine_delta"`  // Change in goroutines
-	GCDelta        uint32  `json:"gc_delta"`         // Number of GC cycles
-	DurationNs     int64   `json:"duration_ns"`      // Duration between snapshots
-	LeakedObjects  uint64  `json:"leaked_objects"`   // Objects that increased since baseline
+	AllocDelta     int64  `json:"alloc_delta"`     // Change in heap allocation
+	ObjectsDelta   int64  `json:"objects_delta"`   // Change in number of objects
+	GoroutineDelta int    `json:"goroutine_delta"` // Change in goroutines
+	GCDelta        uint32 `json:"gc_delta"`        // Number of GC cycles
+	DurationNs     int64  `json:"duration_ns"`     // Duration between snapshots
+	LeakedObjects  uint64 `json:"leaked_objects"`  // Objects that increased since baseline
 }
 
 // MemoryProfiler tracks memory usage over time.
 type MemoryProfiler struct {
-	mu            sync.Mutex
-	baseline      *MemoryStats
-	snapshots     []*MemoryStats
-	maxSnapshots  int
+	mu           sync.Mutex
+	baseline     *MemoryStats
+	snapshots    []*MemoryStats
+	maxSnapshots int
 }
 
 // NewMemoryProfiler creates a new memory profiler.
@@ -178,7 +178,8 @@ func (p *MemoryProfiler) ProfileOperation(fn func()) *MemoryDelta {
 // ForceGC triggers garbage collection and returns stats after GC.
 func ForceGC() *MemoryStats {
 	runtime.GC()
-	runtime.ReadMemStats(&var memStats)
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
 
 	stats := CaptureStats()
 	return stats

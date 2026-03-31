@@ -47,14 +47,13 @@ func TestGetFileGraph_Lazy(t *testing.T) {
 	ctx := context.Background()
 
 	// Add facts
-	// AddFact(Fact) error
-	if err := s.AddFact(meb.Fact{Subject: string(file), Predicate: "defines", Object: mainFunc, Graph: "default"}); err != nil {
+	if err := s.AddFact(meb.Fact{Subject: string(file), Predicate: "defines", Object: mainFunc}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddFact(meb.Fact{Subject: string(mainFunc), Predicate: "calls", Object: fooFunc, Graph: "default"}); err != nil {
+	if err := s.AddFact(meb.Fact{Subject: string(mainFunc), Predicate: "calls", Object: fooFunc}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddFact(meb.Fact{Subject: string(file), Predicate: "imports", Object: "fmt", Graph: "default"}); err != nil {
+	if err := s.AddFact(meb.Fact{Subject: string(file), Predicate: "imports", Object: "fmt"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -131,13 +130,13 @@ func TestGetFlowPath(t *testing.T) {
 	defer s.Close()
 
 	// 2. Add Data: fileA -> fileB -> fileC
-	if err := s.AddFact(meb.Fact{Subject: "fileA", Predicate: "calls", Object: "fileB", Graph: "default"}); err != nil {
+	if err := s.AddFact(meb.Fact{Subject: "fileA", Predicate: "calls", Object: "fileB"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddFact(meb.Fact{Subject: "fileB", Predicate: "calls", Object: "fileC", Graph: "default"}); err != nil {
+	if err := s.AddFact(meb.Fact{Subject: "fileB", Predicate: "calls", Object: "fileC"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddFact(meb.Fact{Subject: "fileA", Predicate: "calls", Object: "fileD", Graph: "default"}); err != nil {
+	if err := s.AddFact(meb.Fact{Subject: "fileA", Predicate: "calls", Object: "fileD"}); err != nil {
 		t.Fatal(err)
 	}
 

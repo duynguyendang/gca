@@ -225,7 +225,6 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 		Subject:   string(relPath),
 		Predicate: config.PredicateInPackage,
 		Object:    filePackage,
-		Graph:     config.DefaultGraph,
 	})
 
 	tags := e.deriveTags(relPath)
@@ -234,7 +233,6 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 			Subject:   string(relPath),
 			Predicate: config.PredicateHasTag,
 			Object:    tag,
-			Graph:     config.DefaultGraph,
 		})
 	}
 
@@ -263,9 +261,9 @@ func (e *TreeSitterExtractor) processMarkdownFile(relPath string, content []byte
 			},
 		}},
 		Facts: []meb.Fact{
-			{Subject: string(relPath), Predicate: config.PredicateType, Object: config.TypeDocument, Graph: config.DefaultGraph},
-			{Subject: string(relPath), Predicate: config.PredicateHasDoc, Object: string(content), Graph: config.DefaultGraph},
-			{Subject: string(relPath), Predicate: config.PredicateInPackage, Object: config.DefaultPackageRoot, Graph: config.DefaultGraph},
+			{Subject: string(relPath), Predicate: config.PredicateType, Object: config.TypeDocument},
+			{Subject: string(relPath), Predicate: config.PredicateHasDoc, Object: string(content)},
+			{Subject: string(relPath), Predicate: config.PredicateInPackage, Object: config.DefaultPackageRoot},
 		},
 	}
 }
@@ -289,10 +287,10 @@ func (e *TreeSitterExtractor) processSymbols(bundle *AnalysisBundle, symbols []S
 
 		// Create Facts
 		bundle.Facts = append(bundle.Facts,
-			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateType, Object: sym.Type, Graph: config.DefaultGraph},
-			meb.Fact{Subject: string(relPath), Predicate: config.PredicateDefines, Object: sym.ID, Graph: config.DefaultGraph},
-			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateInPackage, Object: filePackage, Graph: config.DefaultGraph},
-			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateName, Object: sym.Name, Graph: config.DefaultGraph},
+			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateType, Object: sym.Type},
+			meb.Fact{Subject: string(relPath), Predicate: config.PredicateDefines, Object: sym.ID},
+			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateInPackage, Object: filePackage},
+			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateName, Object: sym.Name},
 		)
 
 		// Role Tagging
@@ -301,7 +299,6 @@ func (e *TreeSitterExtractor) processSymbols(bundle *AnalysisBundle, symbols []S
 				Subject:   string(sym.ID),
 				Predicate: config.PredicateHasRole,
 				Object:    config.RoleDataContract,
-				Graph:     config.DefaultGraph,
 			})
 		}
 
@@ -311,7 +308,6 @@ func (e *TreeSitterExtractor) processSymbols(bundle *AnalysisBundle, symbols []S
 				Subject:   string(sym.ID),
 				Predicate: config.PredicateHasRole,
 				Object:    config.RoleAPIHandler,
-				Graph:     config.DefaultGraph,
 			})
 		}
 
@@ -321,7 +317,6 @@ func (e *TreeSitterExtractor) processSymbols(bundle *AnalysisBundle, symbols []S
 				Subject:   string(sym.ID),
 				Predicate: config.PredicateHasRole,
 				Object:    config.RoleUtility,
-				Graph:     config.DefaultGraph,
 			})
 		}
 
@@ -330,7 +325,6 @@ func (e *TreeSitterExtractor) processSymbols(bundle *AnalysisBundle, symbols []S
 				Subject:   string(sym.ID),
 				Predicate: config.PredicateHasDoc,
 				Object:    sym.DocComment,
-				Graph:     config.DefaultGraph,
 			})
 		}
 	}
@@ -347,7 +341,6 @@ func (e *TreeSitterExtractor) addFacts(bundle *AnalysisBundle, relPath string, r
 			Subject:   string(subj),
 			Predicate: ref.Predicate,
 			Object:    ref.Object,
-			Graph:     config.DefaultGraph,
 		})
 	}
 }

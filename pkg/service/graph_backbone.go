@@ -8,6 +8,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 )
 
 // GetFileBackbone returns the bidirectional file-level dependency graph (depth 1) for a specific file.
@@ -41,7 +42,7 @@ func (s *GraphService) GetFileBackbone(ctx context.Context, projectID, fileID st
 	// 1. Downstream: File -> Calls -> ?
 	// Query: defined symbols in File -> calls -> ?target
 	qDown := fmt.Sprintf("triples(%s, \"defines\", ?s), triples(?s, \"calls\", ?o)", quotedFileID)
-	resDown, err := store.Query(ctx, qDown)
+	resDown, err := gcamdb.Query(ctx, store, qDown)
 	if err != nil {
 		return nil, fmt.Errorf("query downstream failed: %w", err)
 	}
@@ -79,7 +80,7 @@ func (s *GraphService) GetFileBackbone(ctx context.Context, projectID, fileID st
 	// 2. Upstream: ? -> Calls -> File
 	// Query: defined symbols in File (targets) <- called by ?caller
 	qUp := fmt.Sprintf("triples(%s, \"defines\", ?target), triples(?caller, \"calls\", ?target)", quotedFileID)
-	resUp, err := store.Query(ctx, qUp)
+	resUp, err := gcamdb.Query(ctx, store, qUp)
 	if err != nil {
 		return nil, fmt.Errorf("query upstream failed: %w", err)
 	}

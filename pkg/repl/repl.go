@@ -11,6 +11,7 @@ import (
 
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/meb"
 	"github.com/google/generative-ai-go/genai"
@@ -227,7 +228,7 @@ func processExportCommand(s *meb.MEBStore, line string) {
 	filename := strings.TrimSpace(argsStr[lastSpace+1:])
 
 	// Execute query
-	results, err := s.Query(context.Background(), datalogQuery)
+	results, err := gcamdb.Query(context.Background(), s, datalogQuery)
 	if err != nil {
 		fmt.Printf("Query error: %v\n", err)
 		return
@@ -345,7 +346,7 @@ func processQuery(ctx context.Context, cfg Config, s *meb.MEBStore, line string,
 	}
 
 	// Execute the query
-	results, err := s.Query(context.Background(), datalogQuery)
+	results, err := gcamdb.Query(context.Background(), s, datalogQuery)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return

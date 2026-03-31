@@ -56,6 +56,23 @@ const (
 	RetryCount = 3
 )
 
+// Validation constants - centralized limits for input validation
+const (
+	MaxQueryLength       = 10000
+	MaxProjectIDLength   = 255
+	MaxSymbolIDLength    = 1000
+	MaxIDsCount          = 1000
+	MaxEmbeddingDim      = 10000
+	MaxLimit             = 1000
+	MaxOffset            = 1000000
+	MaxCursorLength      = 1000
+	MaxDepth             = 10
+	MaxClusters          = 100
+	MaxSearchQueryLength = 500
+	MaxPredicateLength   = 100
+	MaxPrefixLength      = 500
+)
+
 // Supported source file extensions for validation
 var SourceFileExtensions = []string{
 	".go", ".ts", ".js", ".jsx", ".tsx",
@@ -65,9 +82,15 @@ var SourceFileExtensions = []string{
 }
 
 var PromptPaths = map[string]string{
-	"datalog":      "prompts/datalog.prompt",
-	"explain":      "prompts/explain_results.prompt",
-	"planner":      "prompts/planner.prompt",
-	"find_similar": "prompts/find_similar.prompt",
-	"extract_code": "prompts/extract_code.prompt",
+	"datalog":         "prompts/datalog.prompt",
+	"chat":            "prompts/chat.prompt",
+	"path_narrative":  "prompts/path_narrative.prompt",
+	"path_endpoints":  "prompts/path_endpoints.prompt",
+	"resolve_symbol":  "prompts/resolve_symbol.prompt",
+	"prune":           "prompts/prune.prompt",
+	"smart_search":    "prompts/smart_search.prompt",
+	"multi_file":      "prompts/multi_file.prompt",
+	"default_context": "prompts/default_context.prompt",
+	"explain":         "prompts/explain_results.prompt",
+	"planner":         "prompts/planner.prompt",
 }

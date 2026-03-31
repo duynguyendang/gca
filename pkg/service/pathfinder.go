@@ -11,6 +11,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/meb"
 )
 
@@ -52,7 +53,7 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 
 	// API Bridge Portals: Pre-compute URL -> Handler map for O(1) jump
 	portals := make(map[string]string)
-	resPortals, _ := store.Query(ctx, fmt.Sprintf(`triples(?url, "%s", ?handler)`, "handled_by"))
+	resPortals, _ := gcamdb.Query(ctx, store, fmt.Sprintf(`triples(?url, "%s", ?handler)`, "handled_by"))
 	for _, r := range resPortals {
 		url, _ := r["?url"].(string)
 		handler, _ := r["?handler"].(string)
@@ -189,7 +190,7 @@ func (s *GraphService) getWeightedNeighbors(ctx context.Context, store *meb.MEBS
 	}
 
 	// 1. Outbound edges
-	for fact, err := range store.Scan(nodeID, "", "", config.DefaultGraph) {
+	for fact, err := range store.Scan(nodeID, "", "") {
 		if err != nil {
 			continue
 		}
@@ -206,7 +207,7 @@ func (s *GraphService) getWeightedNeighbors(ctx context.Context, store *meb.MEBS
 	}
 
 	// 2. Inbound 'defines' (Structure Nav)
-	for fact, err := range store.Scan("", config.PredicateDefines, nodeID, config.DefaultGraph) {
+	for fact, err := range store.Scan("", config.PredicateDefines, nodeID) {
 		if err != nil {
 			continue
 		}

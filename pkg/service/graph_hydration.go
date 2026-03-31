@@ -15,19 +15,19 @@ func (s *GraphService) HydrateShallow(ctx context.Context, store *meb.MEBStore, 
 	var hydrated []HydratedSymbol
 	for _, id := range ids {
 		hs := HydratedSymbol{ID: id, Metadata: make(map[string]interface{})}
-		for fact, _ := range store.Scan(id, config.PredicateHasKind, "", "") {
+		for fact, _ := range store.Scan(id, config.PredicateHasKind, "") {
 			if str, ok := fact.Object.(string); ok {
 				hs.Kind = str
 				break
 			}
 		}
-		for fact, _ := range store.Scan(id, config.PredicateHasLanguage, "", "") {
+		for fact, _ := range store.Scan(id, config.PredicateHasLanguage, "") {
 			if str, ok := fact.Object.(string); ok {
 				hs.Metadata["language"] = str
 				break
 			}
 		}
-		for fact, _ := range store.Scan(id, config.PredicateStartLine, "", "") {
+		for fact, _ := range store.Scan(id, config.PredicateStartLine, "") {
 			if num, ok := fact.Object.(int); ok {
 				hs.Metadata["start_line"] = num
 			} else if floatNum, ok := fact.Object.(float64); ok {
@@ -38,7 +38,7 @@ func (s *GraphService) HydrateShallow(ctx context.Context, store *meb.MEBStore, 
 				}
 			}
 		}
-		for fact, _ := range store.Scan(id, config.PredicateEndLine, "", "") {
+		for fact, _ := range store.Scan(id, config.PredicateEndLine, "") {
 			if num, ok := fact.Object.(int); ok {
 				hs.Metadata["end_line"] = num
 			} else if floatNum, ok := fact.Object.(float64); ok {

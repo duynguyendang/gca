@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/meb"
 )
 
@@ -58,7 +59,7 @@ func (e *Executor) ExecuteStep(ctx context.Context, session *ExecutionSession, s
 
 	log.Printf("[Agent/Executor] Step %d: executing query: %s", stepIndex, resolvedQuery)
 
-	results, err := e.store.Query(queryCtx, resolvedQuery)
+	results, err := gcamdb.Query(queryCtx, e.store, resolvedQuery)
 	if err != nil {
 		e.circuitBreaker.RecordFailure()
 		session.UpdateStep(stepIndex, func(s *PlanStep) {
@@ -156,7 +157,7 @@ func (e *Executor) hydrateResults(ctx context.Context, results []map[string]any,
 
 		// Fetch kind from triples
 		kindCtx, cancel2 := context.WithTimeout(ctx, 500*time.Millisecond)
-		kindResults, _ := e.store.Query(kindCtx, fmt.Sprintf(`triples("%s", "kind", ?o)`, id))
+		kindResults, _ := gcamdb.Query(kindCtx, e.store, fmt.Sprintf(`triples("%s", "kind", ?o)`, id))
 		cancel2()
 		if len(kindResults) > 0 {
 			if kind, ok := kindResults[0]["?o"].(string); ok {

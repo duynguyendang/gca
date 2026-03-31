@@ -10,6 +10,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/datalog"
 	"github.com/duynguyendang/gca/pkg/export"
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/repl"
 )
 
@@ -22,7 +23,7 @@ func (s *GraphService) ExecuteQuery(ctx context.Context, projectID, query string
 		return nil, err
 	}
 
-	results, err := store.Query(ctx, query)
+	results, err := gcamdb.Query(ctx, store, query)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errors.ErrInvalidInput, err)
 	}
@@ -50,7 +51,7 @@ func (s *GraphService) ExecuteQueryOptimized(ctx context.Context, projectID, que
 	optimizedQuery := reconstructQuery(plan.Atoms)
 
 	// Execute the optimized query
-	results, err := store.Query(ctx, optimizedQuery)
+	results, err := gcamdb.Query(ctx, store, optimizedQuery)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errors.ErrInvalidInput, err)
 	}
@@ -132,7 +133,7 @@ func (s *GraphService) GetManifest(ctx context.Context, projectID string) (map[s
 	fileMap := make(map[string]string)
 	symbolMap := make(map[string]string)
 
-	for fact, err := range store.Scan("", config.PredicateDefines, "", "") {
+	for fact, err := range store.Scan("", config.PredicateDefines, "") {
 		if err != nil {
 			return nil, fmt.Errorf("scan failed: %w", err)
 		}
@@ -238,7 +239,7 @@ func (s *GraphService) SearchSymbols(projectID, query, predicate string, limit i
 
 	var matches []string
 	count := 0
-	for fact, err := range store.Scan("", config.PredicateDefines, "", "") {
+	for fact, err := range store.Scan("", config.PredicateDefines, "") {
 		if err != nil {
 			continue
 		}
@@ -265,7 +266,7 @@ func (s *GraphService) ListFiles(projectID string) ([]string, error) {
 	seen := make(map[string]bool)
 	var files []string
 
-	for fact, err := range store.Scan("", config.PredicateType, "", "") {
+	for fact, err := range store.Scan("", config.PredicateType, "") {
 		if err != nil {
 			continue
 		}
@@ -387,7 +388,7 @@ func (s *GraphService) GetBackboneGraph(ctx context.Context, projectID string, a
 		return nil, err
 	}
 
-	results, err := store.Query(ctx, query)
+	results, err := gcamdb.Query(ctx, store, query)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errors.ErrInvalidInput, err)
 	}
@@ -519,12 +520,12 @@ func (s *GraphService) ResolveVirtualTriples(ctx context.Context, projectID stri
 	links := []export.D3Link{}
 	nodes := []export.D3Node{}
 
-	interfaces, err := store.Query(ctx, fmt.Sprintf(`triples(?s, "%s", "interface")`, config.PredicateHasKind))
+	interfaces, err := gcamdb.Query(ctx, store, fmt.Sprintf(`triples(?s, "%s", "interface")`, config.PredicateHasKind))
 	if err != nil {
 		return nil, err
 	}
 
-	structs, err := store.Query(ctx, fmt.Sprintf(`triples(?s, "%s", "struct")`, config.PredicateHasKind))
+	structs, err := gcamdb.Query(ctx, store, fmt.Sprintf(`triples(?s, "%s", "struct")`, config.PredicateHasKind))
 	if err != nil {
 		return nil, err
 	}
@@ -594,13 +595,13 @@ func (s *GraphService) SemanticSearch(ctx context.Context, projectID, query stri
 		return nil, fmt.Errorf("failed to embed query: %w", err)
 	}
 
-	vectorResults, err := store.Vectors().Search(embedding, k)
-	if err != nil {
-		return nil, fmt.Errorf("vector search failed: %w", err)
-	}
+	vecIter := store.Vectors().Search(embedding, k)
 
-	results := make([]SemanticSearchResult, 0, len(vectorResults))
-	for _, vr := range vectorResults {
+	results := make([]SemanticSearchResult, 0, k)
+	for vr, err := range vecIter {
+		if err != nil {
+			break
+		}
 		symbolID, err := store.ResolveID(vr.ID)
 		if err != nil {
 			continue

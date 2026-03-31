@@ -1,7 +1,6 @@
 package ingest
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -12,37 +11,50 @@ import (
 	"github.com/duynguyendang/meb"
 )
 
-// EnhanceVirtualTriples injects "virtual" edges to bridge the gap between
-// decoupled components (e.g. Frontend -> Backend via HTTP).
 func EnhanceVirtualTriples(s *meb.MEBStore) error {
-	ctx := context.Background()
-
-	// 1. Discover BE/FE Sets
 	feSet := make(map[string]bool)
 	beSet := make(map[string]bool)
 
-	resFE, _ := s.Query(ctx, fmt.Sprintf(`triples(?f, "%s", "frontend"), triples(?f, "%s", ?s)`, config.PredicateHasTag, config.PredicateDefines))
-	for _, r := range resFE {
-		id, _ := r["?s"].(string)
-		feSet[id] = true
-	}
-	resBE, _ := s.Query(ctx, fmt.Sprintf(`triples(?f, "%s", "backend"), triples(?f, "%s", ?s)`, config.PredicateHasTag, config.PredicateDefines))
-	for _, r := range resBE {
-		id, _ := r["?s"].(string)
-		beSet[id] = true
+	for fact, err := range s.Scan("", config.PredicateHasTag, "frontend") {
+		if err != nil {
+			continue
+		}
+		feSet[fact.Subject] = true
 	}
 
-	// Also include the files themselves in the sets
-	resFF, _ := s.Query(ctx, fmt.Sprintf(`triples(?f, "%s", "frontend")`, config.PredicateHasTag))
-	for _, r := range resFF {
-		feSet[r["?f"].(string)] = true
-	}
-	resBF, _ := s.Query(ctx, fmt.Sprintf(`triples(?f, "%s", "backend")`, config.PredicateHasTag))
-	for _, r := range resBF {
-		beSet[r["?f"].(string)] = true
+	for fact, err := range s.Scan("", config.PredicateDefines, "") {
+		if err != nil {
+			continue
+		}
+		obj, ok := fact.Object.(string)
+		if !ok {
+			continue
+		}
+		if feSet[fact.Subject] {
+			feSet[obj] = true
+		}
 	}
 
-	// 2. Discover Route Mappings
+	for fact, err := range s.Scan("", config.PredicateHasTag, "backend") {
+		if err != nil {
+			continue
+		}
+		beSet[fact.Subject] = true
+	}
+
+	for fact, err := range s.Scan("", config.PredicateDefines, "") {
+		if err != nil {
+			continue
+		}
+		obj, ok := fact.Object.(string)
+		if !ok {
+			continue
+		}
+		if beSet[fact.Subject] {
+			beSet[obj] = true
+		}
+	}
+
 	routeMap := make(map[string]string)
 	symbolLookup := make(map[string]string)
 
@@ -57,36 +69,23 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		return false
 	}
 
-	// Build symbol lookup for BE
 	for id := range beSet {
 		if strings.Contains(id, ":") {
 			continue
 		}
-		qDef := fmt.Sprintf(`triples("%s", "%s", ?s)`, id, config.PredicateDefines)
-		resDef, _ := s.Query(ctx, qDef)
-		for _, r := range resDef {
-			sID := r["?s"].(string)
+		for fact, err := range s.Scan(id, config.PredicateDefines, "") {
+			if err != nil {
+				continue
+			}
+			sID, ok := fact.Object.(string)
+			if !ok {
+				continue
+			}
 			name := common.ExtractSymbolName(sID)
 			symbolLookup[name] = sID
 		}
 	}
 
-	// Scan Router Files
-	// Regex for: `s.GET["/path", handler]` or `group.POST["/path", handler]`
-	// Supports: GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD
-	// Captures: 1=Method, 2=Path, 3=Handler match (simple), 4=Handler token
-	// Note: Go syntax is flexible, this captures common patterns.
-	// We need to capture the handler symbol name.
-	// Example: s.GET("/v1/projects", s.handleProjects)
-	// Match: .GET, "/v1/projects", s.handleProjects
-	// Scan Router Files
-	// Regex for: `s.GET["/path", handler]` or `group.POST["/path", handler]`
-	// Supports: GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD
-	// Captures: 1=Method, 2=Path, 3=Handler match (simple)
-	// Note: Go syntax is flexible, this captures common patterns.
-	// We need to capture the handler symbol name.
-	// Example: s.GET("/v1/projects", s.handleProjects)
-	// Match: .GET, "/v1/projects", s.handleProjects
 	routeRegex := regexp.MustCompile(`\.(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\(\s*"([^"]+)"\s*,\s*([^,\)]+)`)
 
 	for id := range beSet {
@@ -98,60 +97,52 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 			continue
 		}
 		content := string(doc)
-		// Basic heuristic: check if file looks like a router setup
 		if !strings.Contains(content, "gin.Default") && !strings.Contains(content, "gin.New") && !strings.Contains(content, ".Group") && !strings.Contains(content, "Router") {
 			continue
 		}
 
 		matches := routeRegex.FindAllStringSubmatch(content, -1)
 		for _, match := range matches {
-			// method := match[1] // Unused for now
 			route := match[2]
 			rawHandler := strings.TrimSpace(match[3])
 
-			// Extract simple function name from regex match
-			// e.g. "s.handleProjects" -> "handleProjects"
-			// e.g. "handlers.GetUser" -> "GetUser"
 			handlerToken := rawHandler
 			if idx := strings.LastIndex(rawHandler, "."); idx != -1 {
 				handlerToken = rawHandler[idx+1:]
 			}
 
-			// Clean up token (remove closing parens if regex greediness caught them, though strict regex shouldn't)
 			handlerToken = strings.Trim(handlerToken, " ),;")
 
 			if targetID, ok := symbolLookup[handlerToken]; ok {
 				routeMap[route] = targetID
-				s.AddFact(meb.Fact{Subject: string(route), Predicate: config.PredicateHandledBy, Object: targetID, Graph: "virtual"})
-				// REL-02: Tag the handler as an api_handler
-				s.AddFact(meb.Fact{Subject: string(targetID), Predicate: config.PredicateHasRole, Object: config.RoleAPIHandler, Graph: "virtual"})
+				s.AddFact(meb.Fact{Subject: string(route), Predicate: config.PredicateHandledBy, Object: targetID})
+				s.AddFact(meb.Fact{Subject: string(targetID), Predicate: config.PredicateHasRole, Object: config.RoleAPIHandler})
 			} else {
-				// DEBUG: Why did lookup fail?
 				fmt.Printf("[Virtual] Failed to link route %s to handler %s (token: %s). Symbol not found.\n", route, rawHandler, handlerToken)
 			}
 		}
 	}
 
-	// 3. Scan FE References for calls_api
-	qRefs := fmt.Sprintf(`triples(?s, "%s", ?ref)`, config.PredicateReferences)
-	resRefs, _ := s.Query(ctx, qRefs)
-	for _, res := range resRefs {
-		sID, _ := res["?s"].(string)
-		ref, _ := res["?ref"].(string)
+	for fact, err := range s.Scan("", config.PredicateReferences, "") {
+		if err != nil {
+			continue
+		}
+		sID := fact.Subject
+		ref, ok := fact.Object.(string)
+		if !ok {
+			continue
+		}
 		cleanRef := ref
 		if idx := strings.Index(ref, "?"); idx != -1 {
 			cleanRef = ref[:idx]
 		}
 		if _, exists := routeMap[cleanRef]; exists {
-			s.AddFact(meb.Fact{Subject: string(sID), Predicate: config.PredicateCallsAPI, Object: cleanRef, Graph: "virtual"})
-			// Also add direct 'calls' link to the backend handler to enable standard pathfinding
+			s.AddFact(meb.Fact{Subject: string(sID), Predicate: config.PredicateCallsAPI, Object: cleanRef})
 			targetID := routeMap[cleanRef]
-			s.AddFact(meb.Fact{Subject: string(sID), Predicate: config.PredicateCalls, Object: targetID, Graph: "virtual"})
+			s.AddFact(meb.Fact{Subject: string(sID), Predicate: config.PredicateCalls, Object: targetID})
 		}
 	}
 
-	// 4. Internal Service Linker (Optimized)
-	// We should only scan the content per file ONCE, not per symbol defined in the file!
 	type FileInfo struct {
 		ID      string
 		Content string
@@ -160,17 +151,20 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	var files []FileInfo
 	for id := range beSet {
 		if strings.Contains(id, ":") {
-			continue // skip symbols, only process files
+			continue
 		}
 		doc, err := s.GetContentByKey(string(id))
 		if err == nil {
 			content := string(doc)
-			qDef := fmt.Sprintf(`triples("%s", "%s", ?s)`, id, config.PredicateDefines)
-			resDef, _ := s.Query(ctx, qDef)
-
 			var symbols []string
-			for _, r := range resDef {
-				symbols = append(symbols, r["?s"].(string))
+			for fact, err := range s.Scan(id, config.PredicateDefines, "") {
+				if err != nil {
+					continue
+				}
+				obj, ok := fact.Object.(string)
+				if ok {
+					symbols = append(symbols, obj)
+				}
 			}
 			if len(symbols) > 0 {
 				files = append(files, FileInfo{ID: id, Content: content, Symbols: symbols})
@@ -179,11 +173,11 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	}
 
 	methodIndex := make(map[string][]string)
-	qMethods := fmt.Sprintf(`triples(?s, "%s", "method")`, config.PredicateType)
-	resMethods, _ := s.Query(ctx, qMethods)
-	for _, r := range resMethods {
-		id := r["?s"].(string)
-		// Check both beSet and feSet just in case
+	for fact, err := range s.Scan("", config.PredicateType, "method") {
+		if err != nil {
+			continue
+		}
+		id := fact.Subject
 		if beSet[id] || isTagged(id, beSet) {
 			parts := strings.Split(id, ":")
 			if len(parts) > 1 {
@@ -200,7 +194,6 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	methodCallRegex := regexp.MustCompile(`\.([A-Za-z0-9_]+)\(`)
 
 	for _, f := range files {
-		// Extract all called methods in this file once
 		calledMethods := make(map[string]bool)
 		matches := methodCallRegex.FindAllStringSubmatch(f.Content, -1)
 		for _, m := range matches {
@@ -211,21 +204,21 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 
 		for methodName, svcIDs := range methodIndex {
 			if calledMethods[methodName] {
-				// The file references the method. Assign 'calls' from the file to the target method.
 				for _, svcID := range svcIDs {
 					if f.ID != svcID {
-						s.AddFact(meb.Fact{Subject: f.ID, Predicate: config.PredicateCalls, Object: svcID, Graph: "virtual"})
+						s.AddFact(meb.Fact{Subject: f.ID, Predicate: config.PredicateCalls, Object: svcID})
 					}
 				}
 			}
 		}
 	}
 
-	// 5. Data Lineage (exposes_model)
 	contractMap := make(map[string][]string)
-	resContracts, _ := s.Query(ctx, fmt.Sprintf(`triples(?s, "%s", "%s")`, config.PredicateHasRole, config.RoleDataContract))
-	for _, r := range resContracts {
-		sID := r["?s"].(string)
+	for fact, err := range s.Scan("", config.PredicateHasRole, config.RoleDataContract) {
+		if err != nil {
+			continue
+		}
+		sID := fact.Subject
 		name := common.ExtractSymbolName(sID)
 		contractMap[name] = append(contractMap[name], sID)
 	}
@@ -233,28 +226,30 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 	for _, f := range files {
 		for modelName, targets := range contractMap {
 			if strings.Contains(f.Content, modelName) {
-				// The file explicitly references the model name
 				for _, tID := range targets {
 					if f.ID != tID {
-						s.AddFact(meb.Fact{Subject: f.ID, Predicate: config.PredicateExposesModel, Object: tID, Graph: "virtual"})
+						s.AddFact(meb.Fact{Subject: f.ID, Predicate: config.PredicateExposesModel, Object: tID})
 					}
 				}
 			}
 		}
 	}
 
-	// 6. Logical Ownership (exports)
 	for id := range feSet {
 		if strings.Contains(id, ":") {
 			continue
 		}
 		base := strings.TrimSuffix(filepath.Base(id), filepath.Ext(id))
-		qDef := fmt.Sprintf(`triples("%s", "%s", ?s)`, id, config.PredicateDefines)
-		resDef, _ := s.Query(ctx, qDef)
-		for _, r := range resDef {
-			sID := r["?s"].(string)
+		for fact, err := range s.Scan(id, config.PredicateDefines, "") {
+			if err != nil {
+				continue
+			}
+			sID, ok := fact.Object.(string)
+			if !ok {
+				continue
+			}
 			if strings.EqualFold(filepath.Base(strings.Split(sID, ":")[1]), base) {
-				s.AddFact(meb.Fact{Subject: string(id), Predicate: config.PredicateExports, Object: sID, Graph: "virtual"})
+				s.AddFact(meb.Fact{Subject: string(id), Predicate: config.PredicateExports, Object: sID})
 			}
 		}
 	}

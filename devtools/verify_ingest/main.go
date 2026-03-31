@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/ingest"
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/store"
 	"github.com/joho/godotenv"
@@ -102,7 +103,7 @@ components:
 
 	// 3. Run Ingestion (skip if API key missing, but we really want to verify extraction)
 	// Even if embedding fails or is skipped, we can check symbols if Extractor works.
-	// But `ingest.Run` usually includes embedding.
+	// But `ingest.Run`usually includes embedding.
 	// Let's assume dev env has key or mocks it.
 	fmt.Println("Running ingestion...")
 	if err := ingest.Run(s, "gca-be", srcDir); err != nil {
@@ -116,10 +117,12 @@ components:
 		log.Fatal("Expected > 0 facts")
 	}
 
+	ctx := context.Background()
+
 	// 5. Verify Content Retrieval via ID or Type
 	// Check for Python function
 	fmt.Println("Querying for Python function...")
-	results, err := s.Query(context.Background(), `triples(?s, "type", "function")`)
+	results, err := gcamdb.Query(ctx, s, `triples(?s, "type", "function")`)
 	if err != nil {
 		log.Fatalf("Query failed: %v", err)
 	}
@@ -151,7 +154,7 @@ components:
 	// Note: In refined extractor, we used TypeClass for Py/TS.
 	// Go uses TypeStruct.
 	// Let's query ?s type ?t
-	results, err = s.Query(context.Background(), `triples(?s, "type", "class")`)
+	results, err = gcamdb.Query(ctx, s, `triples(?s, "type", "class")`)
 	if err == nil {
 		foundTSClass := false
 		for _, r := range results {
@@ -169,7 +172,7 @@ components:
 
 	// Check for Variable
 	fmt.Println("Querying for Variables...")
-	results, err = s.Query(context.Background(), `triples(?s, "type", "variable")`)
+	results, err = gcamdb.Query(ctx, s, `triples(?s, "type", "variable")`)
 	if err == nil {
 		foundVar := false
 		for _, r := range results {
@@ -182,7 +185,7 @@ components:
 		if !foundVar {
 			log.Println("WARNING: Did not find hello.py variables. Dumping all facts...")
 			// Dump all facts
-			allFacts, _ := s.Query(context.Background(), `triples(?s, ?p, ?o)`)
+			allFacts, _ := gcamdb.Query(ctx, s, `triples(?s, ?p, ?o)`)
 			for _, f := range allFacts {
 				if s, ok := f["?s"].(string); ok && strings.Contains(s, "hello.py") {
 					fmt.Printf("Fact: %s %s %v\n", s, f["?p"], f["?o"])
@@ -199,9 +202,17 @@ components:
 		es, _ := ingest.NewEmbeddingService(context.Background())
 		qVec, err := es.GetEmbedding(context.Background(), "hello in Python")
 		if err == nil {
-			matches, _ := s.Vectors().Search(qVec, 5)
-			if len(matches) > 0 {
-				fmt.Printf("Top match: %d score: %f\n", matches[0].ID, matches[0].Score)
+			// Vector search returns iter.Seq2
+			vecIter := s.Vectors().Search(qVec, 5)
+			count := 0
+			for match, err := range vecIter {
+				if err != nil {
+					break
+				}
+				if count == 0 {
+					fmt.Printf("Top match: %d score: %f\n", match.ID, match.Score)
+				}
+				count++
 			}
 		}
 	} else {
@@ -212,7 +223,7 @@ components:
 
 	// 7. Verify Project Metadata
 	fmt.Println("Verifying Project Metadata...")
-	results, err = s.Query(context.Background(), `triples(?s, "type", "project")`)
+	results, err = gcamdb.Query(ctx, s, `triples(?s, "type", "project")`)
 	if err != nil {
 		log.Fatalf("Query failed: %v", err)
 	}
@@ -227,7 +238,7 @@ components:
 		log.Fatal("Did not find project: test-project")
 	}
 
-	results, err = s.Query(context.Background(), `triples("test-project", "has_tag", ?t)`)
+	results, err = gcamdb.Query(ctx, s, `triples("test-project", "has_tag", ?t)`)
 	foundTag := false
 	for _, r := range results {
 		tag := r["?t"].(string)

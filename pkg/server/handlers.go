@@ -23,8 +23,8 @@ func validateAndSanitizeQuery(query string) (string, error) {
 	query = strings.TrimSpace(query)
 
 	// Check for excessively long queries
-	if len(query) > 10000 {
-		return "", fmt.Errorf("query exceeds maximum length of 10000 characters")
+	if len(query) > config.MaxQueryLength {
+		return "", fmt.Errorf("query exceeds maximum length of %d characters", config.MaxQueryLength)
 	}
 
 	// Sanitize HTML entities to prevent XSS
@@ -61,7 +61,7 @@ func validateProjectID(projectID string) error {
 	}
 
 	// Check for excessively long project IDs
-	if len(projectID) > 255 {
+	if len(projectID) > config.MaxProjectIDLength {
 		return fmt.Errorf("project ID exceeds maximum length")
 	}
 
@@ -80,7 +80,7 @@ func validateSymbolID(symbolID string) error {
 	}
 
 	// Check for excessively long symbol IDs
-	if len(symbolID) > 1000 {
+	if len(symbolID) > config.MaxSymbolIDLength {
 		return fmt.Errorf("symbol ID exceeds maximum length")
 	}
 
@@ -93,8 +93,8 @@ func validateIDs(ids []string) error {
 		return fmt.Errorf("IDs list cannot be empty")
 	}
 
-	if len(ids) > 1000 {
-		return fmt.Errorf("too many IDs (maximum 1000)")
+	if len(ids) > config.MaxIDsCount {
+		return fmt.Errorf("too many IDs (maximum %d)", config.MaxIDsCount)
 	}
 
 	for _, id := range ids {
@@ -113,7 +113,7 @@ func validateEmbedding(embedding []float32) error {
 	}
 
 	// Check for reasonable embedding dimensions
-	if len(embedding) > 10000 {
+	if len(embedding) > config.MaxEmbeddingDim {
 		return fmt.Errorf("embedding dimensions exceed maximum")
 	}
 
@@ -139,7 +139,7 @@ func validateOffset(offset int) error {
 		return fmt.Errorf("offset cannot be negative")
 	}
 
-	if offset > 1000000 {
+	if offset > config.MaxOffset {
 		return fmt.Errorf("offset exceeds maximum")
 	}
 
@@ -153,7 +153,7 @@ func validateCursor(cursor string) error {
 	}
 
 	// Check for excessively long cursors
-	if len(cursor) > 1000 {
+	if len(cursor) > config.MaxCursorLength {
 		return fmt.Errorf("cursor exceeds maximum length")
 	}
 
@@ -192,8 +192,8 @@ func validateDepth(depth int) error {
 		return fmt.Errorf("depth cannot be negative")
 	}
 
-	if depth > 10 {
-		return fmt.Errorf("depth exceeds maximum of 10")
+	if depth > config.MaxDepth {
+		return fmt.Errorf("depth exceeds maximum of %d", config.MaxDepth)
 	}
 
 	return nil
@@ -205,8 +205,8 @@ func validateClusters(clusters int) error {
 		return fmt.Errorf("clusters must be positive")
 	}
 
-	if clusters > 100 {
-		return fmt.Errorf("clusters exceeds maximum of 100")
+	if clusters > config.MaxClusters {
+		return fmt.Errorf("clusters exceeds maximum of %d", config.MaxClusters)
 	}
 
 	return nil
@@ -375,12 +375,6 @@ func (s *Server) handleSource(c *gin.Context) {
 		return
 	}
 
-	// Handle line range extraction if requested
-	// Keep presentation logic in handler? Or move to service?
-	// Line range is view logic, maybe keep here or helper.
-	// Check lines...
-	// ... (Existing slice logic) ...
-
 	startStr := c.Query("start")
 	endStr := c.Query("end")
 
@@ -394,7 +388,8 @@ func (s *Server) handleSource(c *gin.Context) {
 	}
 
 	lines := strings.Split(content, "\n")
-	// ... (Normalization logic) ...
+
+	// Normalize line range bounds
 	if start < 1 {
 		start = 1
 	}
@@ -489,7 +484,7 @@ func (s *Server) handleSymbols(c *gin.Context) {
 
 	// Validate and sanitize query parameter
 	query = sanitizeString(query)
-	if len(query) > 500 {
+	if len(query) > config.MaxSearchQueryLength {
 		handleError(c, errors.NewAppError(http.StatusBadRequest, "query exceeds maximum length", nil))
 		return
 	}
@@ -502,7 +497,7 @@ func (s *Server) handleSymbols(c *gin.Context) {
 	// Validate predicate parameter
 	if predicate != "" {
 		predicate = sanitizeString(predicate)
-		if len(predicate) > 100 {
+		if len(predicate) > config.MaxPredicateLength {
 			handleError(c, errors.NewAppError(http.StatusBadRequest, "predicate exceeds maximum length", nil))
 			return
 		}
@@ -540,7 +535,7 @@ func (s *Server) handleFiles(c *gin.Context) {
 		}
 
 		// Check for excessively long prefixes
-		if len(prefix) > 500 {
+		if len(prefix) > config.MaxPrefixLength {
 			handleError(c, errors.NewAppError(http.StatusBadRequest, "prefix exceeds maximum length", nil))
 			return
 		}
@@ -812,7 +807,7 @@ func (s *Server) handleSemanticSearch(c *gin.Context) {
 
 	// Validate and sanitize query
 	query = sanitizeString(query)
-	if len(query) > 1000 {
+	if len(query) > config.MaxQueryLength {
 		handleError(c, errors.NewAppError(http.StatusBadRequest, "query exceeds maximum length", nil))
 		return
 	}
@@ -853,7 +848,7 @@ func (s *Server) handleGraphCluster(c *gin.Context) {
 
 	// Validate and sanitize query
 	query = sanitizeString(query)
-	if len(query) > 10000 {
+	if len(query) > config.MaxQueryLength {
 		handleError(c, errors.NewAppError(http.StatusBadRequest, "query exceeds maximum length", nil))
 		return
 	}

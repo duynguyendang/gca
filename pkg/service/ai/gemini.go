@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/duynguyendang/gca/pkg/config"
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/ooda"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/meb"
@@ -59,11 +60,16 @@ func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreMa
 		return nil, fmt.Errorf("failed to create gemini client: %w", err)
 	}
 
-	// Load all prompts from external files
+	// Load all prompts from external files using config paths
 	loadPrompt := func(name string) *prompts.Prompt {
-		p, err := prompts.LoadPrompt("prompts/" + name)
+		path, ok := config.PromptPaths[name]
+		if !ok {
+			log.Printf("Warning: No prompt path configured for %s", name)
+			return nil
+		}
+		p, err := prompts.LoadPrompt(path)
 		if err != nil {
-			log.Printf("Warning: Failed to load %s: %v", name, err)
+			log.Printf("Warning: Failed to load %s from %s: %v", name, path, err)
 			return nil
 		}
 		return p
@@ -73,15 +79,15 @@ func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreMa
 		client:               client,
 		embeddingModel:       client.EmbeddingModel("gemini-embedding-001"),
 		manager:              manager,
-		DatalogPrompt:        loadPrompt("datalog.prompt"),
-		ChatPrompt:           loadPrompt("chat.prompt"),
-		PathNarrativePrompt:  loadPrompt("path_narrative.prompt"),
-		PathEndpointsPrompt:  loadPrompt("path_endpoints.prompt"),
-		ResolveSymbolPrompt:  loadPrompt("resolve_symbol.prompt"),
-		PrunePrompt:          loadPrompt("prune.prompt"),
-		SmartSearchPrompt:    loadPrompt("smart_search.prompt"),
-		MultiFilePrompt:      loadPrompt("multi_file.prompt"),
-		DefaultContextPrompt: loadPrompt("default_context.prompt"),
+		DatalogPrompt:        loadPrompt("datalog"),
+		ChatPrompt:           loadPrompt("chat"),
+		PathNarrativePrompt:  loadPrompt("path_narrative"),
+		PathEndpointsPrompt:  loadPrompt("path_endpoints"),
+		ResolveSymbolPrompt:  loadPrompt("resolve_symbol"),
+		PrunePrompt:          loadPrompt("prune"),
+		SmartSearchPrompt:    loadPrompt("smart_search"),
+		MultiFilePrompt:      loadPrompt("multi_file"),
+		DefaultContextPrompt: loadPrompt("default_context"),
 	}, nil
 }
 
@@ -677,13 +683,13 @@ func (s *GeminiService) getSymbolContent(store *meb.MEBStore, symbolID string) (
 // querySymbolRelationships queries the graph for symbol relationships.
 func (s *GeminiService) querySymbolRelationships(ctx context.Context, store *meb.MEBStore, symbolID string) (inbound, outbound, defines []map[string]any, err error) {
 	// Inbound: Who calls me?
-	inbound, _ = store.Query(ctx, fmt.Sprintf(`triples(?s, "%s", "%s")`, config.PredicateCalls, symbolID))
+	inbound, _ = gcamdb.Query(ctx, store, fmt.Sprintf(`triples(?s, "%s", "%s")`, config.PredicateCalls, symbolID))
 
 	// Outbound: Who do I call?
-	outbound, _ = store.Query(ctx, fmt.Sprintf(`triples("%s", "%s", ?o)`, symbolID, config.PredicateCalls))
+	outbound, _ = gcamdb.Query(ctx, store, fmt.Sprintf(`triples("%s", "%s", ?o)`, symbolID, config.PredicateCalls))
 
 	// Defines: What do I define? (For files)
-	defines, _ = store.Query(ctx, fmt.Sprintf(`triples("%s", "%s", ?o)`, symbolID, config.PredicateDefines))
+	defines, _ = gcamdb.Query(ctx, store, fmt.Sprintf(`triples("%s", "%s", ?o)`, symbolID, config.PredicateDefines))
 
 	return inbound, outbound, defines, nil
 }

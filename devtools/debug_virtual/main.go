@@ -7,6 +7,7 @@ import (
 
 	"strings"
 
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/store"
 )
@@ -28,7 +29,7 @@ func main() {
 
 	// 2. Scan Frontend Services for fetch calls
 	q := `triples(?s, "type", "function")`
-	results, err := s.Query(ctx, q)
+	results, err := gcamdb.Query(ctx, s, q)
 	if err != nil {
 		log.Fatal(err)
 	}

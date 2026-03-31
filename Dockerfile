@@ -3,7 +3,7 @@ FROM golang:1.25.1-alpine AS builder
 # Install build tools for CGO (required by tree-sitter)
 RUN apk add --no-cache build-base
 WORKDIR /app
-# Copy the entire monorepo to resolve local module dependencies like meb
+# Copy the entire monorepo to resolve local module dependencies like meb and manglekit
 COPY . .
 # Enable CGO for tree-sitter bindings
 ENV CGO_ENABLED=1

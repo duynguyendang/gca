@@ -59,7 +59,7 @@ func main() {
 
 	fmt.Printf("Imports for %s:\n", importingFile)
 	found := false
-	for fact, err := range db.Scan(importingFile, "imports", "", "") {
+	for fact, err := range db.Scan(importingFile, "imports", "") {
 		if err != nil {
 			fmt.Printf("Error scanning imports: %v\n", err)
 			continue

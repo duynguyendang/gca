@@ -271,7 +271,7 @@ func (o *GraphOrienter) buildFileMap(ctx context.Context, store *meb.MEBStore) m
 
 	// Scan for defines predicate - get symbol -> file relationships
 	// This is more efficient than querying each symbol individually
-	for fact := range store.Scan("", "defines", "", "") {
+	for fact := range store.Scan("", "defines", "") {
 		if sym, ok := fact.Object.(string); ok {
 			fileMap[sym] = fact.Subject
 		}
@@ -285,7 +285,7 @@ func (o *GraphOrienter) scanWithLimit(store *meb.MEBStore, symbol string, predic
 	results := make(map[string]bool)
 	count := 0
 
-	for fact := range store.Scan("", predicate, symbol, "") {
+	for fact := range store.Scan("", predicate, symbol) {
 		if count >= limit {
 			break
 		}
@@ -301,7 +301,7 @@ func (o *GraphOrienter) scanWithLimitOutgoing(store *meb.MEBStore, symbol string
 	results := make(map[string]bool)
 	count := 0
 
-	for fact := range store.Scan(symbol, "calls", "", "") {
+	for fact := range store.Scan(symbol, "calls", "") {
 		if count >= limit {
 			break
 		}

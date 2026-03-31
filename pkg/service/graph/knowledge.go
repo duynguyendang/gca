@@ -3,45 +3,47 @@ package graph
 import (
 	"context"
 	"fmt"
+	"iter"
 
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/vector"
 )
 
+// KnowledgeGraph provides a higher-level interface over the MEB store.
 type KnowledgeGraph struct {
 	store *meb.MEBStore
 }
 
+// NewKnowledgeGraph creates a new KnowledgeGraph wrapper around the given store.
 func NewKnowledgeGraph(store *meb.MEBStore) *KnowledgeGraph {
 	return &KnowledgeGraph{
 		store: store,
 	}
 }
 
-func (kg *KnowledgeGraph) AddFact(subject, predicate string, object any, graph string) error {
-	fact := meb.NewFactInGraph(subject, predicate, object, graph)
+// AddFact adds a single fact to the store.
+func (kg *KnowledgeGraph) AddFact(subject, predicate string, object any) error {
+	fact := meb.Fact{
+		Subject:   subject,
+		Predicate: predicate,
+		Object:    object,
+	}
 	return kg.store.AddFact(fact)
 }
 
+// AddFacts adds multiple facts to the store in a batch.
 func (kg *KnowledgeGraph) AddFacts(facts []meb.Fact) error {
 	return kg.store.AddFactBatch(facts)
 }
 
-func (kg *KnowledgeGraph) Query(ctx context.Context, datalogQuery string) ([]map[string]any, error) {
-	return kg.store.Query(ctx, datalogQuery)
-}
-
-func (kg *KnowledgeGraph) QueryDatalog(ctx context.Context, datalogQuery string) ([]map[string]string, error) {
-	return kg.store.QueryDatalog(ctx, datalogQuery)
-}
-
+// ScanOptions defines options for scanning facts.
 type ScanOptions struct {
 	Subject   string
 	Predicate string
 	Object    string
-	Graph     string
 }
 
+// Scan returns facts matching the given options.
 func (kg *KnowledgeGraph) Scan(opts ScanOptions) ([]meb.Fact, error) {
 	var results []meb.Fact
 
@@ -49,7 +51,6 @@ func (kg *KnowledgeGraph) Scan(opts ScanOptions) ([]meb.Fact, error) {
 		opts.Subject,
 		opts.Predicate,
 		opts.Object,
-		opts.Graph,
 	)
 
 	for fact, err := range iter {
@@ -62,18 +63,26 @@ func (kg *KnowledgeGraph) Scan(opts ScanOptions) ([]meb.Fact, error) {
 	return results, nil
 }
 
+// ScanContext returns facts matching the given options, with context support.
+func (kg *KnowledgeGraph) ScanContext(ctx context.Context, opts ScanOptions) iter.Seq2[meb.Fact, error] {
+	return kg.store.ScanContext(ctx, opts.Subject, opts.Predicate, opts.Object)
+}
+
+// SemanticSearchOptions defines options for semantic search.
 type SemanticSearchOptions struct {
 	Embedding []float32
 	Threshold float32
 	Limit     int
 }
 
+// SearchResult represents a single semantic search result.
 type SearchResult struct {
 	ID      uint64
 	Score   float32
 	Subject string
 }
 
+// SemanticSearch performs vector similarity search on stored embeddings.
 func (kg *KnowledgeGraph) SemanticSearch(ctx context.Context, opts SemanticSearchOptions) ([]SearchResult, error) {
 	embedding := opts.Embedding
 
@@ -86,13 +95,15 @@ func (kg *KnowledgeGraph) SemanticSearch(ctx context.Context, opts SemanticSearc
 		limit = 10
 	}
 
-	vectorResults, err := kg.store.Vectors().Search(embedding, limit*10)
-	if err != nil {
-		return nil, fmt.Errorf("vector search failed: %w", err)
-	}
+	// Vector search returns iter.Seq2[vector.SearchResult, error]
+	vectorIter := kg.store.Vectors().Search(embedding, limit*10)
 
-	results := make([]SearchResult, 0, len(vectorResults))
-	for _, vr := range vectorResults {
+	var results []SearchResult
+	for vr, err := range vectorIter {
+		if err != nil {
+			return nil, fmt.Errorf("vector search failed: %w", err)
+		}
+
 		if opts.Threshold > 0 && vr.Score < opts.Threshold {
 			continue
 		}
@@ -116,85 +127,7 @@ func (kg *KnowledgeGraph) SemanticSearch(ctx context.Context, opts SemanticSearc
 	return results, nil
 }
 
-type CommunityResult struct {
-	Level          int
-	NumCommunities int
-}
-
-func (kg *KnowledgeGraph) DetectCommunities(graphID string) ([]CommunityResult, error) {
-	if graphID == "" {
-		graphID = "default"
-	}
-
-	hierarchy, err := kg.store.DetectCommunities(graphID)
-	if err != nil {
-		return nil, err
-	}
-
-	results := make([]CommunityResult, len(hierarchy.Levels))
-	for i, level := range hierarchy.Levels {
-		results[i] = CommunityResult{
-			Level:          i,
-			NumCommunities: len(level),
-		}
-	}
-
-	return results, nil
-}
-
-func (kg *KnowledgeGraph) GetCommunityMembers(graphID string, level uint8, commID uint64) ([]uint64, error) {
-	if graphID == "" {
-		graphID = "default"
-	}
-	return kg.store.GetCommunityMembers(graphID, level, commID)
-}
-
-func (kg *KnowledgeGraph) GetNodeCommunityPath(graphID string, nodeID uint64) ([]uint64, error) {
-	if graphID == "" {
-		graphID = "default"
-	}
-	return kg.store.GetNodeCommunityPath(graphID, nodeID)
-}
-
-type HybridClusterResult struct {
-	Clusters []ClusterInfo
-}
-
-type ClusterInfo struct {
-	ID      int
-	Members []string
-}
-
-func (kg *KnowledgeGraph) HybridCluster(ctx context.Context, embedding []float32, limit, numClusters int) (*HybridClusterResult, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	if numClusters <= 0 {
-		numClusters = 5
-	}
-
-	result, err := kg.store.ClusterWithHybrid("default", embedding, limit, numClusters)
-	if err != nil {
-		return nil, err
-	}
-
-	clusters := make([]ClusterInfo, len(result.Clusters))
-	for i, c := range result.Clusters {
-		members := make([]string, len(c.Members))
-		for j, m := range c.Members {
-			members[j] = fmt.Sprintf("%d", m)
-		}
-		clusters[i] = ClusterInfo{
-			ID:      i,
-			Members: members,
-		}
-	}
-
-	return &HybridClusterResult{
-		Clusters: clusters,
-	}, nil
-}
-
+// GetContent retrieves the content associated with a symbol ID.
 func (kg *KnowledgeGraph) GetContent(id string) ([]byte, error) {
 	dictID, found := kg.store.LookupID(id)
 	if !found {
@@ -203,46 +136,50 @@ func (kg *KnowledgeGraph) GetContent(id string) ([]byte, error) {
 	return kg.store.GetContent(dictID)
 }
 
+// LookupID resolves a string ID to its dictionary ID.
 func (kg *KnowledgeGraph) LookupID(id string) (uint64, bool) {
 	return kg.store.LookupID(id)
 }
 
+// ResolveID resolves a dictionary ID back to its string representation.
 func (kg *KnowledgeGraph) ResolveID(id uint64) (string, error) {
 	return kg.store.ResolveID(id)
 }
 
+// Vectors returns the vector registry for direct access.
 func (kg *KnowledgeGraph) Vectors() *vector.VectorRegistry {
 	return kg.store.Vectors()
 }
 
+// Store returns the underlying MEB store.
 func (kg *KnowledgeGraph) Store() *meb.MEBStore {
 	return kg.store
 }
 
+// GetFactsForSubject returns all facts with the given subject.
 func (kg *KnowledgeGraph) GetFactsForSubject(subject string) ([]meb.Fact, error) {
 	return kg.Scan(ScanOptions{
 		Subject: subject,
-		Graph:   "default",
 	})
 }
 
+// GetFactsByPredicate returns all facts with the given predicate.
 func (kg *KnowledgeGraph) GetFactsByPredicate(predicate string) ([]meb.Fact, error) {
 	return kg.Scan(ScanOptions{
 		Predicate: predicate,
-		Graph:     "default",
 	})
 }
 
+// GetIncomingEdges returns all facts where the given subject is the object.
 func (kg *KnowledgeGraph) GetIncomingEdges(subject string) ([]meb.Fact, error) {
 	return kg.Scan(ScanOptions{
 		Object: subject,
-		Graph:  "default",
 	})
 }
 
+// GetOutgoingEdges returns all facts where the given subject is the subject.
 func (kg *KnowledgeGraph) GetOutgoingEdges(subject string) ([]meb.Fact, error) {
 	return kg.Scan(ScanOptions{
 		Subject: subject,
-		Graph:   "default",
 	})
 }

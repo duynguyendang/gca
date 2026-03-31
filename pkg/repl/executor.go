@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/duynguyendang/gca/pkg/config"
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/meb"
 	"github.com/google/generative-ai-go/genai"
@@ -122,7 +123,7 @@ func executeWithTimeout(ctx context.Context, s *meb.MEBStore, query string, time
 	errChan := make(chan error, 1)
 
 	go func() {
-		results, err := s.Query(ctx, query)
+		results, err := gcamdb.Query(ctx, s, query)
 		if err != nil {
 			errChan <- err
 			return

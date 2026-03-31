@@ -266,7 +266,7 @@ func (ms *MCPServer) handleSearchNodes(ctx context.Context, request mcp.CallTool
 	// Use manual scan
 	var results []string
 	count := 0
-	for fact, err := range ms.store.Scan("", "defines", "", "") {
+	for fact, err := range ms.store.Scan("", "defines", "") {
 		if err != nil {
 			continue
 		}
@@ -292,8 +292,8 @@ func (ms *MCPServer) handleGetOutgoingEdges(ctx context.Context, request mcp.Cal
 	}
 
 	var formatted []string
-	// Scan(s=nodeID, p="", o="", g="")
-	for fact, err := range ms.store.Scan(nodeID, "", "", "") {
+	// Scan(s=nodeID, p="", o="")
+	for fact, err := range ms.store.Scan(nodeID, "", "") {
 		if err != nil {
 			continue
 		}
@@ -316,8 +316,8 @@ func (ms *MCPServer) handleGetIncomingEdges(ctx context.Context, request mcp.Cal
 	}
 
 	var formatted []string
-	// Scan(s="", p="", o=nodeID, g="")
-	for fact, err := range ms.store.Scan("", "", nodeID, "") {
+	// Scan(s="", p="", o=nodeID)
+	for fact, err := range ms.store.Scan("", "", nodeID) {
 		if err != nil {
 			continue
 		}
@@ -342,7 +342,7 @@ func (ms *MCPServer) handleScanFacts(ctx context.Context, request mcp.CallToolRe
 	count := 0
 	maxResults := 50 // Safety limit
 
-	for fact, err := range ms.store.Scan(s, p, o, "") {
+	for fact, err := range ms.store.Scan(s, p, o) {
 		if err != nil {
 			continue // Skip errors during iteration
 		}
@@ -379,7 +379,7 @@ func (ms *MCPServer) handleGetClusters(ctx context.Context, request mcp.CallTool
 	structuralPreds := []string{config.PredicateCalls, config.PredicateImports, config.PredicateDefines}
 
 	for _, pred := range structuralPreds {
-		for fact, err := range ms.store.Scan("", pred, "", "") {
+		for fact, err := range ms.store.Scan("", pred, "") {
 			if err != nil {
 				continue
 			}

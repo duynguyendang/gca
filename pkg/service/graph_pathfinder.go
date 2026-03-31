@@ -8,6 +8,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/meb"
 )
 
@@ -37,7 +38,7 @@ func (s *GraphService) GetFileGraph(ctx context.Context, projectID, fileID strin
 	linkMap := make(map[string]bool)
 
 	merge := func(query string) error {
-		results, err := store.Query(ctx, query)
+		results, err := gcamdb.Query(ctx, store, query)
 		if err != nil {
 			return err
 		}
@@ -240,7 +241,7 @@ func (s *GraphService) findFilesWithPrefix(store *meb.MEBStore, prefix string) [
 		return strings.ReplaceAll(p, ".", "/")
 	}
 
-	for fact, _ := range store.Scan("", config.PredicateInPackage, "", "") {
+	for fact, _ := range store.Scan("", config.PredicateInPackage, "") {
 		filePath := string(fact.Subject)
 		pkgName, ok := fact.Object.(string)
 		if !ok {
@@ -332,7 +333,7 @@ func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID strin
 		cleanCurrentFile := current.file
 
 		var definedSymbols []string
-		for fact, _ := range store.Scan(cleanCurrentFile, config.PredicateDefines, "", "") {
+		for fact, _ := range store.Scan(cleanCurrentFile, config.PredicateDefines, "") {
 			if sym, ok := fact.Object.(string); ok {
 				definedSymbols = append(definedSymbols, sym)
 			}
@@ -346,7 +347,7 @@ func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID strin
 		targetCalls := make(map[string]int)
 
 		for _, sym := range definedSymbols {
-			for fact, _ := range store.Scan(sym, config.PredicateCalls, "", "") {
+			for fact, _ := range store.Scan(sym, config.PredicateCalls, "") {
 				targetSymbol, ok := fact.Object.(string)
 				if !ok {
 					continue
@@ -453,7 +454,7 @@ func (s *GraphService) GetFlowPath(ctx context.Context, projectID, fromID, toID 
 
 		cleanCurrentID := strings.Trim(current.id, "\"")
 		q := fmt.Sprintf("triples(\"%s\", \"%s\", ?next)", cleanCurrentID, config.PredicateCalls)
-		results, err := store.Query(ctx, q)
+		results, err := gcamdb.Query(ctx, store, q)
 		if err != nil {
 			return nil, err
 		}

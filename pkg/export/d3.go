@@ -97,7 +97,7 @@ func (t *D3Transformer) detectInternalPrefixes() {
 	// These are all internal to the project
 	prefixSet := make(map[string]bool)
 
-	for fact, _ := range t.Store.Scan("", "hash", "", "") {
+	for fact, _ := range t.Store.Scan("", "hash", "") {
 		filePath := string(fact.Subject)
 
 		// Extract package prefix (first part before colon if symbol, or directory)
@@ -339,7 +339,7 @@ func (t *D3Transformer) getMetadata(id string) (string, string, string) {
 	// but Scan is efficient enough for typical export sizes.
 
 	// 1. Check for 'has_kind'
-	for fact, _ := range t.Store.Scan(id, "has_kind", "", "") {
+	for fact, _ := range t.Store.Scan(id, "has_kind", "") {
 		if str, ok := fact.Object.(string); ok {
 			kind = str
 			break // Take the first one
@@ -347,7 +347,7 @@ func (t *D3Transformer) getMetadata(id string) (string, string, string) {
 	}
 
 	// 2. Check for 'has_language'
-	for fact, _ := range t.Store.Scan(id, "has_language", "", "") {
+	for fact, _ := range t.Store.Scan(id, "has_language", "") {
 		if str, ok := fact.Object.(string); ok {
 			language = str
 			break

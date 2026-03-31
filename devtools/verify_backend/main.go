@@ -10,9 +10,10 @@ import (
 
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/ingest"
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/service"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/store"
-	"github.com/duynguyendang/gca/pkg/service"
 )
 
 // MockManager implements service.ProjectStoreManager
@@ -43,7 +44,6 @@ func main() {
 	}
 	defer s.Close()
 
-	// 2. Ingest gca and gca-fe
 	// 2. Ingest gca and gca-fe
 	cwd, _ := os.Getwd()
 	fmt.Printf("Working directory: %s\n", cwd)
@@ -136,7 +136,7 @@ func main() {
 		triples(?u, "has_role", "utility"),
 		NOT triples(?anyone, "calls", ?u)
 	`
-	resA, _ := s.Query(ctx, qA)
+	resA, _ := gcamdb.Query(ctx, s, qA)
 	if len(resA) > 0 {
 		fmt.Printf("Case A (Dead Code): PASS (%d orphaned utilities)\n", len(resA))
 	} else {
@@ -148,7 +148,7 @@ func main() {
 		triples(?h, "has_role", "api_handler"),
 		triples(?h, "exposes_model", ?m)
 	`
-	resB, _ := s.Query(ctx, qB)
+	resB, _ := gcamdb.Query(ctx, s, qB)
 	if len(resB) > 0 {
 		fmt.Printf("Case B (API Inventory): PASS (%d handler-model pairs)\n", len(resB))
 	} else {
@@ -157,7 +157,7 @@ func main() {
 
 	// Case C: Package Integrity
 	qC := `triples(?s, "in_package", ?p)`
-	resC, _ := s.Query(ctx, qC)
+	resC, _ := gcamdb.Query(ctx, s, qC)
 	if len(resC) > 500 {
 		fmt.Printf("Case C (Package Integrity): PASS (%d symbols covered)\n", len(resC))
 	} else {

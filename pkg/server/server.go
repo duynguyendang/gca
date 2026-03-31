@@ -74,6 +74,7 @@ type Server struct {
 // NewServer creates a new Server instance.
 func NewServer(mgr *manager.StoreManager, sourceDir string, apiKey string) *Server {
 	r := gin.Default()
+	r.Use(RequestIDMiddleware())
 	r.Use(CORSMiddleware())
 	r.Use(RateLimitMiddleware())
 	r.Use(ValidationMiddleware())

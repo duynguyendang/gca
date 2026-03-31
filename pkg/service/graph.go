@@ -10,6 +10,7 @@ import (
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/duynguyendang/gca/pkg/export"
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/meb"
 )
 
@@ -57,7 +58,7 @@ func (s *GraphService) ExportGraph(ctx context.Context, projectID, query string,
 	}
 
 	// 1. Execute Query
-	results, err := store.Query(ctx, query)
+	results, err := gcamdb.Query(ctx, store, query)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errors.ErrInvalidInput, err)
 	}

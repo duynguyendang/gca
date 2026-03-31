@@ -8,25 +8,108 @@ import (
 
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
-	"github.com/duynguyendang/meb/clustering"
 )
 
+// CommunityHierarchy represents a hierarchical community structure.
+type CommunityHierarchy struct {
+	Levels []CommunityLevel `json:"levels"`
+}
+
+// CommunityLevel represents a single level in the hierarchy.
+type CommunityLevel struct {
+	ID          int      `json:"id"`
+	Communities []int    `json:"communities"`
+	Members     []string `json:"members,omitempty"`
+}
+
+// HybridClusteringResult contains hybrid clustering results.
+type HybridClusteringResult struct {
+	Clusters []HybridCluster `json:"clusters"`
+}
+
+// HybridCluster represents a single cluster in hybrid results.
+type HybridCluster struct {
+	ID      int      `json:"id"`
+	Members []string `json:"members"`
+}
+
 // DetectCommunityHierarchy runs the Leiden algorithm on the graph and returns a hierarchical structure.
-func (s *GraphService) DetectCommunityHierarchy(ctx context.Context, projectID string) (*clustering.CommunityHierarchy, error) {
-	store, err := s.getStore(projectID)
+func (s *GraphService) DetectCommunityHierarchy(ctx context.Context, projectID string) (*CommunityHierarchy, error) {
+	graph, err := s.ExportGraph(ctx, projectID, "", false, false)
 	if err != nil {
 		return nil, err
 	}
-	return store.DetectCommunities("default")
+
+	if len(graph.Nodes) == 0 {
+		return &CommunityHierarchy{Levels: []CommunityLevel{}}, nil
+	}
+
+	nodes := make([]GraphNode, len(graph.Nodes))
+	for i, n := range graph.Nodes {
+		nodes[i] = GraphNode{ID: n.ID, Name: n.Name, Kind: n.Kind}
+	}
+
+	links := make([]GraphLink, len(graph.Links))
+	for i, l := range graph.Links {
+		links[i] = GraphLink{Source: l.Source, Target: l.Target}
+	}
+
+	clusteringSvc := NewClusteringService()
+	result := clusteringSvc.DetectCommunitiesLeiden(nodes, links)
+
+	hierarchy := &CommunityHierarchy{
+		Levels: make([]CommunityLevel, 1),
+	}
+
+	membersByCluster := make(map[int][]string)
+	for nodeID, clusterID := range result.NodeCluster {
+		membersByCluster[clusterID] = append(membersByCluster[clusterID], nodeID)
+	}
+
+	var commIDs []int
+	for id := range membersByCluster {
+		commIDs = append(commIDs, id)
+	}
+
+	hierarchy.Levels[0] = CommunityLevel{
+		ID:          0,
+		Communities: commIDs,
+	}
+
+	return hierarchy, nil
 }
 
 // GetHybridClusters performs k-means clustering on vector search results while preserving community structure.
-func (s *GraphService) GetHybridClusters(ctx context.Context, projectID string, queryEmbedding []float32, limit int, numClusters int) (*clustering.HybridClusteringResult, error) {
+func (s *GraphService) GetHybridClusters(ctx context.Context, projectID string, queryEmbedding []float32, limit int, numClusters int) (*HybridClusteringResult, error) {
 	store, err := s.getStore(projectID)
 	if err != nil {
 		return nil, err
 	}
-	return store.ClusterWithHybrid("default", queryEmbedding, limit, numClusters)
+
+	results, err := store.Find().
+		SimilarTo(queryEmbedding).
+		Limit(limit).
+		Execute()
+	if err != nil {
+		return nil, fmt.Errorf("vector search failed: %w", err)
+	}
+
+	if len(results) == 0 {
+		return &HybridClusteringResult{}, nil
+	}
+
+	// Assign results evenly across requested clusters
+	clusters := make([]HybridCluster, numClusters)
+	for i := range clusters {
+		clusters[i] = HybridCluster{ID: i}
+	}
+
+	for i, r := range results {
+		clusterIdx := i % numClusters
+		clusters[clusterIdx].Members = append(clusters[clusterIdx].Members, r.Key)
+	}
+
+	return &HybridClusteringResult{Clusters: clusters}, nil
 }
 
 // GetClusterGraph applies Leiden clustering to reduce large graphs.

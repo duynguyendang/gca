@@ -18,10 +18,10 @@ steps:
       - 'managed'
       - '--memory'
       - '1Gi'
+      - '--port'
+      - '8080'
       - '--set-env-vars'
       - 'LOW_MEM=true'
-      - '--set-secrets'
-      - 'GEMINI_API_KEY=GEMINI_KEY:latest,GEMINI_MODEL=GEMINI_MODEL:latest'
       - '--allow-unauthenticated'
 
 images:

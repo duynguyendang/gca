@@ -2,10 +2,7 @@ package ingest
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -75,20 +72,17 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 				Subject:   string(projectMeta.Name),
 				Predicate: config.PredicateType,
 				Object:    "project",
-				Graph:     config.DefaultGraph,
 			})
 			s.AddFact(meb.Fact{
 				Subject:   string(projectMeta.Name),
 				Predicate: "description",
 				Object:    projectMeta.Description,
-				Graph:     config.DefaultGraph,
 			})
 			for _, tag := range projectMeta.Tags {
 				s.AddFact(meb.Fact{
 					Subject:   string(projectMeta.Name),
 					Predicate: config.PredicateHasTag,
 					Object:    tag,
-					Graph:     config.DefaultGraph,
 				})
 			}
 		}
@@ -312,9 +306,6 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 		}
 	}
 
-	// Use file-specific graph context for efficient cleanup
-	fileGraph := getFileGraphName(relPath)
-
 	finalFacts := make([]meb.Fact, 0, len(bundle.Facts)+2)
 
 	// Inject Role Tags based on path or metadata
@@ -323,7 +314,7 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 	if meta != nil && meta.Components != nil {
 		for _, comp := range meta.Components {
 			if strings.Contains(relPath, comp.Path) {
-				finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateHasTag, Object: comp.Type, Graph: fileGraph})
+				finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateHasTag, Object: comp.Type})
 				tagged = true
 				break // Assume one component per file for now
 			}
@@ -333,15 +324,15 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 	if !tagged {
 		if strings.HasSuffix(relPath, ".go") {
 			// fmt.Printf("DEBUG: Tagging %s as backend\n", relPath)
-			finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateHasTag, Object: "backend", Graph: fileGraph})
+			finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateHasTag, Object: "backend"})
 		} else if strings.HasSuffix(relPath, ".ts") || strings.HasSuffix(relPath, ".tsx") {
 			// fmt.Printf("DEBUG: Tagging %s as frontend\n", relPath)
-			finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateHasTag, Object: "frontend", Graph: fileGraph})
+			finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateHasTag, Object: "frontend"})
 		}
 	}
 
 	// Make sure file has type "file"
-	finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateType, Object: config.SymbolKindFile, Graph: fileGraph})
+	finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateType, Object: config.SymbolKindFile})
 
 	for _, f := range bundle.Facts {
 		if f.Predicate == config.PredicateCalls {
@@ -351,34 +342,10 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 				}
 			}
 		}
-		// Use file-specific graph context for all facts
-		f.Graph = fileGraph
 		finalFacts = append(finalFacts, f)
 	}
 
 	return s.AddFactBatch(finalFacts)
-}
-
-func calculateHash(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	io.Copy(h, f)
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// hashSymbolID converts a symbol ID string to uint64 for vector storage.
-// Uses FNV-1a hash for fast, deterministic conversion.
-func hashSymbolID(id string) uint64 {
-	h := uint64(14695981039346656037) // FNV offset basis
-	for i := 0; i < len(id); i++ {
-		h ^= uint64(id[i])
-		h *= 1099511628211 // FNV prime
-	}
-	return h
 }
 
 func isSupportedFile(path string) bool {
@@ -387,20 +354,26 @@ func isSupportedFile(path string) bool {
 }
 
 func TagRoles(s *meb.MEBStore) error {
-	ctx := context.Background()
-	// Tag API handlers
-	res, _ := s.Query(ctx, fmt.Sprintf(`triples(?url, "%s", ?h)`, config.PredicateHandledBy))
-	for _, r := range res {
-		h, _ := r["?h"].(string)
-		s.AddFact(meb.Fact{Subject: string(h), Predicate: config.PredicateHasRole, Object: config.RoleAPIHandler, Graph: "virtual"})
+	for fact, err := range s.Scan("", config.PredicateHandledBy, "") {
+		if err != nil {
+			continue
+		}
+		h, ok := fact.Object.(string)
+		if !ok {
+			continue
+		}
+		s.AddFact(meb.Fact{Subject: string(h), Predicate: config.PredicateHasRole, Object: config.RoleAPIHandler})
 	}
-	// Tag Contracts
-	res, _ = s.Query(ctx, fmt.Sprintf(`triples(?s, "%s", ?pkg)`, config.PredicateInPackage))
-	for _, r := range res {
-		p, _ := r["?pkg"].(string)
-		sID, _ := r["?s"].(string)
+	for fact, err := range s.Scan("", config.PredicateInPackage, "") {
+		if err != nil {
+			continue
+		}
+		p, ok := fact.Object.(string)
+		if !ok {
+			continue
+		}
 		if strings.Contains(p, "types") || strings.Contains(p, "models") || strings.Contains(p, "meb") || strings.Contains(p, "ast") {
-			s.AddFact(meb.Fact{Subject: string(sID), Predicate: config.PredicateHasRole, Object: config.RoleDataContract, Graph: "virtual"})
+			s.AddFact(meb.Fact{Subject: fact.Subject, Predicate: config.PredicateHasRole, Object: config.RoleDataContract})
 		}
 	}
 	return nil

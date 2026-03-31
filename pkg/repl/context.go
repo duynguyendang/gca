@@ -78,7 +78,7 @@ func extractPackages(s *meb.MEBStore) ([]string, error) {
 	packageSet := make(map[string]bool)
 
 	// Scan for "defines" facts
-	for fact, err := range s.Scan("", "defines", "", "") {
+	for fact, err := range s.Scan("", "defines", "") {
 		if err != nil {
 			// Skip errors (e.g., predicate not found)
 			continue
@@ -152,7 +152,7 @@ func extractEntryPoints(s *meb.MEBStore) ([]string, error) {
 	// Limit to first 50 entry points to be safe.
 
 	count := 0
-	for fact, err := range s.Scan("", "defines", "", "") {
+	for fact, err := range s.Scan("", "defines", "") {
 		if err != nil {
 			continue
 		}
