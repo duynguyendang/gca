@@ -53,7 +53,7 @@ func TestServer_MultiProject(t *testing.T) {
 	defer mgr.CloseAll()
 
 	// Initialize Server
-	s := NewServer(mgr, tmpDir, "")
+	s := NewServer(mgr, tmpDir)
 
 	// Test GET /api/v1/projects
 	t.Run("ListProjects", func(t *testing.T) {

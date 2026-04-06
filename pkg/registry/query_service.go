@@ -29,27 +29,27 @@ type ExecuteQueryRequest struct {
 
 // ExecuteQueryResponse represents the response from a query execution
 type ExecuteQueryResponse struct {
-	QueryName  string                 `json:"query_name"`
-	Query      string                 `json:"query"`
-	Results    []map[string]any       `json:"results"`
-	Count      int                    `json:"count"`
-	ExecutionTime int64               `json:"execution_time_ms"`
+	QueryName     string           `json:"query_name"`
+	Query         string           `json:"query"`
+	Results       []map[string]any `json:"results"`
+	Count         int              `json:"count"`
+	ExecutionTime int64            `json:"execution_time_ms"`
 }
 
 // ListQueriesResponse represents the response from listing queries
 type ListQueriesResponse struct {
-	Queries    []*QueryDefinition `json:"queries"`
+	Queries    []*QueryDefinition  `json:"queries"`
 	Categories map[string][]string `json:"categories"`
 	Total      int                 `json:"total"`
 }
 
 // RegisterQueryRequest represents a request to register a new query
 type RegisterQueryRequest struct {
-	Name        string            `json:"name" binding:"required"`
-	Description string            `json:"description"`
-	Category    string            `json:"category" binding:"required"`
-	Tier        int               `json:"tier" binding:"required,min=1,max=3"`
-	Template    string            `json:"template" binding:"required"`
+	Name        string           `json:"name" binding:"required"`
+	Description string           `json:"description"`
+	Category    string           `json:"category" binding:"required"`
+	Tier        int              `json:"tier" binding:"required,min=1,max=3"`
+	Template    string           `json:"template" binding:"required"`
 	Parameters  []QueryParameter `json:"parameters"`
 	Examples    []QueryExample   `json:"examples"`
 }

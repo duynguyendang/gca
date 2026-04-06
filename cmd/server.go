@@ -29,7 +29,7 @@ and AI-powered code analysis.`,
 		mgr := manager.NewStoreManager(dataDir, getMemoryProfile(), true)
 		defer mgr.CloseAll()
 
-		srv := server.NewServer(mgr, sourceDir, geminiKey)
+		srv := server.NewServer(mgr, sourceDir)
 		addr := ":" + port
 
 		httpSrv := &http.Server{

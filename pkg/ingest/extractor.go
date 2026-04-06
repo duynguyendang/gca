@@ -277,8 +277,8 @@ func (e *TreeSitterExtractor) processSymbols(bundle *AnalysisBundle, symbols []S
 			Content: []byte(sym.Content),
 			Metadata: map[string]any{
 				"file":       relPath,
-				"start_line": sym.StartLine,
-				"end_line":   sym.EndLine,
+				"start_line": int32(sym.StartLine),
+				"end_line":   int32(sym.EndLine),
 				"package":    filePackage,
 				"tags":       tags,
 			},

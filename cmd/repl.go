@@ -3,8 +3,11 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/duynguyendang/gca/pkg/repl"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/spf13/cobra"
 )
 
@@ -46,11 +49,17 @@ Arguments:
 
 		// Configure REPL
 		replCfg := repl.DefaultConfig()
-		replCfg.GeminiAPIKey = geminiKey
+		replCfg.LLMAPIKey = os.Getenv("LLM_API_KEY")
 		replCfg.ReadOnly = true
 
-		if geminiModel != "" {
-			replCfg.Model = geminiModel
+		if model := os.Getenv("LLM_MODEL"); model != "" {
+			replCfg.Model = model
+		}
+
+		// Initialize Genkit once for the REPL session
+		if replCfg.LLMAPIKey != "" {
+			g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: replCfg.LLMAPIKey}))
+			replCfg.Genkit = g
 		}
 
 		// Start REPL

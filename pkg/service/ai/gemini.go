@@ -15,24 +15,26 @@ import (
 	"github.com/duynguyendang/gca/pkg/ooda"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/meb"
-	"github.com/google/generative-ai-go/genai"
-	"google.golang.org/api/option"
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/anthropic"
+	"github.com/firebase/genkit/go/plugins/compat_oai/openai"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/ollama"
 )
 
-// ProjectStoreManager interface abstraction to avoid circular dependency if possible,
-// or just use the one from service package if it's exported.
-// Since we are in `pkg/service/ai`, we can't import `pkg/service`.
-// We will define a local interface or rely on `meb.MEBStore`.
 type ProjectStoreManager interface {
 	GetStore(projectID string) (*meb.MEBStore, error)
 }
 
-type GeminiService struct {
-	client         *genai.Client
-	embeddingModel *genai.EmbeddingModel
+type AIService struct {
+	g              *genkit.Genkit
 	manager        ProjectStoreManager
+	defaultModel   string
+	embeddingModel string
+	provider       string
 
-	// Loaded Prompts - All AI tasks use external prompt files
 	DatalogPrompt        *prompts.Prompt
 	ChatPrompt           *prompts.Prompt
 	PathNarrativePrompt  *prompts.Prompt
@@ -44,23 +46,74 @@ type GeminiService struct {
 	DefaultContextPrompt *prompts.Prompt
 }
 
-// NewGeminiService creates a new Gemini AI service with the given API key and store manager.
-// It loads all required prompt files from the prompts directory.
-// Returns a configured GeminiService or an error if initialization fails.
-func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreManager) (*GeminiService, error) {
-	if apiKey == "" {
-		apiKey = os.Getenv("GEMINI_API_KEY")
-	}
-	if apiKey == "" {
-		return nil, fmt.Errorf("GEMINI_API_KEY not found")
+func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService, error) {
+	provider := os.Getenv("LLM_PROVIDER")
+	if provider == "" {
+		provider = "googleai"
 	}
 
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create gemini client: %w", err)
+	apiKey := os.Getenv("LLM_API_KEY")
+	if apiKey == "" && provider != "ollama" {
+		return nil, fmt.Errorf("LLM_API_KEY not found")
 	}
 
-	// Load all prompts from external files using config paths
+	var plugins []api.Plugin
+
+	switch provider {
+	case "googleai", "gemini":
+		plugins = append(plugins, &googlegenai.GoogleAI{APIKey: apiKey})
+	case "openai":
+		plugins = append(plugins, &openai.OpenAI{APIKey: apiKey})
+	case "anthropic":
+		plugins = append(plugins, &anthropic.Anthropic{APIKey: apiKey})
+	case "ollama":
+		addr := os.Getenv("OLLAMA_ADDRESS")
+		if addr == "" {
+			addr = "http://localhost:11434"
+		}
+		plugins = append(plugins, &ollama.Ollama{ServerAddress: addr})
+	default:
+		plugins = append(plugins, &googlegenai.GoogleAI{APIKey: apiKey})
+	}
+
+	defaultModel := os.Getenv("LLM_MODEL")
+	if defaultModel == "" {
+		switch provider {
+		case "googleai", "gemini":
+			defaultModel = "googleai/gemini-2.5-flash"
+		case "openai":
+			defaultModel = "openai/gpt-4o"
+		case "anthropic":
+			defaultModel = "anthropic/claude-3-5-sonnet-20241022"
+		case "ollama":
+			defaultModel = "ollama/llama3.2"
+		default:
+			defaultModel = "googleai/gemini-2.5-flash"
+		}
+	} else if !strings.Contains(defaultModel, "/") {
+		defaultModel = provider + "/" + defaultModel
+	}
+
+	embeddingModel := os.Getenv("EMBEDDING_MODEL")
+	if embeddingModel == "" {
+		switch provider {
+		case "googleai", "gemini":
+			embeddingModel = "googleai/text-embedding-004"
+		case "openai":
+			embeddingModel = "openai/text-embedding-3-large"
+		case "anthropic":
+			embeddingModel = ""
+		case "ollama":
+			embeddingModel = "ollama/nomic-embed-text"
+		default:
+			embeddingModel = "googleai/text-embedding-004"
+		}
+	} else if !strings.Contains(embeddingModel, "/") {
+		embeddingModel = provider + "/" + embeddingModel
+	}
+
+	g := genkit.Init(ctx, genkit.WithPlugins(plugins...), genkit.WithDefaultModel(defaultModel))
+
 	loadPrompt := func(name string) *prompts.Prompt {
 		path, ok := config.PromptPaths[name]
 		if !ok {
@@ -75,10 +128,14 @@ func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreMa
 		return p
 	}
 
-	return &GeminiService{
-		client:               client,
-		embeddingModel:       client.EmbeddingModel("gemini-embedding-001"),
+	log.Printf("AI Service initialized: provider=%s, model=%s, embedding=%s", provider, defaultModel, embeddingModel)
+
+	return &AIService{
+		g:                    g,
 		manager:              manager,
+		defaultModel:         defaultModel,
+		embeddingModel:       embeddingModel,
+		provider:             provider,
 		DatalogPrompt:        loadPrompt("datalog"),
 		ChatPrompt:           loadPrompt("chat"),
 		PathNarrativePrompt:  loadPrompt("path_narrative"),
@@ -91,53 +148,66 @@ func NewGeminiService(ctx context.Context, apiKey string, manager ProjectStoreMa
 	}, nil
 }
 
-// getModel fetches the GenerativeModel dynamically so changes to GEMINI_MODEL
-// take effect without needing to restart the application.
-func (s *GeminiService) getModel() *genai.GenerativeModel {
-	modelName := os.Getenv("GEMINI_MODEL")
-	if modelName == "" {
-		modelName = "gemini-3-flash-preview"
+func (s *AIService) GenerateText(ctx context.Context, prompt string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	log.Printf("Sending Prompt to LLM (%s):\n%s", s.provider, prompt)
+
+	resp, err := genkit.Generate(ctx, s.g,
+		ai.WithModelName(s.defaultModel),
+		ai.WithPrompt(prompt),
+	)
+	if err != nil {
+		log.Printf("LLM Request Failed:\n%s\nError: %v", prompt, err)
+		return "", err
 	}
-	model := s.client.GenerativeModel(modelName)
-	model.SetTemperature(0.2) // Low temperature for technical accuracy
-	return model
+
+	return resp.Text(), nil
 }
 
-// GetEmbedding generates an embedding vector for the given text using Gemini's embedding model.
-// The embedding can be used for semantic search and similarity comparisons.
-// Returns a 768-dimensional float32 vector or an error if generation fails.
-func (s *GeminiService) GetEmbedding(ctx context.Context, text string) ([]float32, error) {
-	if s.embeddingModel == nil {
-		return nil, fmt.Errorf("embedding model not initialized")
+func (s *AIService) GetEmbedding(ctx context.Context, text string) ([]float32, error) {
+	if s.embeddingModel == "" {
+		return nil, fmt.Errorf("embedding model not configured for provider %s", s.provider)
 	}
 	if text == "" {
 		return nil, fmt.Errorf("empty text for embedding")
 	}
 
-	res, err := s.embeddingModel.EmbedContent(ctx, genai.Text(text))
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	resp, err := genkit.Embed(ctx, s.g,
+		ai.WithEmbedderName(s.embeddingModel),
+		ai.WithTextDocs(text),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("embedding generation failed: %w", err)
 	}
 
-	if res.Embedding == nil || len(res.Embedding.Values) == 0 {
+	if len(resp.Embeddings) == 0 || len(resp.Embeddings[0].Embedding) == 0 {
 		return nil, fmt.Errorf("no embedding values returned")
 	}
 
-	return res.Embedding.Values, nil
+	values := resp.Embeddings[0].Embedding
+	result := make([]float32, len(values))
+	for i, v := range values {
+		result[i] = float32(v)
+	}
+	return result, nil
 }
 
-// Ask processes a user query, optionally focusing on a specific symbol.
-// AIRequest defines the structure for AI operations
 type AIRequest struct {
-	ProjectID string      `json:"project_id"`
-	Task      string      `json:"task"` // "chat", "insight", "prune", "summary", "path", etc.
-	Query     string      `json:"query"`
-	SymbolID  string      `json:"symbol_id"`
-	Data      interface{} `json:"data"` // Flexible data payload (node list, etc.)
+	ProjectID        string      `json:"project_id"`
+	Task             string      `json:"task"`
+	Query            string      `json:"query"`
+	SymbolID         string      `json:"symbol_id"`
+	Data             interface{} `json:"data"`
+	ContextMode      string      `json:"context_mode,omitempty"`
+	QueryInstruction string      `json:"query_instruction,omitempty"`
 }
 
-// HandleRequest dispatchs the AI request based on the Task type
-func (s *GeminiService) HandleRequest(ctx context.Context, req AIRequest) (string, error) {
+func (s *AIService) HandleRequest(ctx context.Context, req AIRequest) (string, error) {
 	store, err := s.manager.GetStore(req.ProjectID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get store: %w", err)
@@ -148,37 +218,12 @@ func (s *GeminiService) HandleRequest(ctx context.Context, req AIRequest) (strin
 		return "", fmt.Errorf("failed to build prompt: %w", err)
 	}
 
-	// Log prompt length for debugging
 	log.Printf("Sending AI Prompt (Task: %s, Length: %d chars)", req.Task, len(prompt))
 
-	// Add timeout to prevent hanging, extended for Gemini 3
-	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
-	defer cancel()
-
-	log.Printf("Sending Prompt to Gemini (%s):\n%s", req.Task, prompt)
-
-	resp, err := s.getModel().GenerateContent(ctx, genai.Text(prompt))
-	if err != nil {
-		log.Printf("Gemini Request Failed:\n%s\nError: %v", prompt, err)
-		return "", err
-	}
-
-	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
-		log.Printf("Gemini returned empty candidates")
-		return "No response from AI.", nil
-	}
-
-	var sb strings.Builder
-	for _, part := range resp.Candidates[0].Content.Parts {
-		if txt, ok := part.(genai.Text); ok {
-			sb.WriteString(string(txt))
-		}
-	}
-
-	return sb.String(), nil
+	return s.GenerateText(ctx, prompt)
 }
 
-func (s *GeminiService) buildTaskPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
+func (s *AIService) buildTaskPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
 	switch req.Task {
 	case "insight":
 		return s.buildInsightPrompt(ctx, store, req)
@@ -202,18 +247,24 @@ func (s *GeminiService) buildTaskPrompt(ctx context.Context, store *meb.MEBStore
 		return s.buildSmartSearchPrompt(req)
 	case "multi_file_summary":
 		return s.buildMultiFileSummaryPrompt(ctx, store, req)
+	case "refactor":
+		return s.buildRefactorPrompt(ctx, store, req)
+	case "test_generation":
+		return s.buildTestGenerationPrompt(ctx, store, req)
+	case "security_audit":
+		return s.buildSecurityAuditPrompt(ctx, store, req)
+	case "performance":
+		return s.buildPerformancePrompt(ctx, store, req)
 	default:
 		return s.BuildPrompt(ctx, store, req.Query, req.SymbolID)
 	}
 }
 
-// buildInsightPrompt builds prompt for node insight analysis.
-func (s *GeminiService) buildInsightPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
+func (s *AIService) buildInsightPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
 	return s.BuildPrompt(ctx, store, fmt.Sprintf("Analyze the architectural role of component %s. Provide a comprehensive analysis including role, interactions, and design patterns.", req.SymbolID), req.SymbolID)
 }
 
-// buildChatPrompt builds prompt for general code analysis.
-func (s *GeminiService) buildChatPrompt(req AIRequest) (string, error) {
+func (s *AIService) buildChatPrompt(req AIRequest) (string, error) {
 	context := formatNodesWithCode(req.Data, 20)
 	if s.ChatPrompt != nil {
 		return s.ChatPrompt.Execute(map[string]interface{}{
@@ -224,8 +275,7 @@ func (s *GeminiService) buildChatPrompt(req AIRequest) (string, error) {
 	return fmt.Sprintf("%s\n\n%s", req.Query, context), nil
 }
 
-// buildPrunePrompt builds prompt for selecting top architectural nodes.
-func (s *GeminiService) buildPrunePrompt(req AIRequest) (string, error) {
+func (s *AIService) buildPrunePrompt(req AIRequest) (string, error) {
 	nodes := formatNodeList(req.Data)
 	if s.PrunePrompt != nil {
 		return s.PrunePrompt.Execute(map[string]interface{}{
@@ -235,20 +285,17 @@ func (s *GeminiService) buildPrunePrompt(req AIRequest) (string, error) {
 	return "", fmt.Errorf("prune.prompt not loaded")
 }
 
-// buildSummaryPrompt builds prompt for architecture summary.
-func (s *GeminiService) buildSummaryPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
+func (s *AIService) buildSummaryPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
 	nodes := formatNodesSimple(req.Data, 15)
 	return s.BuildPrompt(ctx, store, fmt.Sprintf("Provide a 2-3 sentence architectural summary for file \"%s\".\nSymbols:\n%s", req.Query, nodes), "")
 }
 
-// buildNarrativePrompt builds prompt for architecture flow narrative.
-func (s *GeminiService) buildNarrativePrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
+func (s *AIService) buildNarrativePrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
 	names := extractNodeNames(req.Data)
 	return s.BuildPrompt(ctx, store, fmt.Sprintf("Explain the high-level logic flow for these components: %s. Keep it concise.", names), "")
 }
 
-// buildResolveSymbolPrompt builds prompt for symbol resolution.
-func (s *GeminiService) buildResolveSymbolPrompt(req AIRequest) (string, error) {
+func (s *AIService) buildResolveSymbolPrompt(req AIRequest) (string, error) {
 	candidates := extractStringList(req.Data, 30)
 	if s.ResolveSymbolPrompt != nil {
 		return s.ResolveSymbolPrompt.Execute(map[string]interface{}{
@@ -259,8 +306,7 @@ func (s *GeminiService) buildResolveSymbolPrompt(req AIRequest) (string, error) 
 	return "", fmt.Errorf("resolve_symbol.prompt not loaded")
 }
 
-// buildPathEndpointsPrompt builds prompt for path endpoints.
-func (s *GeminiService) buildPathEndpointsPrompt(req AIRequest) (string, error) {
+func (s *AIService) buildPathEndpointsPrompt(req AIRequest) (string, error) {
 	candidates := extractStringList(req.Data, 50)
 	if s.PathEndpointsPrompt != nil {
 		return s.PathEndpointsPrompt.Execute(map[string]interface{}{
@@ -271,8 +317,7 @@ func (s *GeminiService) buildPathEndpointsPrompt(req AIRequest) (string, error) 
 	return "", fmt.Errorf("path_endpoints.prompt not loaded")
 }
 
-// buildDatalogPrompt builds prompt for datalog queries.
-func (s *GeminiService) buildDatalogPrompt(req AIRequest) (string, error) {
+func (s *AIService) buildDatalogPrompt(req AIRequest) (string, error) {
 	predicatesList := formatPredicatesList(req.Data)
 	if s.DatalogPrompt != nil {
 		return s.DatalogPrompt.Execute(map[string]interface{}{
@@ -284,8 +329,7 @@ func (s *GeminiService) buildDatalogPrompt(req AIRequest) (string, error) {
 	return "", fmt.Errorf("datalog.prompt not loaded")
 }
 
-// buildPathNarrativePrompt builds prompt for path narrative.
-func (s *GeminiService) buildPathNarrativePrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
+func (s *AIService) buildPathNarrativePrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
 	pathStr := extractPathString(req.Data)
 	if s.PathNarrativePrompt != nil {
 		promptStr, err := s.PathNarrativePrompt.Execute(map[string]interface{}{
@@ -299,8 +343,7 @@ func (s *GeminiService) buildPathNarrativePrompt(ctx context.Context, store *meb
 	return s.BuildPrompt(ctx, store, fmt.Sprintf("Explain flow: %s. Path: %s", req.Query, pathStr), "")
 }
 
-// buildSmartSearchPrompt builds prompt for smart search analysis.
-func (s *GeminiService) buildSmartSearchPrompt(req AIRequest) (string, error) {
+func (s *AIService) buildSmartSearchPrompt(req AIRequest) (string, error) {
 	nodes := formatGraphResults(req.Data, "nodes")
 	links := formatGraphResults(req.Data, "links")
 
@@ -314,8 +357,7 @@ func (s *GeminiService) buildSmartSearchPrompt(req AIRequest) (string, error) {
 	return "", fmt.Errorf("smart_search.prompt not loaded")
 }
 
-// buildMultiFileSummaryPrompt builds prompt for multi-file summary.
-func (s *GeminiService) buildMultiFileSummaryPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
+func (s *AIService) buildMultiFileSummaryPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
 	fileIDs := make([]string, 0)
 	if list, ok := req.Data.([]interface{}); ok {
 		for _, item := range list {
@@ -361,7 +403,50 @@ func (s *GeminiService) buildMultiFileSummaryPrompt(ctx context.Context, store *
 	return "", fmt.Errorf("multi_file.prompt not loaded")
 }
 
-// Helper: Format nodes with full code for chat context
+func (s *AIService) buildRefactorPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
+	var sb strings.Builder
+	sb.WriteString("You are an expert Software Architect. Analyze the following code and suggest refactoring improvements.\n\n")
+	sb.WriteString(fmt.Sprintf("## Query: %s\n\n", req.Query))
+	if err := s.appendSymbolContext(ctx, store, req.SymbolID, &sb); err != nil {
+		sb.WriteString("No code context available.\n")
+	}
+	sb.WriteString("\nProvide specific, actionable refactoring suggestions with code examples.")
+	return sb.String(), nil
+}
+
+func (s *AIService) buildTestGenerationPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
+	var sb strings.Builder
+	sb.WriteString("You are an expert Software Engineer. Generate comprehensive unit tests for the following code.\n\n")
+	sb.WriteString(fmt.Sprintf("## Query: %s\n\n", req.Query))
+	if err := s.appendSymbolContext(ctx, store, req.SymbolID, &sb); err != nil {
+		sb.WriteString("No code context available.\n")
+	}
+	sb.WriteString("\nGenerate tests covering: normal cases, edge cases, and error conditions.")
+	return sb.String(), nil
+}
+
+func (s *AIService) buildSecurityAuditPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
+	var sb strings.Builder
+	sb.WriteString("You are a Security Expert. Perform a security audit on the following code.\n\n")
+	sb.WriteString(fmt.Sprintf("## Query: %s\n\n", req.Query))
+	if err := s.appendSymbolContext(ctx, store, req.SymbolID, &sb); err != nil {
+		sb.WriteString("No code context available.\n")
+	}
+	sb.WriteString("\nIdentify potential vulnerabilities including: injection, authentication, authorization, data exposure, and configuration issues.")
+	return sb.String(), nil
+}
+
+func (s *AIService) buildPerformancePrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
+	var sb strings.Builder
+	sb.WriteString("You are a Performance Engineer. Analyze the following code for performance issues.\n\n")
+	sb.WriteString(fmt.Sprintf("## Query: %s\n\n", req.Query))
+	if err := s.appendSymbolContext(ctx, store, req.SymbolID, &sb); err != nil {
+		sb.WriteString("No code context available.\n")
+	}
+	sb.WriteString("\nIdentify bottlenecks, unnecessary allocations, inefficient algorithms, and suggest optimizations.")
+	return sb.String(), nil
+}
+
 func formatNodesWithCode(data interface{}, limit int) string {
 	list, ok := data.([]interface{})
 	if !ok {
@@ -395,7 +480,6 @@ func formatNodesWithCode(data interface{}, limit int) string {
 	return sb.String()
 }
 
-// Helper: Format nodes as simple list (name + kind)
 func formatNodesSimple(data interface{}, limit int) string {
 	list, ok := data.([]interface{})
 	if !ok {
@@ -415,7 +499,6 @@ func formatNodesSimple(data interface{}, limit int) string {
 	return sb.String()
 }
 
-// Helper: Format predicates list for datalog prompt
 func formatPredicatesList(data interface{}) string {
 	if str, ok := data.(string); ok {
 		return str
@@ -433,7 +516,6 @@ func formatPredicatesList(data interface{}) string {
 	return sb.String()
 }
 
-// Helper: Format nodes for prune task
 func formatNodeList(data interface{}) string {
 	if str, ok := data.(string); ok {
 		return str
@@ -454,7 +536,6 @@ func formatNodeList(data interface{}) string {
 	return sb.String()
 }
 
-// Helper: Format graph results (nodes or links) for smart_search_analysis
 func formatGraphResults(data interface{}, key string) string {
 	m, ok := data.(map[string]interface{})
 	if !ok {
@@ -493,7 +574,6 @@ func formatGraphResults(data interface{}, key string) string {
 	return sb.String()
 }
 
-// Helper: Extract node names as comma-separated string
 func extractNodeNames(data interface{}) string {
 	list, ok := data.([]interface{})
 	if !ok {
@@ -510,7 +590,6 @@ func extractNodeNames(data interface{}) string {
 	return strings.Join(names, ", ")
 }
 
-// Helper: Extract string list with limit
 func extractStringList(data interface{}, limit int) string {
 	list, ok := data.([]interface{})
 	if !ok {
@@ -528,7 +607,6 @@ func extractStringList(data interface{}, limit int) string {
 	return strings.Join(items, "\n")
 }
 
-// Helper: Extract path string from node list
 func extractPathString(data interface{}) string {
 	list, ok := data.([]interface{})
 	if !ok {
@@ -545,24 +623,26 @@ func extractPathString(data interface{}) string {
 	return strings.Join(names, " -> ")
 }
 
-// BuildPrompt constructs the prompt with context.
-// Requirement: < 50ms
-func (s *GeminiService) BuildPrompt(ctx context.Context, store *meb.MEBStore, query string, symbolID string) (string, error) {
+var symbolRegex = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9_.\/]{3,}\b`)
+
+func extractPotentialSymbols(query string) []string {
+	return symbolRegex.FindAllString(query, -1)
+}
+
+func (s *AIService) BuildPrompt(ctx context.Context, store *meb.MEBStore, query string, symbolID string) (string, error) {
 	startTime := time.Now()
 	defer func() {
-		fmt.Printf("BuildPrompt took %v\n", time.Since(startTime))
+		log.Printf("BuildPrompt took %v\n", time.Since(startTime))
 	}()
 
 	var contextBuilder strings.Builder
 	contextBuilder.WriteString("## Context\n")
 
-	// 1. Direct Symbol Context (if provided)
 	if symbolID != "" {
 		if err := s.appendSymbolContext(ctx, store, symbolID, &contextBuilder); err != nil {
 			log.Printf("Failed to fetch symbol context for %s: %v", symbolID, err)
 		}
 	} else {
-		// 2. Semantic Context Discovery (from query)
 		if err := s.buildSemanticContext(ctx, store, query, &contextBuilder); err != nil {
 			log.Printf("Failed to build semantic context: %v", err)
 		}
@@ -571,14 +651,12 @@ func (s *GeminiService) BuildPrompt(ctx context.Context, store *meb.MEBStore, qu
 	return s.formatPromptOutput(contextBuilder.String(), query)
 }
 
-// buildSemanticContext finds potential symbols in the query and fetches their context.
-func (s *GeminiService) buildSemanticContext(ctx context.Context, store *meb.MEBStore, query string, contextBuilder *strings.Builder) error {
+func (s *AIService) buildSemanticContext(ctx context.Context, store *meb.MEBStore, query string, contextBuilder *strings.Builder) error {
 	words := extractPotentialSymbols(query)
 	if len(words) == 0 {
 		return nil
 	}
 
-	// Limit to top 3 unique matches
 	seen := make(map[string]bool)
 	var matchedIDs []string
 
@@ -591,7 +669,6 @@ func (s *GeminiService) buildSemanticContext(ctx context.Context, store *meb.MEB
 		}
 		seen[word] = true
 
-		// Fast Is-It-A-Symbol Check
 		_, exists := store.LookupID(word)
 		if exists {
 			matchedIDs = append(matchedIDs, word)
@@ -605,8 +682,7 @@ func (s *GeminiService) buildSemanticContext(ctx context.Context, store *meb.MEB
 	return s.fetchMatchedSymbolContexts(ctx, store, matchedIDs, contextBuilder)
 }
 
-// fetchMatchedSymbolContexts fetches context for matched symbols in parallel.
-func (s *GeminiService) fetchMatchedSymbolContexts(ctx context.Context, store *meb.MEBStore, matchedIDs []string, contextBuilder *strings.Builder) error {
+func (s *AIService) fetchMatchedSymbolContexts(ctx context.Context, store *meb.MEBStore, matchedIDs []string, contextBuilder *strings.Builder) error {
 	results := make([]string, len(matchedIDs))
 	var wg sync.WaitGroup
 
@@ -631,8 +707,7 @@ func (s *GeminiService) fetchMatchedSymbolContexts(ctx context.Context, store *m
 	return nil
 }
 
-// formatPromptOutput formats the final prompt with the context and query.
-func (s *GeminiService) formatPromptOutput(context string, query string) (string, error) {
+func (s *AIService) formatPromptOutput(context string, query string) (string, error) {
 	if s.DefaultContextPrompt != nil {
 		return s.DefaultContextPrompt.Execute(map[string]interface{}{
 			"Context": context,
@@ -653,26 +728,22 @@ Answer concisely and accurately based on the code provided.`, context, query)
 	return prompt, nil
 }
 
-func (s *GeminiService) appendSymbolContext(ctx context.Context, store *meb.MEBStore, symbolID string, sb *strings.Builder) error {
-	// 1. Fetch Symbol Content
+func (s *AIService) appendSymbolContext(ctx context.Context, store *meb.MEBStore, symbolID string, sb *strings.Builder) error {
 	content, err := s.getSymbolContent(store, symbolID)
 	if err != nil {
 		return err
 	}
 
-	// 2. Query symbol relationships
 	inbound, outbound, defines, err := s.querySymbolRelationships(ctx, store, symbolID)
 	if err != nil {
 		log.Printf("failed to query symbol relationships for %s: %v", symbolID, err)
 	}
 
-	// 3. Format symbol context
 	s.formatSymbolContext(symbolID, content, inbound, outbound, defines, sb)
 	return nil
 }
 
-// getSymbolContent retrieves the content for a given symbol ID.
-func (s *GeminiService) getSymbolContent(store *meb.MEBStore, symbolID string) (string, error) {
+func (s *AIService) getSymbolContent(store *meb.MEBStore, symbolID string) (string, error) {
 	contentBytes, err := store.GetContentByKey(string(symbolID))
 	if err != nil {
 		return "", err
@@ -680,24 +751,16 @@ func (s *GeminiService) getSymbolContent(store *meb.MEBStore, symbolID string) (
 	return string(contentBytes), nil
 }
 
-// querySymbolRelationships queries the graph for symbol relationships.
-func (s *GeminiService) querySymbolRelationships(ctx context.Context, store *meb.MEBStore, symbolID string) (inbound, outbound, defines []map[string]any, err error) {
-	// Inbound: Who calls me?
+func (s *AIService) querySymbolRelationships(ctx context.Context, store *meb.MEBStore, symbolID string) (inbound, outbound, defines []map[string]any, err error) {
 	inbound, _ = gcamdb.Query(ctx, store, fmt.Sprintf(`triples(?s, "%s", "%s")`, config.PredicateCalls, symbolID))
-
-	// Outbound: Who do I call?
 	outbound, _ = gcamdb.Query(ctx, store, fmt.Sprintf(`triples("%s", "%s", ?o)`, symbolID, config.PredicateCalls))
-
-	// Defines: What do I define? (For files)
 	defines, _ = gcamdb.Query(ctx, store, fmt.Sprintf(`triples("%s", "%s", ?o)`, symbolID, config.PredicateDefines))
-
 	return inbound, outbound, defines, nil
 }
 
-// formatSymbolContext formats the symbol context into the provided builder.
-func (s *GeminiService) formatSymbolContext(symbolID string, content string, inbound, outbound, defines []map[string]any, sb *strings.Builder) {
+func (s *AIService) formatSymbolContext(symbolID string, content string, inbound, outbound, defines []map[string]any, sb *strings.Builder) {
 	sb.WriteString(fmt.Sprintf("\n### Symbol: %s\n", symbolID))
-	sb.WriteString("```go\n")
+	sb.WriteString("```\n")
 	if len(content) > 2000 {
 		sb.WriteString(content[:2000] + "\n... (truncated)")
 	} else {
@@ -743,51 +806,20 @@ func (s *GeminiService) formatSymbolContext(symbolID string, content string, inb
 	sb.WriteString("\n")
 }
 
-var symbolRegex = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9_.\/]{3,}\b`)
-
-func extractPotentialSymbols(query string) []string {
-	// Simple extraction: words >= 4 chars to avoid "are", "the", "any"
-	// Prefer CamelCase or underscores/dots
-	return symbolRegex.FindAllString(query, -1)
+type AIServiceModelAdapter struct {
+	service *AIService
 }
 
-type GeminiModelAdapter struct {
-	service *GeminiService
+func NewAIServiceModelAdapter(svc *AIService) *AIServiceModelAdapter {
+	return &AIServiceModelAdapter{service: svc}
 }
 
-// NewGeminiModelAdapter creates an adapter wrapping the given service.
-func NewGeminiModelAdapter(svc *GeminiService) *GeminiModelAdapter {
-	return &GeminiModelAdapter{service: svc}
-}
-
-func (m *GeminiModelAdapter) GenerateContent(ctx context.Context, prompt string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
-	defer cancel()
-
-	log.Printf("Sending Prompt to Gemini:\n%s", prompt)
-
-	resp, err := m.service.getModel().GenerateContent(ctx, genai.Text(prompt))
-	if err != nil {
-		log.Printf("Gemini Request Failed:\n%s\nError: %v", prompt, err)
-		return "", err
-	}
-
-	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
-		return "No response from AI.", nil
-	}
-
-	var sb strings.Builder
-	for _, part := range resp.Candidates[0].Content.Parts {
-		if txt, ok := part.(genai.Text); ok {
-			sb.WriteString(string(txt))
-		}
-	}
-
-	return sb.String(), nil
+func (m *AIServiceModelAdapter) GenerateContent(ctx context.Context, prompt string) (string, error) {
+	return m.service.GenerateText(ctx, prompt)
 }
 
 type PromptLoaderAdapter struct {
-	service *GeminiService
+	service *AIService
 }
 
 func (l *PromptLoaderAdapter) LoadPrompt(name string) (*prompts.Prompt, error) {
@@ -799,17 +831,17 @@ func (l *PromptLoaderAdapter) LoadPrompt(name string) (*prompts.Prompt, error) {
 }
 
 type StoreManagerAdapter struct {
-	service *GeminiService
+	service *AIService
 }
 
 func (m *StoreManagerAdapter) GetStore(projectID string) (*meb.MEBStore, error) {
 	return m.service.manager.GetStore(projectID)
 }
 
-func (s *GeminiService) HandleRequestOODA(ctx context.Context, req AIRequest) (string, error) {
+func (s *AIService) HandleRequestOODA(ctx context.Context, req AIRequest) (string, error) {
 	storeManager := &StoreManagerAdapter{service: s}
 	promptLoader := &PromptLoaderAdapter{service: s}
-	model := &GeminiModelAdapter{service: s}
+	model := &AIServiceModelAdapter{service: s}
 
 	config := ooda.NewOODAConfig(storeManager, promptLoader, model)
 	loop := ooda.NewOODALoopFromConfig(config)

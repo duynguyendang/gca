@@ -3,11 +3,13 @@ package manager
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/telemetry"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/store"
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -28,6 +30,7 @@ const (
 	MemoryProfileLow     MemoryProfile = "low"
 	MaxOpenStores                      = 10
 	ProjectListTTL                     = 1 * time.Minute
+	DefaultMaxFacts                    = 5_000_000 // 5M facts retention limit
 )
 
 // StoreManager manages multiple MEBStore instances.
@@ -39,6 +42,7 @@ type StoreManager struct {
 	readOnly      bool
 	cachedList    []ProjectMetadata
 	lastListBuild time.Time
+	telemetrySink meb.TelemetrySink
 }
 
 // NewStoreManager creates a new StoreManager.
@@ -50,10 +54,11 @@ func NewStoreManager(baseDir string, profile MemoryProfile, readOnly bool) *Stor
 	})
 
 	return &StoreManager{
-		baseDir:  baseDir,
-		projects: cache,
-		profile:  profile,
-		readOnly: readOnly,
+		baseDir:       baseDir,
+		projects:      cache,
+		profile:       profile,
+		readOnly:      readOnly,
+		telemetrySink: telemetry.NewLoggerSink(),
 	}
 }
 
@@ -87,10 +92,22 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 		cfg.Profile = "Safe-Serving"
 	}
 
+	// Enable auto-GC for long-running server mode
+	cfg.EnableAutoGC = !sm.readOnly
+	cfg.GCRatio = 0.5
+	cfg.Verbose = false
+
 	s, err := meb.NewMEBStore(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open store for project %s: %w", projectID, err)
 	}
+
+	// Register telemetry sink
+	s.RegisterTelemetrySink(sm.telemetrySink)
+	log.Printf("Registered telemetry sink for project %s", projectID)
+
+	// Set retention policy to prevent unbounded growth
+	s.SetRetention(DefaultMaxFacts)
 
 	sm.projects.Add(projectID, s)
 	return s, nil
@@ -99,14 +116,13 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 // ListProjects returns a list of available projects.
 func (sm *StoreManager) ListProjects() ([]ProjectMetadata, error) {
 	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
 	if time.Since(sm.lastListBuild) < ProjectListTTL && sm.cachedList != nil {
-		// Return copy to be safe
 		list := make([]ProjectMetadata, len(sm.cachedList))
 		copy(list, sm.cachedList)
-		sm.mu.Unlock()
 		return list, nil
 	}
-	sm.mu.Unlock()
 
 	entries, err := os.ReadDir(sm.baseDir)
 	if err != nil {
@@ -119,10 +135,9 @@ func (sm *StoreManager) ListProjects() ([]ProjectMetadata, error) {
 			id := entry.Name()
 			meta := ProjectMetadata{
 				ID:   id,
-				Name: id, // Default name is directory name
+				Name: id,
 			}
 
-			// Try to read metadata.json
 			metaPath := filepath.Join(sm.baseDir, id, "metadata.json")
 			if data, err := os.ReadFile(metaPath); err == nil {
 				var jsonMeta ProjectMetadata
@@ -137,12 +152,12 @@ func (sm *StoreManager) ListProjects() ([]ProjectMetadata, error) {
 		}
 	}
 
-	sm.mu.Lock()
 	sm.cachedList = projects
 	sm.lastListBuild = time.Now()
-	sm.mu.Unlock()
 
-	return projects, nil
+	list := make([]ProjectMetadata, len(projects))
+	copy(list, projects)
+	return list, nil
 }
 
 // CloseAll closes all open stores.

@@ -111,9 +111,9 @@ const (
 
 // Additional predicates for pathfinder and virtual relations
 const (
-	PredicateCallsAPI     = "calls_api"
-	PredicateHandledBy    = "handled_by"
-	PredicateExports      = "exports"
+	PredicateCallsAPI      = "calls_api"
+	PredicateHandledBy     = "handled_by"
+	PredicateExports       = "exports"
 	PredicateParentDefines = "parent_defines"
 	PredicateExposesModel  = "exposes_model"
 )

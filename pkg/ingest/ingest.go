@@ -15,7 +15,7 @@ import (
 
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/meb"
-	"github.com/duynguyendang/meb/vector"
+	"github.com/duynguyendang/meb/keys"
 )
 
 type IngestState struct {
@@ -41,6 +41,12 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 	SetIngestState(state)
 	ctx := context.Background()
 	ext := NewTreeSitterExtractor()
+
+	// Set topic ID for project-scoped ingestion
+	// Uses a hash of the project name to generate a unique 24-bit topic ID
+	topicID := hashToTopicID(projectName)
+	s.SetTopicID(topicID)
+	log.Printf("Using topic ID %d for project %s", topicID, projectName)
 
 	var embeddingService *EmbeddingService
 	var embeddingErr error
@@ -169,7 +175,6 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 	wg.Wait()
 
 	// Final Passes
-	// s.ResolveDependencies(ctx) - removed in latest meb
 	EnhanceVirtualTriples(s)
 	TagRoles(s)
 
@@ -217,9 +222,9 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 	// Retry AddDocument to handle potential DB conflicts
 	var addErr error
 	for retries := 0; retries < 3; retries++ {
-		addErr = s.AddDocument(string(relPath), content, nil, map[string]any{"project": projectName})
+		addErr = s.AddDocumentWithTopic(s.TopicID(), string(relPath), content, nil, map[string]any{"project": projectName})
 		if addErr == nil {
-			log.Printf("DEBUG Ingest: Successfully stored raw content for %s using AddDocument", relPath)
+			log.Printf("DEBUG Ingest: Successfully stored raw content for %s using AddDocumentWithTopic", relPath)
 			break
 		}
 		// fast retry for conflicts
@@ -232,12 +237,7 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 
 	// Store symbol documents (with file, start_line, end_line metadata for snippet extraction)
 	for _, doc := range bundle.Documents {
-		// Store ONLY metadata and dictionary ID for symbols to save DB space.
-		// The frontend dynamically extracts snippets from the full file content using start/end lines.
-		if err := s.AddDocument(doc.ID, nil, nil, doc.Metadata); err != nil {
-			// Log error but continue for symbols? Or fail file?
-			// Identifying symbols is important but not critical for file content.
-			// Let's log warning.
+		if err := s.AddDocumentWithTopic(s.TopicID(), doc.ID, nil, nil, doc.Metadata); err != nil {
 			log.Printf("Warning: failed to add symbol doc %s: %v", doc.ID, err)
 		}
 	}
@@ -260,6 +260,12 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 					}
 
 					go func(symbolID string, text string) {
+						defer func() {
+							if r := recover(); r != nil {
+								log.Printf("Panic in embedding goroutine for %s: %v", symbolID, r)
+							}
+						}()
+
 						// Acquire semaphore
 						if sem != nil {
 							sem <- struct{}{}
@@ -281,8 +287,8 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 							return
 						}
 
-						if len(embed) < vector.FullDim {
-							log.Printf("Error: embedding dimension mismatch for %s: got %d, want >= %d", symbolID, len(embed), vector.FullDim)
+						if len(embed) == 0 {
+							log.Printf("Error: empty embedding for %s", symbolID)
 							return
 						}
 
@@ -353,8 +359,21 @@ func isSupportedFile(path string) bool {
 	return ext == ".go" || ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".py" || ext == ".md"
 }
 
+// hashToTopicID generates a deterministic 24-bit topic ID from a project name.
+func hashToTopicID(name string) uint32 {
+	if name == "" {
+		return 1
+	}
+	var h uint32 = 2166136261 // FNV-1a offset basis
+	for i := 0; i < len(name); i++ {
+		h ^= uint32(name[i])
+		h *= 16777619 // FNV-1a prime
+	}
+	return (h & 0xFFFFFF) | 1 // ensure non-zero (0 is reserved)
+}
+
 func TagRoles(s *meb.MEBStore) error {
-	for fact, err := range s.Scan("", config.PredicateHandledBy, "") {
+	for fact, err := range s.ScanWithPruning("", config.PredicateHandledBy, "", keys.EntityFunc, false) {
 		if err != nil {
 			continue
 		}

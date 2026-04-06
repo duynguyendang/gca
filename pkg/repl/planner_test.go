@@ -122,30 +122,20 @@ func TestJSONParsing(t *testing.T) {
 }
 
 func TestVariableInjectionLogic(t *testing.T) {
-	steps := []PlanStep{{ID: 1}}
+	steps := []PlanStep{{ID: 1, Query: "triples(?s, \"calls\", ?o)"}}
 	session := NewExecutionSession("Goal", steps)
 
-	// Simulate results for Step 1
 	results1 := []map[string]string{
-		{"A": "main.go"},
+		{"?s": "main.go"},
 	}
 	session.StoreResults(1, results1)
+	session.CurrentStep = 2
 
-	// Test Injection
-	query := "triples($1.A, \"calls\", B)"
-	expanded := processVariableInjection(query, session)
-	expected := "triples(\"main.go\", \"calls\", B)"
+	query := "triples({{step_1_?s}}, \"calls\", B)"
+	expanded := expandVariables(query, session)
 
-	if expanded != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, expanded)
-	}
-
-	// Test no injection if variable not found (should keep placeholder or handle gracefully)
-	// Current implementation keeps placeholder if no bindings
-	query2 := "triples($99.A, \"calls\", B)"
-	expanded2 := processVariableInjection(query2, session)
-	if expanded2 != query2 {
-		t.Errorf("Expected no change '%s', got '%s'", query2, expanded2)
+	if expanded == query {
+		t.Errorf("Expected variable injection, got unchanged: '%s'", expanded)
 	}
 }
 

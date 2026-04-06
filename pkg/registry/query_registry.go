@@ -13,11 +13,11 @@ import (
 
 // QueryDefinition represents a pre-defined query loaded from GenePool
 type QueryDefinition struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Category    string            `json:"category"`
-	Tier        int               `json:"tier"`
-	Template    string            `json:"template"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	Category    string           `json:"category"`
+	Tier        int              `json:"tier"`
+	Template    string           `json:"template"`
 	Parameters  []QueryParameter `json:"parameters"`
 	Examples    []QueryExample   `json:"examples"`
 }
@@ -25,7 +25,7 @@ type QueryDefinition struct {
 // QueryParameter defines a parameter for a query
 type QueryParameter struct {
 	Name        string `json:"name"`
-	Type        string `json:"type"`        // "file", "symbol", "string", "int"
+	Type        string `json:"type"` // "file", "symbol", "string", "int"
 	Required    bool   `json:"required"`
 	Description string `json:"description"`
 	Default     any    `json:"default,omitempty"`
@@ -33,16 +33,16 @@ type QueryParameter struct {
 
 // QueryExample provides usage examples
 type QueryExample struct {
-	Description string   `json:"description"`
+	Description string         `json:"description"`
 	Input       map[string]any `json:"input"`
-	Output      string   `json:"output"` // Expected Datalog output
+	Output      string         `json:"output"` // Expected Datalog output
 }
 
 // QueryRegistry manages pre-defined queries from GenePool
 type QueryRegistry struct {
-	mu       sync.RWMutex
-	engine   core.Evaluator
-	queries  map[string]*QueryDefinition
+	mu         sync.RWMutex
+	engine     core.Evaluator
+	queries    map[string]*QueryDefinition
 	categories map[string][]string
 }
 

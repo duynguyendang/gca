@@ -3,44 +3,22 @@ package repl
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
+	"time"
 
 	"github.com/duynguyendang/gca/pkg/prompts"
-	"github.com/google/generative-ai-go/genai"
-	"google.golang.org/api/option"
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
 )
 
-// ExtractKeywords uses Gemini to extract technical keywords from a natural language query.
-func ExtractKeywords(ctx context.Context, query string) ([]string, error) {
-	// Load the keyword prompt
+// ExtractKeywords uses the LLM to extract technical keywords from a natural language query.
+func ExtractKeywords(ctx context.Context, g *genkit.Genkit, query string) ([]string, error) {
 	promptPath := "prompts/keywords.prompt"
 	p, err := prompts.LoadPrompt(promptPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load prompt %s: %w", promptPath, err)
 	}
 
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		return nil, fmt.Errorf("GEMINI_API_KEY not set")
-	}
-
-	// Create client
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create client: %w", err)
-	}
-	defer client.Close()
-
-	model := client.GenerativeModel(p.Config.Model)
-	if p.Config.Model == "" {
-		// Use default from config
-		defCfg := DefaultConfig()
-		model = client.GenerativeModel(defCfg.Model)
-	}
-	model.SetTemperature(p.Config.Temperature)
-
-	// Execute prompt
 	data := map[string]interface{}{
 		"query": query,
 	}
@@ -49,25 +27,22 @@ func ExtractKeywords(ctx context.Context, query string) ([]string, error) {
 		return nil, fmt.Errorf("failed to execute template: %w", err)
 	}
 
-	// Call Gemini
-	resp, err := model.GenerateContent(ctx, genai.Text(promptStr))
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	resp, err := genkit.Generate(ctx, g,
+		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithPrompt(promptStr),
+	)
 	if err != nil {
-		return nil, fmt.Errorf("gemini error: %w", err)
+		return nil, fmt.Errorf("LLM error: %w", err)
 	}
 
-	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
-		return nil, fmt.Errorf("no response from Gemini")
+	output := resp.Text()
+	if output == "" {
+		return nil, fmt.Errorf("no response from LLM")
 	}
 
-	var output string
-	for _, part := range resp.Candidates[0].Content.Parts {
-		if txt, ok := part.(genai.Text); ok {
-			output = string(txt)
-			break
-		}
-	}
-
-	// Parse comma-separated keywords
 	rawParts := strings.Split(output, ",")
 	var keywords []string
 	for _, part := range rawParts {

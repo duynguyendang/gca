@@ -62,17 +62,17 @@ func DefaultCORSConfig() CORSConfig {
 
 // Server holds the state for the REST API server.
 type Server struct {
-	manager       *manager.StoreManager
-	graphService  *service.GraphService
-	geminiService *ai.GeminiService
-	mangleClient  *manglesdk.Client
-	queryService  *registry.QueryService
-	sourceDir     string
-	router        *gin.Engine
+	manager      *manager.StoreManager
+	graphService *service.GraphService
+	aiService    *ai.AIService
+	mangleClient *manglesdk.Client
+	queryService *registry.QueryService
+	sourceDir    string
+	router       *gin.Engine
 }
 
 // NewServer creates a new Server instance.
-func NewServer(mgr *manager.StoreManager, sourceDir string, apiKey string) *Server {
+func NewServer(mgr *manager.StoreManager, sourceDir string) *Server {
 	r := gin.Default()
 	r.Use(RequestIDMiddleware())
 	r.Use(CORSMiddleware())
@@ -82,12 +82,12 @@ func NewServer(mgr *manager.StoreManager, sourceDir string, apiKey string) *Serv
 
 	svc := service.NewGraphService(mgr)
 
-	geminiSvc, err := ai.NewGeminiService(context.Background(), apiKey, mgr)
+	aiSvc, err := ai.NewAIService(context.Background(), mgr)
 	if err != nil {
-		log.Printf("Warning: Failed to initialize Gemini Service: %v. AI features disabled.", err)
-		geminiSvc = nil
+		log.Printf("Warning: Failed to initialize AI Service: %v. AI features disabled.", err)
+		aiSvc = nil
 	} else {
-		log.Println("Gemini Service initialized successfully")
+		log.Println("AI Service initialized successfully")
 	}
 
 	// Initialize Manglekit Client for GenePool queries
@@ -121,13 +121,13 @@ func NewServer(mgr *manager.StoreManager, sourceDir string, apiKey string) *Serv
 	}
 
 	s := &Server{
-		manager:       mgr,
-		graphService:  svc,
-		geminiService: geminiSvc,
-		mangleClient:  mangleClient,
-		queryService:  queryService,
-		sourceDir:     sourceDir,
-		router:        r,
+		manager:      mgr,
+		graphService: svc,
+		aiService:    aiSvc,
+		mangleClient: mangleClient,
+		queryService: queryService,
+		sourceDir:    sourceDir,
+		router:       r,
 	}
 	s.setupRoutes()
 	return s
@@ -191,7 +191,7 @@ func (s *Server) handleAIAsk(c *gin.Context) {
 		return
 	}
 
-	if s.geminiService == nil {
+	if s.aiService == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "AI service not initialized (missing API Key)"})
 		return
 	}
@@ -222,14 +222,14 @@ func (s *Server) handleAIAsk(c *gin.Context) {
 	var err error
 
 	if useOODA {
-		answer, err = s.geminiService.HandleRequestOODA(c.Request.Context(), req)
+		answer, err = s.aiService.HandleRequestOODA(c.Request.Context(), req)
 		if err != nil {
 			log.Printf("AI OODA Error: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 	} else {
-		answer, err = s.geminiService.HandleRequest(c.Request.Context(), req)
+		answer, err = s.aiService.HandleRequest(c.Request.Context(), req)
 		if err != nil {
 			log.Printf("AI Error: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -249,7 +249,7 @@ func (s *Server) handleAgentExecute(c *gin.Context) {
 		return
 	}
 
-	if s.geminiService == nil {
+	if s.aiService == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "AI service not initialized (missing API Key)"})
 		return
 	}
@@ -278,8 +278,8 @@ func (s *Server) handleAgentExecute(c *gin.Context) {
 		return
 	}
 
-	// Wrap the GeminiService in an adapter that satisfies agent.ModelInterface
-	modelAdapter := ai.NewGeminiModelAdapter(s.geminiService)
+	// Wrap the AIService in an adapter that satisfies agent.ModelInterface
+	modelAdapter := ai.NewAIServiceModelAdapter(s.aiService)
 	orch := agent.NewOrchestrator(modelAdapter, store)
 
 	predicateNames := []string{

@@ -3,9 +3,13 @@ package meb
 import (
 	"context"
 	"fmt"
+	"log"
+	"sync"
 
 	"github.com/duynguyendang/gca/pkg/datalog"
 	"github.com/duynguyendang/meb"
+	"github.com/duynguyendang/meb/keys"
+	"github.com/duynguyendang/meb/query"
 )
 
 type Store struct {
@@ -16,8 +20,8 @@ func NewStore(db *meb.MEBStore) *Store {
 	return &Store{db}
 }
 
-func Query(ctx context.Context, store *meb.MEBStore, query string) ([]map[string]any, error) {
-	atoms, err := datalog.Parse(query)
+func Query(ctx context.Context, store *meb.MEBStore, q string) ([]map[string]any, error) {
+	atoms, err := datalog.Parse(q)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse query: %w", err)
 	}
@@ -26,68 +30,346 @@ func Query(ctx context.Context, store *meb.MEBStore, query string) ([]map[string
 		return nil, fmt.Errorf("empty query")
 	}
 
+	triplesAtoms := make([]datalog.Atom, 0, len(atoms))
+	constraintAtoms := make([]datalog.Atom, 0)
+
+	for _, atom := range atoms {
+		if atom.Predicate == "triples" {
+			triplesAtoms = append(triplesAtoms, atom)
+		} else {
+			constraintAtoms = append(constraintAtoms, atom)
+		}
+	}
+
+	if len(triplesAtoms) == 0 {
+		return nil, fmt.Errorf("query must contain at least one triples atom")
+	}
+
 	var results []map[string]any
 
-	switch atoms[0].Predicate {
-	case "triples":
-		results = executeTriplesQuery(ctx, store, atoms)
-	default:
-		results = executeTriplesQuery(ctx, store, atoms)
+	if len(triplesAtoms) == 1 {
+		results = executeSingleAtomQuery(ctx, store, triplesAtoms[0])
+	} else {
+		results = executeLFTJQuery(ctx, store, triplesAtoms)
+		if len(results) == 0 && len(triplesAtoms) > 1 {
+			log.Printf("LFTJ engine returned no results for multi-atom query, falling back to sequential join")
+			results = executeSequentialJoinQuery(ctx, store, triplesAtoms)
+		}
 	}
+
+	results = applyConstraints(results, constraintAtoms)
 
 	return results, nil
 }
 
-func (s *Store) Query(ctx context.Context, query string) ([]map[string]any, error) {
-	return Query(ctx, s.MEBStore, query)
+func (s *Store) Query(ctx context.Context, q string) ([]map[string]any, error) {
+	return Query(ctx, s.MEBStore, q)
 }
 
-func executeTriplesQuery(ctx context.Context, store *meb.MEBStore, atoms []datalog.Atom) []map[string]any {
-	var results []map[string]any
+// scanFacts works around the MEB store's broken SPO index for subject lookups.
+// When subject is bound, it scans using OPS index and filters by subject.
+func scanFacts(ctx context.Context, store *meb.MEBStore, subj, pred, obj string) <-chan struct {
+	Fact meb.Fact
+	Err  error
+} {
+	ch := make(chan struct {
+		Fact meb.Fact
+		Err  error
+	}, 1)
 
-	for _, atom := range atoms {
-		if atom.Predicate != "triples" {
-			continue
+	go func() {
+		defer close(ch)
+		if subj == "" {
+			for fact, err := range store.ScanContext(ctx, subj, pred, obj) {
+				ch <- struct {
+					Fact meb.Fact
+					Err  error
+				}{Fact: fact, Err: err}
+			}
+			return
 		}
-
-		if len(atom.Args) < 3 {
-			continue
-		}
-
-		subj := resolveArg(atom.Args[0])
-		pred := resolveArg(atom.Args[1])
-		obj := resolveArg(atom.Args[2])
-
-		for fact, err := range store.Scan(subj, pred, obj) {
+		// SPO index is broken for subject lookups, use OPS index
+		for fact, err := range store.ScanContext(ctx, "", pred, obj) {
 			if err != nil {
+				ch <- struct {
+					Fact meb.Fact
+					Err  error
+				}{Err: err}
 				continue
 			}
+			if fact.Subject == subj {
+				ch <- struct {
+					Fact meb.Fact
+					Err  error
+				}{Fact: fact, Err: nil}
+			}
+		}
+	}()
 
-			result := make(map[string]any)
-			if atom.Args[0][0] == '?' {
-				result[atom.Args[0]] = fact.Subject
-			}
-			if atom.Args[1][0] == '?' {
-				result[atom.Args[1]] = fact.Predicate
-			}
-			if atom.Args[2][0] == '?' {
-				result[atom.Args[2]] = fact.Object
-			}
+	return ch
+}
 
-			if len(result) > 0 {
-				results = append(results, result)
-			}
+func executeSingleAtomQuery(ctx context.Context, store *meb.MEBStore, atom datalog.Atom) []map[string]any {
+	var results []map[string]any
+
+	subj := resolveArg(atom.Args[0])
+	pred := resolveArg(atom.Args[1])
+	obj := resolveArg(atom.Args[2])
+
+	subjIsVar := isVariable(atom.Args[0])
+	predIsVar := isVariable(atom.Args[1])
+	objIsVar := isVariable(atom.Args[2])
+
+	for item := range scanFacts(ctx, store, subj, pred, obj) {
+		if item.Err != nil {
+			continue
+		}
+		fact := item.Fact
+
+		result := make(map[string]any)
+		if subjIsVar {
+			result[atom.Args[0]] = fact.Subject
+		}
+		if predIsVar {
+			result[atom.Args[1]] = fact.Predicate
+		}
+		if objIsVar {
+			result[atom.Args[2]] = fact.Object
+		}
+
+		if len(result) > 0 {
+			results = append(results, result)
 		}
 	}
 
 	return results
 }
 
+func executeLFTJQuery(ctx context.Context, store *meb.MEBStore, atoms []datalog.Atom) []map[string]any {
+	var results []map[string]any
+
+	relations, resultVars, err := buildLFTJRelations(store, atoms)
+	if err != nil {
+		return results
+	}
+	if len(relations) == 0 {
+		return results
+	}
+
+	boundVars := make(map[string]uint64)
+
+	engine := store.LFTJEngine()
+	if engine == nil {
+		return results
+	}
+
+	var mu sync.Mutex
+
+	for joinResult, err := range engine.Execute(ctx, relations, boundVars, resultVars) {
+		if err != nil {
+			continue
+		}
+
+		row := make(map[string]any)
+		for varName, dictID := range joinResult {
+			if dictID == 0 {
+				continue
+			}
+
+			localID := keys.UnpackLocalID(dictID)
+			strVal, err := store.ResolveID(localID)
+			if err != nil {
+				continue
+			}
+			row[varName] = strVal
+		}
+
+		if len(row) > 0 {
+			mu.Lock()
+			results = append(results, row)
+			mu.Unlock()
+		}
+	}
+
+	return results
+}
+
+func executeSequentialJoinQuery(ctx context.Context, store *meb.MEBStore, atoms []datalog.Atom) []map[string]any {
+	var results []map[string]any
+
+	firstAtom := atoms[0]
+	subj := resolveArg(firstAtom.Args[0])
+	pred := resolveArg(firstAtom.Args[1])
+	obj := resolveArg(firstAtom.Args[2])
+
+	for item := range scanFacts(ctx, store, subj, pred, obj) {
+		if item.Err != nil {
+			continue
+		}
+		fact := item.Fact
+
+		row := make(map[string]any)
+		if isVariable(firstAtom.Args[0]) {
+			row[firstAtom.Args[0]] = fact.Subject
+		}
+		if isVariable(firstAtom.Args[1]) {
+			row[firstAtom.Args[1]] = fact.Predicate
+		}
+		if isVariable(firstAtom.Args[2]) {
+			row[firstAtom.Args[2]] = fact.Object
+		}
+
+		for _, atom := range atoms[1:] {
+			resolvedArgs := make([]string, 3)
+			for i, arg := range atom.Args[:3] {
+				if isVariable(arg) {
+					if val, ok := row[arg]; ok {
+						resolvedArgs[i] = fmt.Sprintf("%v", val)
+					}
+				} else {
+					resolvedArgs[i] = resolveArg(arg)
+				}
+			}
+
+			found := false
+			for item := range scanFacts(ctx, store, resolvedArgs[0], resolvedArgs[1], resolvedArgs[2]) {
+				if item.Err != nil {
+					continue
+				}
+				f := item.Fact
+				if isVariable(atom.Args[0]) {
+					row[atom.Args[0]] = f.Subject
+				}
+				if isVariable(atom.Args[1]) {
+					row[atom.Args[1]] = f.Predicate
+				}
+				if isVariable(atom.Args[2]) {
+					row[atom.Args[2]] = f.Object
+				}
+				found = true
+				break
+			}
+			if !found {
+				goto nextFact
+			}
+		}
+
+		if len(row) > 0 {
+			results = append(results, row)
+		}
+	nextFact:
+	}
+
+	return results
+}
+
+func buildLFTJRelations(store *meb.MEBStore, atoms []datalog.Atom) ([]query.RelationPattern, []string, error) {
+	relations := make([]query.RelationPattern, 0, len(atoms))
+	resultVarsSet := make(map[string]bool)
+	topicID := store.TopicID()
+
+	for _, atom := range atoms {
+		if atom.Predicate != "triples" || len(atom.Args) < 3 {
+			continue
+		}
+
+		boundPositions := make(map[int]uint64)
+		variablePositions := make(map[int]string)
+		skipAtom := false
+
+		for argIdx, arg := range atom.Args[:3] {
+			if isVariable(arg) {
+				varName := arg
+				variablePositions[argIdx] = varName
+				resultVarsSet[varName] = true
+			} else {
+				strVal := resolveArg(arg)
+				dictID, found := store.LookupID(strVal)
+				if !found {
+					log.Printf("Warning: dictionary lookup failed for %q in atom %v, skipping atom", strVal, atom)
+					skipAtom = true
+					break
+				}
+				packedID := keys.PackID(topicID, keys.UnpackLocalID(dictID))
+				boundPositions[argIdx] = packedID
+			}
+		}
+
+		if skipAtom {
+			continue
+		}
+
+		relations = append(relations, query.RelationPattern{
+			Prefix:            keys.TripleSPOPrefix,
+			BoundPositions:    boundPositions,
+			VariablePositions: variablePositions,
+		})
+	}
+
+	resultVars := make([]string, 0, len(resultVarsSet))
+	for v := range resultVarsSet {
+		resultVars = append(resultVars, v)
+	}
+
+	return relations, resultVars, nil
+}
+
+func applyConstraints(results []map[string]any, constraintAtoms []datalog.Atom) []map[string]any {
+	if len(constraintAtoms) == 0 {
+		return results
+	}
+
+	filtered := make([]map[string]any, 0, len(results))
+
+	for _, result := range results {
+		if matchesConstraints(result, constraintAtoms) {
+			filtered = append(filtered, result)
+		}
+	}
+
+	return filtered
+}
+
+func matchesConstraints(result map[string]any, constraints []datalog.Atom) bool {
+	for _, atom := range constraints {
+		switch atom.Predicate {
+		case "neq", "!=":
+			if len(atom.Args) >= 2 {
+				varName := atom.Args[0]
+				constraintVal := atom.Args[1]
+				if val, ok := result[varName]; ok {
+					if fmt.Sprintf("%v", val) == constraintVal {
+						return false
+					}
+				}
+			}
+		case "eq", "=":
+			if len(atom.Args) >= 2 {
+				varName := atom.Args[0]
+				constraintVal := atom.Args[1]
+				if val, ok := result[varName]; ok {
+					if fmt.Sprintf("%v", val) != constraintVal {
+						return false
+					}
+				}
+			}
+		}
+	}
+	return true
+}
+
+func isVariable(arg string) bool {
+	return len(arg) > 0 && (arg[0] == '?' || (arg[0] >= 'A' && arg[0] <= 'Z'))
+}
+
 func resolveArg(arg string) string {
 	if len(arg) >= 2 && arg[0] == '"' && arg[len(arg)-1] == '"' {
 		return arg[1 : len(arg)-1]
 	}
-	if len(arg) >= 2 && arg[0] == '?' {
+	if len(arg) >= 1 && arg[0] == '?' {
+		return ""
+	}
+	if len(arg) > 0 && arg[0] >= 'A' && arg[0] <= 'Z' {
 		return ""
 	}
 	return arg

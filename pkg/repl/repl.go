@@ -14,8 +14,8 @@ import (
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/meb"
-	"github.com/google/generative-ai-go/genai"
-	"google.golang.org/api/option"
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
 )
 
 // Run starts the interactive REPL with intelligent feedback loop.
@@ -60,7 +60,6 @@ func Run(ctx context.Context, cfg Config, s *meb.MEBStore) {
 
 // initializeREPL sets up the REPL environment and displays initial information.
 func initializeREPL(cfg Config, s *meb.MEBStore) (*ProjectSummary, []string) {
-	// Recalculate stats to ensure we have fresh counts
 	if !cfg.ReadOnly {
 		if _, err := s.RecalculateStats(); err != nil {
 			log.Printf("Stats recalc error: %v", err)
@@ -73,7 +72,6 @@ func initializeREPL(cfg Config, s *meb.MEBStore) (*ProjectSummary, []string) {
 		fmt.Printf(" - %s\n", p)
 	}
 
-	// Generate and display project context
 	fmt.Println("\n=== Project Context ===")
 	projectContext, err := GenerateProjectSummary(s)
 	if err != nil {
@@ -82,7 +80,6 @@ func initializeREPL(cfg Config, s *meb.MEBStore) (*ProjectSummary, []string) {
 		displayProjectContext(projectContext)
 	}
 
-	// Convert predicates to strings for context
 	var factStrings []string
 	for _, p := range predsList {
 		factStrings = append(factStrings, fmt.Sprintf("%v", p))
@@ -93,7 +90,6 @@ func initializeREPL(cfg Config, s *meb.MEBStore) (*ProjectSummary, []string) {
 
 // displayProjectContext shows project summary information.
 func displayProjectContext(projectContext *ProjectSummary) {
-	// Display packages
 	if len(projectContext.Packages) > 0 {
 		fmt.Printf("\n📦 Packages (%d):\n", len(projectContext.Packages))
 		displayLimit := config.DisplayLimitSmall
@@ -106,7 +102,6 @@ func displayProjectContext(projectContext *ProjectSummary) {
 		}
 	}
 
-	// Display top symbols
 	if len(projectContext.TopSymbols) > 0 {
 		fmt.Printf("\n🎯 Top Symbols (%d):\n", len(projectContext.TopSymbols))
 		displayLimit := config.DisplayLimitMedium
@@ -119,7 +114,6 @@ func displayProjectContext(projectContext *ProjectSummary) {
 		}
 	}
 
-	// Display stats
 	if len(projectContext.Stats) > 0 {
 		fmt.Printf("\n📊 Statistics:\n")
 		if count, ok := projectContext.Stats["total_facts"]; ok {
@@ -162,9 +156,7 @@ func loadPromptTemplates() (*prompts.Prompt, *prompts.Prompt, *prompts.Prompt) {
 }
 
 // processCommand handles special REPL commands (plan, export, search, show).
-// Returns true if a command was processed, false otherwise.
 func processCommand(ctx context.Context, cfg Config, s *meb.MEBStore, line string, projectContext *ProjectSummary, plannerPrompt *prompts.Prompt) bool {
-	// Handle plan command
 	if strings.HasPrefix(line, "plan ") {
 		goal := strings.TrimPrefix(line, "plan ")
 		if plannerPrompt == nil {
@@ -177,19 +169,16 @@ func processCommand(ctx context.Context, cfg Config, s *meb.MEBStore, line strin
 		return true
 	}
 
-	// Handle export command
 	if strings.HasPrefix(line, "export ") {
 		processExportCommand(s, line)
 		return true
 	}
 
-	// Handle search command
 	if strings.HasPrefix(line, "search ") {
-		processSearchCommand(line)
+		processSearchCommand(ctx, cfg, line)
 		return true
 	}
 
-	// Handle show command
 	if strings.HasPrefix(line, "show ") {
 		arg := strings.TrimPrefix(line, "show ")
 		HandleShow(context.Background(), s, arg)
@@ -204,7 +193,6 @@ func processExportCommand(s *meb.MEBStore, line string) {
 	argsStr := strings.TrimPrefix(line, "export ")
 	var filterTests bool
 
-	// Parse flags (Naive parser: assumes flags come first)
 	for strings.HasPrefix(strings.TrimSpace(argsStr), "--") {
 		argsStr = strings.TrimSpace(argsStr)
 		idx := strings.Index(argsStr, " ")
@@ -227,7 +215,6 @@ func processExportCommand(s *meb.MEBStore, line string) {
 	datalogQuery := strings.TrimSpace(argsStr[:lastSpace])
 	filename := strings.TrimSpace(argsStr[lastSpace+1:])
 
-	// Execute query
 	results, err := gcamdb.Query(context.Background(), s, datalogQuery)
 	if err != nil {
 		fmt.Printf("Query error: %v\n", err)
@@ -239,7 +226,6 @@ func processExportCommand(s *meb.MEBStore, line string) {
 		return
 	}
 
-	// Export using D3Transformer with options
 	transformer := export.NewD3Transformer(s)
 	transformer.ExcludeTestFiles = filterTests
 
@@ -258,7 +244,7 @@ func processExportCommand(s *meb.MEBStore, line string) {
 }
 
 // processSearchCommand handles the search command.
-func processSearchCommand(line string) {
+func processSearchCommand(ctx context.Context, cfg Config, line string) {
 	query := strings.TrimPrefix(line, "search ")
 	if query == "" {
 		fmt.Println("Usage: search <query>")
@@ -267,8 +253,7 @@ func processSearchCommand(line string) {
 
 	fmt.Println("🔍 Analyzing query...")
 
-	// 1. Extract keywords
-	keywords, err := ExtractKeywords(context.Background(), query)
+	keywords, err := ExtractKeywords(ctx, cfg.Genkit, query)
 	if err != nil {
 		fmt.Printf("⚠️ Keyword extraction failed (using raw query): %v\n", err)
 		keywords = []string{query}
@@ -276,26 +261,13 @@ func processSearchCommand(line string) {
 		fmt.Printf("🔑 Keywords: %v\n", keywords)
 	}
 
-	// 2. Gather candidates from MEBStore
-	// We scan all symbols in the dictionary
-	var candidates []string
-	// err = s.IterateSymbols(func(sym string) bool {
-	// 	candidates = append(candidates, sym)
-	// 	return true
-	// })
-	// if err != nil {
-	// 	fmt.Printf("❌ Failed to scan symbols: %v\n", err)
-	// 	return
-	// }
-
-	// 3. Fuzzy Match
 	searchQuery := strings.Join(keywords, " ")
 	if len(keywords) == 0 {
 		searchQuery = query
 	}
 
 	fmt.Printf("🔎 Searching for: %q\n", searchQuery)
-	results := FindNodesBySimilarity(searchQuery, candidates)
+	results := FindNodesBySimilarity(searchQuery, nil)
 
 	if len(results) == 0 {
 		fmt.Println("📭 No matching nodes found.")
@@ -309,10 +281,7 @@ func processSearchCommand(line string) {
 
 // processQuery handles natural language and datalog query processing.
 func processQuery(ctx context.Context, cfg Config, s *meb.MEBStore, line string, session *SessionContext, nlPrompt *prompts.Prompt, explainPrompt *prompts.Prompt, factStrings []string) {
-	// Detect if this is a follow-up query
 	isFollowUp := isFollowUpQuery(line) && session.HasContext()
-
-	// Detect if this is natural language or direct Datalog
 	isNL := !strings.Contains(line, "(") && strings.Contains(line, " ")
 
 	var nlQuery string
@@ -325,15 +294,14 @@ func processQuery(ctx context.Context, cfg Config, s *meb.MEBStore, line string,
 		}
 		fmt.Println("💭 Thinking...")
 
-		// Prepare template data with optional suggested queries context
 		var prevSuggestions string
 		if isFollowUp && session.HasContext() {
 			prevSuggestions = session.GetLastSuggestions()
 		}
 
-		translated, err := askGeminiWithContext(ctx, cfg, nlPrompt, line, factStrings, prevSuggestions)
+		translated, err := askLLMWithContext(ctx, cfg, nlPrompt, line, factStrings, prevSuggestions)
 		if err != nil {
-			fmt.Printf("Gemini Error: %v\n", err)
+			fmt.Printf("LLM Error: %v\n", err)
 			return
 		}
 
@@ -341,25 +309,20 @@ func processQuery(ctx context.Context, cfg Config, s *meb.MEBStore, line string,
 		datalogQuery = translated
 		fmt.Printf("📝 Translated to: %s\n", datalogQuery)
 	} else {
-		// Direct Datalog query
 		datalogQuery = line
 	}
 
-	// Execute the query
 	results, err := gcamdb.Query(context.Background(), s, datalogQuery)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
 
-	// Display results
 	displayResults(results)
 
-	// Summarize results
 	summary := SummarizeResults(results)
 	session.UpdateContext(nlQuery, datalogQuery, results, summary)
 
-	// Explain results if we have a natural language query and the explain prompt
 	if nlQuery != "" && explainPrompt != nil {
 		fmt.Println("\n🤖 Analyzing results...")
 		explanation, err := explainResults(ctx, cfg, session, explainPrompt)
@@ -368,10 +331,8 @@ func processQuery(ctx context.Context, cfg Config, s *meb.MEBStore, line string,
 		} else {
 			fmt.Printf("\n📊 %s\n\n", explanation)
 
-			// Extract suggested queries from the explanation
 			suggestedQueries := extractSuggestedQueries(explanation)
 
-			// Add to conversation history
 			session.AddTurn(ConversationTurn{
 				UserInput:        line,
 				NLQuery:          nlQuery,
@@ -426,7 +387,6 @@ func explainResults(ctx context.Context, cfg Config, session *SessionContext, ex
 		return "", fmt.Errorf("no result summary available")
 	}
 
-	// Prepare data for the explain template
 	data := map[string]interface{}{
 		"nl_query":            session.LastNLQuery,
 		"datalog":             session.LastDatalog,
@@ -442,54 +402,30 @@ func explainResults(ctx context.Context, cfg Config, session *SessionContext, ex
 		return "", fmt.Errorf("failed to execute explain template: %w", err)
 	}
 
-	// Call Gemini with the explain prompt
-	// Call Gemini with the explain prompt
-	apiKey := cfg.GeminiAPIKey
-	if apiKey == "" {
-		return "", fmt.Errorf("Gemini API key not configured")
+	modelName := cfg.Model
+	if explainPrompt.Config.Model != "" {
+		modelName = explainPrompt.Config.Model
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
-	if err != nil {
-		return "", err
-	}
-	defer client.Close()
-
-	// Use model from config, which defaults to env or fallback in DefaultConfig()
-	modelName := cfg.Model
-	if explainPrompt.Config.Model != "" {
-		modelName = explainPrompt.Config.Model
-	}
-	model := client.GenerativeModel(modelName)
-	model.SetTemperature(explainPrompt.Config.Temperature)
-
-	resp, err := model.GenerateContent(ctx, genai.Text(promptStr))
+	resp, err := genkit.Generate(ctx, cfg.Genkit,
+		ai.WithModelName(modelName),
+		ai.WithPrompt(promptStr),
+	)
 	if err != nil {
 		return "", err
 	}
 
-	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
-		return "", fmt.Errorf("no response from Gemini")
-	}
-
-	for _, part := range resp.Candidates[0].Content.Parts {
-		if txt, ok := part.(genai.Text); ok {
-			return strings.TrimSpace(string(txt)), nil
-		}
-	}
-	return "", fmt.Errorf("unexpected response format")
+	return strings.TrimSpace(resp.Text()), nil
 }
 
 func parseArg(s string) string {
 	s = strings.TrimSpace(s)
-	// If it starts with uppercase, it's a variable -> empty string for Scan
 	if len(s) > 0 && s[0] >= 'A' && s[0] <= 'Z' {
 		return ""
 	}
-	// If it's quoted, strip quotes
 	return clean(s)
 }
 
@@ -497,40 +433,16 @@ func clean(s string) string {
 	return strings.TrimSpace(strings.ReplaceAll(s, "\"", ""))
 }
 
-func askGemini(ctx context.Context, cfg Config, p *prompts.Prompt, question string, facts []string) (string, error) {
-	return askGeminiWithContext(ctx, cfg, p, question, facts, "")
+func askLLM(ctx context.Context, cfg Config, p *prompts.Prompt, question string, facts []string) (string, error) {
+	return askLLMWithContext(ctx, cfg, p, question, facts, "")
 }
 
-func askGeminiWithContext(ctx context.Context, cfg Config, p *prompts.Prompt, question string, facts []string, suggestedQueries string) (string, error) {
-
-	apiKey := cfg.GeminiAPIKey
-	if apiKey == "" {
-		return "", fmt.Errorf("Gemini API key not configured")
-	}
-
-	// Increased timeout to 30 seconds to handle complex queries
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
-	if err != nil {
-		return "", err
-	}
-	defer client.Close()
-
-	// Use model from config (which accounts for env var)
-	// If prompt config overrides it, use that?
-	// Usually prompt config model is bare or specific. Let's prefer global config if prompt doesn't specify?
-	// ACTUALLY, repl.Config.Model is the source of truth for the session.
+func askLLMWithContext(ctx context.Context, cfg Config, p *prompts.Prompt, question string, facts []string, suggestedQueries string) (string, error) {
 	modelName := cfg.Model
 	if p.Config.Model != "" {
 		modelName = p.Config.Model
 	}
 
-	model := client.GenerativeModel(modelName)
-	model.SetTemperature(p.Config.Temperature)
-
-	// Prepare data for template
 	data := map[string]interface{}{
 		"Query":            question,
 		"Predicates":       formatPredicatesListSection(facts),
@@ -542,34 +454,32 @@ func askGeminiWithContext(ctx context.Context, cfg Config, p *prompts.Prompt, qu
 		return "", fmt.Errorf("failed to execute prompt template: %w", err)
 	}
 
-	resp, err := model.GenerateContent(ctx, genai.Text(promptStr))
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
+	resp, err := genkit.Generate(ctx, cfg.Genkit,
+		ai.WithModelName(modelName),
+		ai.WithPrompt(promptStr),
+	)
 	if err != nil {
 		return "", err
 	}
 
-	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
-		return "", fmt.Errorf("no response from Gemini")
+	if resp.Text() == "" {
+		return "", fmt.Errorf("no response from LLM")
 	}
 
-	for _, part := range resp.Candidates[0].Content.Parts {
-		if txt, ok := part.(genai.Text); ok {
-			clean := strings.TrimSpace(string(txt))
-			// Remove markdown code blocks if Gemini adds them
-			clean = strings.TrimPrefix(clean, "```datalog")
-			clean = strings.TrimPrefix(clean, "```")
-			clean = strings.TrimSuffix(clean, "```")
-			return strings.TrimSpace(clean), nil
-		}
-	}
-	return "", fmt.Errorf("unexpected response format")
+	clean := strings.TrimSpace(resp.Text())
+	clean = strings.TrimPrefix(clean, "```datalog")
+	clean = strings.TrimPrefix(clean, "```")
+	clean = strings.TrimSuffix(clean, "```")
+	return strings.TrimSpace(clean), nil
 }
 
 // executePlanCommand handles the "plan <goal>" command by generating and executing a multi-step plan.
 func executePlanCommand(ctx context.Context, cfg Config, s *meb.MEBStore, goal string, projectContext *ProjectSummary, plannerPrompt *prompts.Prompt) error {
 	fmt.Println("\n🧠 Analyzing codebase and generating execution plan...")
 
-	// Prepare template data with project context
 	data := map[string]interface{}{
 		"Query":      goal,
 		"Packages":   projectContext.Packages,
@@ -577,69 +487,41 @@ func executePlanCommand(ctx context.Context, cfg Config, s *meb.MEBStore, goal s
 		"TopSymbols": projectContext.TopSymbols,
 	}
 
-	// Execute template to generate prompt
 	promptStr, err := plannerPrompt.Execute(data)
 	if err != nil {
 		return fmt.Errorf("failed to execute planner template: %w", err)
 	}
 
-	// Call Gemini to generate plan
-	apiKey := cfg.GeminiAPIKey
-	if apiKey == "" {
-		return fmt.Errorf("Gemini API key not configured")
-	}
-
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
-	if err != nil {
-		return fmt.Errorf("failed to create Gemini client: %w", err)
-	}
-	defer client.Close()
-
-	// Use model from config
 	modelName := cfg.Model
 	if plannerPrompt.Config.Model != "" {
 		modelName = plannerPrompt.Config.Model
 	}
-	model := client.GenerativeModel(modelName)
-	model.SetTemperature(plannerPrompt.Config.Temperature)
 
-	resp, err := model.GenerateContent(ctx, genai.Text(promptStr))
+	resp, err := genkit.Generate(ctx, cfg.Genkit,
+		ai.WithModelName(modelName),
+		ai.WithPrompt(promptStr),
+	)
 	if err != nil {
-		return fmt.Errorf("Gemini API error: %w", err)
+		return fmt.Errorf("LLM API error: %w", err)
 	}
 
-	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
-		return fmt.Errorf("no response from Gemini")
-	}
-
-	var planJSON string
-	for _, part := range resp.Candidates[0].Content.Parts {
-		if txt, ok := part.(genai.Text); ok {
-			planJSON = string(txt)
-			break
-		}
-	}
-
+	planJSON := resp.Text()
 	if planJSON == "" {
-		return fmt.Errorf("empty response from Gemini")
+		return fmt.Errorf("empty response from LLM")
 	}
 
-	// Parse JSON plan
 	steps, err := parseJSONPlan(planJSON)
 	if err != nil {
 		return fmt.Errorf("failed to parse plan: %w", err)
 	}
 
-	// Create execution session
 	session := NewExecutionSession(goal, steps)
 
-	// Display plan to user
 	DisplayPlan(session)
 
-	// Get user confirmation
 	confirmed, err := ConfirmExecution()
 	if err != nil {
 		return fmt.Errorf("failed to get user confirmation: %w", err)
@@ -650,6 +532,5 @@ func executePlanCommand(ctx context.Context, cfg Config, s *meb.MEBStore, goal s
 		return nil
 	}
 
-	// Execute the plan
 	return ExecutePlan(ctx, cfg, s, session, plannerPrompt)
 }

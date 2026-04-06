@@ -77,7 +77,7 @@ func main() {
 	mgr := &MockManager{}
 	mgr.On("GetStore", "test-project").Return(s, nil)
 
-	svc := &GeminiService{
+	svc := &AIService{
 		manager: mgr,
 	}
 
@@ -135,7 +135,7 @@ func TestHandleRequestWithExplicitSymbol(t *testing.T) {
 	s.AddDocument(symKey, symContent, nil, nil)
 
 	mgr := &MockManager{}
-	svc := &GeminiService{manager: mgr}
+	svc := &AIService{manager: mgr}
 
 	req := AIRequest{
 		Task:     "", // Trigger default case to call BuildPrompt

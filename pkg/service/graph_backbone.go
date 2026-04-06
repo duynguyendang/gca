@@ -33,6 +33,13 @@ func (s *GraphService) GetFileBackbone(ctx context.Context, projectID, fileID st
 
 	quotedFileID := fmt.Sprintf("\"%s\"", cleanFileID)
 
+	symbolToFile := make(map[string]string)
+	for fact, _ := range store.Scan("", config.PredicateDefines, "") {
+		if sym, ok := fact.Object.(string); ok {
+			symbolToFile[sym] = fact.Subject
+		}
+	}
+
 	nodesMap := make(map[string]export.D3Node)
 	linksMap := make(map[string]export.D3Link)
 
@@ -52,14 +59,9 @@ func (s *GraphService) GetFileBackbone(ctx context.Context, projectID, fileID st
 		if !ok {
 			continue
 		}
-		// Extract file from target ID (convention: path/to/file.go:Symbol)
-		parts := strings.SplitN(targetAuth, ":", 2)
-		if len(parts) < 2 {
+		targetFile := extractFileFromSymbol(targetAuth, symbolToFile)
+		if targetFile == "" || targetFile == cleanFileID {
 			continue
-		}
-		targetFile := parts[0]
-		if targetFile == cleanFileID {
-			continue // ignore self-calls
 		}
 
 		// Add Node
@@ -126,4 +128,15 @@ func (s *GraphService) GetFileBackbone(ctx context.Context, projectID, fileID st
 	}
 
 	return &export.D3Graph{Nodes: nodes, Links: links}, nil
+}
+
+func extractFileFromSymbol(symbol string, symbolToFile map[string]string) string {
+	parts := strings.SplitN(symbol, ":", 2)
+	if len(parts) >= 2 && isValidFilePath(parts[0]) {
+		return parts[0]
+	}
+	if defFile, exists := symbolToFile[symbol]; exists {
+		return defFile
+	}
+	return ""
 }

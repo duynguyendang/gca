@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/common"
@@ -284,6 +285,13 @@ func (s *GraphService) findFilesWithPrefix(store *meb.MEBStore, prefix string) [
 
 // GetFileCalls returns a recursive file-to-file call graph starting from a specific file.
 func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID string, depth int) (*export.D3Graph, error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("GetFileCalls recovered from panic: %v", r)
+		}
+	}()
+
+	fmt.Printf("GetFileCalls START: projectID=%s, fileID=%s, depth=%d\n", projectID, fileID, depth)
 	if depth <= 0 {
 		depth = config.DefaultFileDepthLimit
 	}
@@ -301,7 +309,49 @@ func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID strin
 
 	store, err := s.getStore(projectID)
 	if err != nil {
+		log.Printf("GetFileCalls: getStore error: %v", err)
 		return nil, err
+	}
+	if store == nil {
+		log.Printf("GetFileCalls: store is nil for project %s", projectID)
+		return nil, fmt.Errorf("store is nil for project: %s", projectID)
+	}
+
+	cleanFileID := strings.Trim(fileID, "\"")
+
+	// Try to find the actual stored file ID (may or may not have project prefix)
+	storedFileID := cleanFileID
+	if projectID != "" && strings.HasPrefix(cleanFileID, projectID+"/") {
+		// File ID has project prefix, try to find if it's stored without prefix
+		withoutPrefix := strings.TrimPrefix(cleanFileID, projectID+"/")
+		if _, err := store.GetContentByKey(withoutPrefix); err == nil {
+			storedFileID = withoutPrefix
+		}
+	} else if projectID != "" {
+		// File ID doesn't have project prefix, check if it's stored with prefix
+		prefixedFileID := projectID + "/" + cleanFileID
+		if _, err := store.GetContentByKey(prefixedFileID); err == nil {
+			storedFileID = prefixedFileID
+		}
+	}
+
+	log.Printf("GetFileCalls: fileID=%s, storedFileID=%s", cleanFileID, storedFileID)
+
+	log.Printf("GetFileCalls: cleanFileID=%s, storedFileID=%s, projectID=%s", cleanFileID, storedFileID, projectID)
+
+	symbolToFile := make(map[string]string)
+	// Build symbol-to-file mapping using the fixed query path
+	q := fmt.Sprintf("triples(?f, \"%s\", ?sym)", config.PredicateDefines)
+	defineResults, err := gcamdb.Query(ctx, store, q)
+	if err != nil {
+		log.Printf("GetFileCalls: defines query error: %v", err)
+	}
+	for _, row := range defineResults {
+		if f, ok := row["?f"].(string); ok {
+			if sym, ok := row["?sym"].(string); ok {
+				symbolToFile[sym] = f
+			}
+		}
 	}
 
 	nodesMap := make(map[string]export.D3Node)
@@ -311,11 +361,11 @@ func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID strin
 		file  string
 		depth int
 	}
-	queue := []queueItem{{file: strings.Trim(fileID, "\""), depth: 0}}
+	queue := []queueItem{{file: storedFileID, depth: 0}}
 	visited := make(map[string]bool)
-	visited[strings.Trim(fileID, "\"")] = true
+	visited[storedFileID] = true
 
-	startFile := strings.Trim(fileID, "\"")
+	startFile := storedFileID
 	nodesMap[startFile] = export.D3Node{
 		ID:   startFile,
 		Name: common.ExtractBaseName(startFile),
@@ -332,43 +382,55 @@ func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID strin
 
 		cleanCurrentFile := current.file
 
-		var definedSymbols []string
-		for fact, _ := range store.Scan(cleanCurrentFile, config.PredicateDefines, "") {
-			if sym, ok := fact.Object.(string); ok {
-				definedSymbols = append(definedSymbols, sym)
-			}
-		}
-
-		if len(definedSymbols) == 0 {
-			continue
-		}
-
 		filesToVisit := make(map[string]bool)
 		targetCalls := make(map[string]int)
 
-		for _, sym := range definedSymbols {
-			for fact, _ := range store.Scan(sym, config.PredicateCalls, "") {
-				targetSymbol, ok := fact.Object.(string)
-				if !ok {
-					continue
-				}
+		// First try to find calls via defines (function calls to other files)
+		q := fmt.Sprintf("triples(\"%s\", \"%s\", ?sym), triples(?sym, \"%s\", ?o)", cleanCurrentFile, config.PredicateDefines, config.PredicateCalls)
+		results, err := gcamdb.Query(ctx, store, q)
+		if err != nil {
+			log.Printf("GetFileCalls: calls query error: %v", err)
+		}
 
-				parts := strings.SplitN(targetSymbol, ":", 2)
-				if len(parts) < 2 {
-					continue
-				}
-				targetFile := parts[0]
-
-				if !isValidFilePath(targetFile) {
-					continue
-				}
-
-				if targetFile == cleanCurrentFile {
-					continue
-				}
-
-				targetCalls[targetFile]++
+		if len(results) == 0 {
+			// Fall back to imports if no calls found
+			q = fmt.Sprintf("triples(\"%s\", \"%s\", ?o)", cleanCurrentFile, config.PredicateImports)
+			results, err = gcamdb.Query(ctx, store, q)
+			if err != nil {
+				log.Printf("GetFileCalls: imports query error: %v", err)
 			}
+		}
+
+		for _, row := range results {
+			targetSymbol, ok := row["?o"].(string)
+			if !ok {
+				continue
+			}
+
+			var targetFile string
+			parts := strings.SplitN(targetSymbol, ":", 2)
+			if len(parts) >= 2 && isValidFilePath(parts[0]) {
+				targetFile = parts[0]
+			} else if defFile, exists := symbolToFile[targetSymbol]; exists {
+				targetFile = defFile
+			} else {
+				// Try to resolve external calls like "api.KeyFromName" or "core.NewError"
+				// by searching the symbolToFile map for matching symbols
+				targetFile = findFileForSymbol(targetSymbol, symbolToFile)
+				if targetFile == "" {
+					// For imports, convert package path to project file
+					targetFile = findProjectFileForImport(targetSymbol, projectID)
+					if targetFile == "" {
+						continue
+					}
+				}
+			}
+
+			if targetFile == cleanCurrentFile {
+				continue
+			}
+
+			targetCalls[targetFile]++
 		}
 
 		for targetFile, weight := range targetCalls {
@@ -510,6 +572,68 @@ func (s *GraphService) GetFlowPath(ctx context.Context, projectID, fromID, toID 
 	}
 
 	return &export.D3Graph{Nodes: nodes, Links: links}, nil
+}
+
+// findFileForSymbol looks up the file that defines a symbol.
+// It handles both qualified symbols (e.g., "main.go:main") and unqualified
+// symbols (e.g., "fmt.Println" or just "Println") by checking if any
+// defined symbol in symbolToFile ends with the target symbol name.
+func findFileForSymbol(target string, symbolToFile map[string]string) string {
+	// Direct lookup first
+	if file, exists := symbolToFile[target]; exists {
+		return file
+	}
+
+	// Try to find by suffix - e.g., target="fmt.Println" -> look for "*/fmt.Println"
+	// or target="Println" -> look for "*/Println"
+	for sym, file := range symbolToFile {
+		if strings.HasSuffix(sym, ":"+target) || sym == target {
+			return file
+		}
+	}
+
+	// Try stripping package prefix - e.g., "fmt.Println" -> "Println"
+	parts := strings.Split(target, ".")
+	if len(parts) > 1 {
+		lastPart := parts[len(parts)-1]
+		for sym, file := range symbolToFile {
+			if strings.HasSuffix(sym, ":"+lastPart) {
+				return file
+			}
+		}
+	}
+
+	return ""
+}
+
+// findProjectFileForImport converts an import path to a project file path.
+// For example, "github.com/firebase/genkit/go/core" might map to "genkit-go/core"
+// if the project is named "genkit-go".
+func findProjectFileForImport(importPath, projectID string) string {
+	// If the import starts with the project ID, convert it
+	if strings.HasPrefix(importPath, projectID) {
+		return strings.TrimPrefix(importPath, projectID+"/")
+	}
+
+	// Try common patterns
+	// e.g., "github.com/firebase/genkit/go/core" -> "genkit-go/core" for projectID "genkit-go"
+	parts := strings.Split(importPath, "/")
+	if len(parts) >= 3 {
+		// Try to find the project in the import path
+		// "github.com/firebase/genkit/go/core" -> look for "genkit" or projectID
+		for i, part := range parts {
+			if part == projectID || strings.Contains(importPath, projectID) {
+				// Reconstruct with just the path after the project
+				remaining := strings.Join(parts[i+1:], "/")
+				if remaining != "" {
+					return remaining
+				}
+			}
+		}
+	}
+
+	// Return the import path as-is (might be external)
+	return ""
 }
 
 // isValidFilePath checks if a string looks like a valid source file path

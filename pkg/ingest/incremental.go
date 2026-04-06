@@ -103,6 +103,11 @@ func RunIncrementalWithState(s *meb.MEBStore, projectName string, sourceDir stri
 	ctx := context.Background()
 	ext := NewTreeSitterExtractor()
 
+	// Set topic ID for project-scoped ingestion
+	topicID := hashToTopicID(projectName)
+	s.SetTopicID(topicID)
+	log.Printf("Using topic ID %d for incremental project %s", topicID, projectName)
+
 	existingHashes, err := LoadFileHashes(s)
 	if err != nil {
 		log.Printf("Warning: Could not load existing hashes: %v (starting fresh)", err)

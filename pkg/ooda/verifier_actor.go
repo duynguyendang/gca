@@ -29,6 +29,10 @@ var DefaultPolicy = Policy{
 		TaskPathNarrative:       true,
 		TaskSmartSearchAnalysis: true,
 		TaskMultiFileSummary:    true,
+		TaskRefactor:            true,
+		TaskTestGeneration:      true,
+		TaskSecurityAudit:       true,
+		TaskPerformance:         true,
 	},
 	BlockPatterns: []string{
 		"delete",

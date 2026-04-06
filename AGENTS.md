@@ -14,6 +14,7 @@ This file provides instructions for AI agents working on the GCA (Gem Code Analy
 - Vector embeddings with MRL compression
 - AI-powered code analysis and explanations
 - MCP (Model Context Protocol) server
+- GenePool policy agents (security, quality, performance, impact)
 
 ---
 
@@ -21,6 +22,7 @@ This file provides instructions for AI agents working on the GCA (Gem Code Analy
 
 ### Prerequisites
 - Go 1.25+
+- Node.js 18+ (for frontend)
 - Gemini API key (for AI features)
 - Git
 
@@ -45,7 +47,7 @@ export USE_OODA_LOOP=true
 
 ### 3. Build and Run
 ```bash
-# Build
+# Build backend
 go build -o gca .
 
 # Start server
@@ -55,7 +57,14 @@ go build -o gca .
 ./local-run.sh
 ```
 
-### 4. Ingest a Project
+### 4. Build Frontend (optional)
+```bash
+cd ../gca-fe
+npm install
+npm run build
+```
+
+### 5. Ingest a Project
 ```bash
 # Ingest a repository
 ./gca ingest ./path/to/repo ./data/my-project
@@ -93,6 +102,9 @@ curl http://localhost:8080/api/v1/projects
 # List files in a project
 curl "http://localhost:8080/api/v1/files?project=my-project"
 
+# List symbols in a project
+curl "http://localhost:8080/api/v1/symbols?project=my-project"
+
 # Query knowledge graph
 curl -X POST "http://localhost:8080/api/v1/query?project=my-project" \
   -H "Content-Type: application/json" \
@@ -106,6 +118,15 @@ curl "http://localhost:8080/api/v1/hydrate?id=path/to/file.go&project=my-project
 
 # Get file call graph
 curl "http://localhost:8080/api/v1/graph/file-calls?id=path/to/file.go&project=my-project&depth=2"
+
+# Get file backbone (dependencies)
+curl "http://localhost:8080/api/v1/graph/backbone?id=path/to/file.go&project=my-project"
+
+# Get graph clusters
+curl "http://localhost:8080/api/v1/graph/cluster?project=my-project"
+
+# Semantic search
+curl "http://localhost:8080/api/v1/semantic-search?project=my-project&query=authentication"
 ```
 
 ### Common Issues
@@ -235,34 +256,93 @@ kubectl apply -f k8s/
 
 ```
 gca/
-├── cmd/                    # CLI entry points
-│   └── gca/main.go        # Main application entry
+├── cmd/                    # CLI commands (Cobra)
+│   ├── ingest.go          # Ingest command
+│   ├── mcp.go             # MCP server command
+│   ├── repl.go            # REPL command
+│   ├── root.go            # Root command
+│   └── server.go          # Server command
 ├── pkg/
+│   ├── agent/             # Agent system (executor, planner, orchestrator, reflector, types)
+│   ├── common/            # Shared utilities
 │   ├── config/            # Configuration constants
-│   ├── datalog/          # Datalog parser & executor
+│   ├── datalog/           # Datalog parser & executor
+│   ├── export/            # D3 graph export (d3.go)
 │   ├── ingest/            # Code ingestion pipeline
 │   │   ├── extractor.go   # tree-sitter AST extraction
 │   │   ├── ingest.go      # Parallel worker orchestration
-│   │   └── incremental.go # Incremental updates
-│   ├── service/           # Business logic
-│   │   ├── graph.go       # Graph queries & operations
-│   │   ├── pathfinder.go  # Weighted path finding
-│   │   ├── clustering.go  # Graph clustering
-│   │   └── ai/
-│   │       └── gemini.go # Gemini AI integration
-│   ├── server/            # HTTP API handlers
-│   │   ├── server.go     # Gin server setup
-│   │   └── handlers.go   # Route handlers
-│   ├── repl/              # Interactive CLI
-│   ├── mcp/               # Model Context Protocol
-│   ├── prompts/           # AI prompt templates
+│   │   ├── incremental.go # Incremental updates
+│   │   ├── virtual.go     # Virtual predicate enrichment
+│   │   ├── llm.go         # LLM integration
+│   │   ├── metadata.go    # Metadata handling
+│   │   ├── stdlib.go      # Standard library detection
+│   │   └── types.go       # Type definitions
+│   ├── meb/               # GCA wrapper for MEB store (Query() functionality)
 │   ├── ooda/              # OODA cognitive loop
-│   └── common/            # Shared utilities
+│   │   ├── ooda.go        # Core types (GCAFrame, GCALoop)
+│   │   ├── observer.go    # Intent classification
+│   │   ├── orienter.go    # Context retrieval
+│   │   ├── decider.go     # Prompt building
+│   │   ├── verifier_actor.go # Policy enforcement
+│   │   └── helpers.go     # Utilities
+│   ├── profiling/         # Memory profiling utilities
+│   ├── prompts/           # Prompt loader package
+│   ├── registry/          # Query registry
+│   ├── repl/              # Interactive CLI REPL
+│   ├── server/            # HTTP API (Gin)
+│   │   ├── handlers.go    # Route handlers
+│   │   ├── server.go      # Gin server setup
+│   │   ├── compression.go # Gzip compression
+│   │   ├── rate_limit.go  # Rate limiting
+│   │   ├── validation.go  # Input validation
+│   │   ├── handlers_backbone.go
+│   │   └── middleware.go  # Middleware
+│   ├── service/           # Business logic
+│   │   ├── ai/            # AI service (gemini.go)
+│   │   ├── graph/         # Graph module
+│   │   │   └── knowledge.go
+│   │   ├── graph.go       # Graph operations
+│   │   ├── graph_backbone.go
+│   │   ├── graph_clustering.go
+│   │   ├── graph_hydration.go
+│   │   ├── graph_pathfinder.go
+│   │   ├── graph_queries.go
+│   │   ├── clustering.go
+│   │   └── pathfinder.go
+│   ├── telemetry/         # Telemetry utilities
+│   └── mcp/               # Model Context Protocol server
 ├── internal/
-│   └── manager/          # Multi-project store manager
-├── data/                 # Data storage (gitignored)
-├── prompts/              # Prompt template files
-└── test/                 # Test cases and scenarios
+│   └── manager/           # Multi-project store manager
+├── policies/              # GenePool Datalog policy files
+│   ├── security_agent.dl
+│   ├── logic_consistency_agent.dl
+│   ├── performance_agent.dl
+│   ├── quality_agent.dl
+│   └── impact_agent.dl
+├── prompts/               # AI prompt templates (.prompt files)
+├── build/                 # Build artifacts
+├── devtools/              # Debug utilities
+├── data/                  # Data storage
+└── test/                  # Test cases
+
+gca-fe/                    # Frontend (React + TypeScript)
+├── App.tsx                # Main app component
+├── components/             # UI components
+│   ├── AgentStepper/
+│   ├── EvidenceView/
+│   ├── LandingScreen/
+│   ├── Layout/            # Code & synthesis panels
+│   │   └── subcomponents/ # ArchitectureOverview, EntropyMetricsPanel, LogicSequenceCard
+│   ├── NarrativeScreen/   # AI narrative chat interface
+│   ├── Synthesis/         # Markdown rendering
+│   ├── TreeVisualizer/    # Graph visualizations
+│   │   └── graphs/        # BackboneGraph, DiscoveryGraph, FlowGraph, TreeMapGraph
+│   └── common/            # ErrorMessage, LoadingSpinner, ToggleSwitch
+├── context/               # React Context state (AppContext, ToastContext)
+├── hooks/                 # Custom React hooks (15+ hooks)
+├── services/              # API service layer (geminiService, graphService)
+├── utils/                 # Utilities (fetchWithTimeout, graphUtils, pathfinding)
+└── src/                   # Source utilities (ErrorBoundary, theme, constants)
 ```
 
 ---
@@ -277,6 +357,12 @@ gca/
 | AI | Google Gemini |
 | Parsing | tree-sitter |
 | Embeddings | Gemini Embedding (768d→64d MRL) |
+| Frontend | React 19, TypeScript, D3.js |
+| Build | Vite |
+| Animation | Framer Motion |
+| Syntax Highlighting | PrismJS |
+| Icons | Lucide React |
+| Markdown | React Markdown, remark-gfm |
 
 ---
 
@@ -289,6 +375,9 @@ go build -o gca .
 
 # Build for Docker
 docker build -t gca:latest .
+
+# Build frontend
+cd ../gca-fe && npm run build
 ```
 
 ### Running
@@ -299,7 +388,7 @@ docker build -t gca:latest .
 # Incremental ingestion
 ./gca ingest --incremental ./my-project ./data/my-project
 
-# Start server (correct command)
+# Start server
 ./gca server
 
 # Start REPL
@@ -341,7 +430,7 @@ go vet ./...
 | `PORT` | No | Server port (default: 8080) |
 | `LOW_MEM` | No | Enable low-memory mode (true/false) |
 | `CORS_ALLOW_ORIGINS` | No | Comma-separated CORS origins |
-| `GEMINI_MODEL` | No | Gemini model name (default: gemini-3-flash-preview) |
+| `GEMINI_MODEL` | No | Gemini model name (default: gemini-1.5-flash) |
 | `USE_OODA_LOOP` | No | Use OODA-based AI dispatch (true/false) |
 
 ---
@@ -408,6 +497,15 @@ Memory-Efficient Bidirectional store with:
 - Dictionary compression
 - Vector snapshot persistence
 
+### 4. GenePool Policy Agents
+
+Pre-defined Datalog-based policy agents in `policies/`:
+- `security_agent.dl` - Security vulnerability detection
+- `logic_consistency_agent.dl` - Formal verification
+- `performance_agent.dl` - Performance bottleneck prediction
+- `quality_agent.dl` - Code quality and technical debt
+- `impact_agent.dl` - Change impact analysis
+
 ---
 
 ## Common Tasks
@@ -439,11 +537,12 @@ case "my_task":
 
 ### Modifying AI Prompts
 
-Prompt templates are stored in `prompts/`:
+Prompt templates are stored in `prompts/` at project root:
 - `datalog.prompt` - Datalog query generation
 - `chat.prompt` - General conversation
 - `smart_search.prompt` - Search result analysis
 - `path_narrative.prompt` - Path explanation
+- `planner.prompt` - Multi-step planning
 - etc.
 
 ---
@@ -497,6 +596,7 @@ go test -run TestQueryExecution ./pkg/datalog/...
 | GET | `/api/v1/graph/backbone` | Get cross-file dependency backbone |
 | GET | `/api/v1/graph/path` | Find path between symbols |
 | GET | `/api/v1/graph/cluster` | Get graph clusters |
+| GET | `/api/v1/graph/paginated` | Paginated graph loading |
 | GET | `/api/v1/semantic-search` | Vector similarity search |
 | POST | `/api/v1/ai/ask` | AI-powered analysis |
 
@@ -505,10 +605,15 @@ go test -run TestQueryExecution ./pkg/datalog/...
 | Endpoint | Parameters |
 |----------|------------|
 | `/v1/files` | `project` (required) |
+| `/v1/symbols` | `project` (required) |
 | `/v1/source` | `project` (required), `id` (required) |
 | `/v1/hydrate` | `project` (required), `id` (required) |
-| `/v1/graph/file-calls` | `project` (required), `id` (required), `depth` (1-2) |
+| `/v1/graph/file-calls` | `project` (required), `id` (required), `depth` (1-3) |
+| `/v1/graph/backbone` | `project` (required), `id` (required) |
+| `/v1/graph/cluster` | `project` (required) |
+| `/v1/graph/paginated` | `project` (required), `cursor` (optional), `limit` (optional) |
 | `/v1/query` | `project` (required), `hydrate` (true/false), `raw` (true/false) |
+| `/v1/semantic-search` | `project` (required), `query` (required), `limit` (optional) |
 
 ### MCP Tools
 
@@ -530,8 +635,15 @@ go test -run TestQueryExecution ./pkg/datalog/...
 | `pkg/ingest/extractor.go` | tree-sitter code extraction |
 | `pkg/datalog/parser.go` | Datalog query parser |
 | `pkg/service/graph.go` | Graph operations |
+| `pkg/service/graph_pathfinder.go` | File calls, path finding |
+| `pkg/service/graph_backbone.go` | File dependency backbone |
+| `pkg/service/graph_queries.go` | Query execution |
+| `pkg/export/d3.go` | D3 graph export format |
+| `pkg/meb/store.go` | Query wrapper for MEB store |
 | `pkg/server/server.go` | HTTP server setup |
+| `pkg/server/handlers.go` | Route handlers |
 | `internal/manager/store_manager.go` | Project store management |
+| `policies/*.dl` | GenePool policy definitions |
 
 ---
 
@@ -548,14 +660,18 @@ Key internal dependencies:
 1. **Always run `go build ./...`** after making changes to verify compilation
 2. **Use existing patterns** - follow the code style in each package
 3. **Add tests** for new functionality
-4. **Check prompts/** before modifying AI behavior
+4. **Check `prompts/`** before modifying AI behavior
 5. **Environment variables** - `GEMINI_API_KEY` required for AI features
 6. **Low-memory mode** - Set `LOW_MEM=true` for constrained environments
+7. **MEB Store** - Use `pkg/meb/store.go` Query() wrapper for Datalog queries
+8. **File paths** - Store uses `filepath:symbolname` format for symbol IDs
 
 ---
 
 ## Related Documentation
 
 - [README.md](README.md) - Full project documentation
-- [docs/ROADMAP.md](ROADMAP.md) - Feature roadmap
+- [docs/GCA-CONTEXT.md](../../docs/GCA-CONTEXT.md) - Project context and structure
+- [docs/ROADMAP.md](../../docs/ROADMAP.md) - Feature roadmap
+- [docs/MANGLEKIT_INTEGRATION.md](../../docs/MANGLEKIT_INTEGRATION.md) - Manglekit integration
 - [test/gca-test.md](test/gca-test.md) - Test scenarios

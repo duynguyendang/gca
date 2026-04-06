@@ -38,3 +38,4 @@ verify_output*.txt
 data
 build
 gca
+gca-test-build

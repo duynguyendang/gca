@@ -105,6 +105,7 @@ func parseAtomString(s string) (string, []string, error) {
 
 // SmartSplit splits a string by comma, correctly handling quotes and parentheses.
 // e.g. "a, b, 'c,d'" -> ["a", "b", "'c,d'"]
+// Handles escaped quotes like "test\"string".
 func SmartSplit(s string) []string {
 	var results []string
 	var current strings.Builder
@@ -112,18 +113,27 @@ func SmartSplit(s string) []string {
 	inQuote := false
 	var quoteChar rune
 
-	for _, r := range s {
+	for i, r := range s {
 		switch r {
+		case '\\':
+			if i+1 < len(s) && (s[i+1] == '"' || s[i+1] == '\'') {
+				current.WriteRune(r)
+			} else {
+				current.WriteRune(r)
+			}
 		case '"', '\'':
 			if inQuote {
 				if r == quoteChar {
-					inQuote = false // Close quote
+					inQuote = false
+					current.WriteRune(r)
+				} else {
+					current.WriteRune(r)
 				}
 			} else {
 				inQuote = true
 				quoteChar = r
+				current.WriteRune(r)
 			}
-			current.WriteRune(r)
 		case '(':
 			if !inQuote {
 				depth++

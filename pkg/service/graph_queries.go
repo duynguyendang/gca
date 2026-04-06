@@ -595,9 +595,9 @@ func (s *GraphService) SemanticSearch(ctx context.Context, projectID, query stri
 		return nil, fmt.Errorf("failed to embed query: %w", err)
 	}
 
-	vecIter := store.Vectors().Search(embedding, k)
-
 	results := make([]SemanticSearchResult, 0, k)
+
+	vecIter := store.Vectors().Search(embedding, k)
 	for vr, err := range vecIter {
 		if err != nil {
 			break
@@ -613,6 +613,49 @@ func (s *GraphService) SemanticSearch(ctx context.Context, projectID, query stri
 		results = append(results, SemanticSearchResult{
 			SymbolID: symbolID,
 			Score:    vr.Score,
+			Name:     name,
+		})
+	}
+
+	return results, nil
+}
+
+// SemanticSearchFiltered performs vector similarity search with graph predicate filtering.
+func (s *GraphService) SemanticSearchFiltered(ctx context.Context, projectID, query string, k int, predicate string, object string, gemini interface {
+	GetEmbedding(ctx context.Context, text string) ([]float32, error)
+}) ([]SemanticSearchResult, error) {
+	store, err := s.getStore(projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	embedding, err := gemini.GetEmbedding(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to embed query: %w", err)
+	}
+
+	builder := store.Find().
+		SimilarTo(embedding).
+		Limit(k)
+
+	if predicate != "" {
+		builder = builder.Where(predicate, object)
+	}
+
+	queryResults, err := builder.Execute()
+	if err != nil {
+		return nil, fmt.Errorf("query builder execution failed: %w", err)
+	}
+
+	results := make([]SemanticSearchResult, 0, len(queryResults))
+	for _, qr := range queryResults {
+		name := qr.Key
+		if parts := strings.Split(qr.Key, ":"); len(parts) > 1 {
+			name = parts[len(parts)-1]
+		}
+		results = append(results, SemanticSearchResult{
+			SymbolID: qr.Key,
+			Score:    qr.Score,
 			Name:     name,
 		})
 	}

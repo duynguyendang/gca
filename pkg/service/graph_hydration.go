@@ -10,11 +10,12 @@ import (
 	"github.com/duynguyendang/meb"
 )
 
-// HydrateShallow performs shallow hydration of symbols (metadata only, no content).
 func (s *GraphService) HydrateShallow(ctx context.Context, store *meb.MEBStore, ids []string) ([]HydratedSymbol, error) {
-	var hydrated []HydratedSymbol
+	hydrated := make([]HydratedSymbol, 0, len(ids))
+
 	for _, id := range ids {
 		hs := HydratedSymbol{ID: id, Metadata: make(map[string]interface{})}
+
 		for fact, _ := range store.Scan(id, config.PredicateHasKind, "") {
 			if str, ok := fact.Object.(string); ok {
 				hs.Kind = str
@@ -55,7 +56,75 @@ func (s *GraphService) HydrateShallow(ctx context.Context, store *meb.MEBStore, 
 	return hydrated, nil
 }
 
-// Hydrate performs full hydration of symbols (metadata + content).
+func (s *GraphService) HydrateShallowBatch(ctx context.Context, store *meb.MEBStore, ids []string) ([]HydratedSymbol, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	hydrated := make([]HydratedSymbol, len(ids))
+	idToIdx := make(map[string]int, len(ids))
+	for i, id := range ids {
+		hydrated[i] = HydratedSymbol{ID: id, Metadata: make(map[string]interface{})}
+		idToIdx[id] = i
+	}
+
+	metadataPredicates := []string{
+		config.PredicateHasKind,
+		config.PredicateHasLanguage,
+		config.PredicateStartLine,
+		config.PredicateEndLine,
+	}
+
+	for _, pred := range metadataPredicates {
+		for _, id := range ids {
+			for fact, err := range store.Scan(id, pred, "") {
+				if err != nil {
+					continue
+				}
+				idx, ok := idToIdx[id]
+				if !ok {
+					continue
+				}
+				hs := &hydrated[idx]
+
+				switch pred {
+				case config.PredicateHasKind:
+					if str, ok := fact.Object.(string); ok {
+						hs.Kind = str
+					}
+				case config.PredicateHasLanguage:
+					if str, ok := fact.Object.(string); ok {
+						hs.Metadata["language"] = str
+					}
+				case config.PredicateStartLine:
+					if num, ok := fact.Object.(int); ok {
+						hs.Metadata["start_line"] = num
+					} else if floatNum, ok := fact.Object.(float64); ok {
+						hs.Metadata["start_line"] = int(floatNum)
+					} else if strNum, ok := fact.Object.(string); ok {
+						if parsed, err := strconv.Atoi(strNum); err == nil {
+							hs.Metadata["start_line"] = parsed
+						}
+					}
+				case config.PredicateEndLine:
+					if num, ok := fact.Object.(int); ok {
+						hs.Metadata["end_line"] = num
+					} else if floatNum, ok := fact.Object.(float64); ok {
+						hs.Metadata["end_line"] = int(floatNum)
+					} else if strNum, ok := fact.Object.(string); ok {
+						if parsed, err := strconv.Atoi(strNum); err == nil {
+							hs.Metadata["end_line"] = parsed
+						}
+					}
+				}
+				break
+			}
+		}
+	}
+
+	return hydrated, nil
+}
+
 func (s *GraphService) Hydrate(ctx context.Context, store *meb.MEBStore, projectID string, ids []string) ([]HydratedSymbol, error) {
 	hydrated, err := s.HydrateShallow(ctx, store, ids)
 	if err != nil {
@@ -112,7 +181,6 @@ func (s *GraphService) Hydrate(ctx context.Context, store *meb.MEBStore, project
 	return hydrated, nil
 }
 
-// enrichNodes populates node content and kind from the store.
 func (s *GraphService) enrichNodes(ctx context.Context, store *meb.MEBStore, graph *export.D3Graph, lazy bool) error {
 	ids := make([]string, len(graph.Nodes))
 	for i, n := range graph.Nodes {
@@ -123,7 +191,7 @@ func (s *GraphService) enrichNodes(ctx context.Context, store *meb.MEBStore, gra
 	var err error
 
 	if lazy {
-		hydrated, err = s.HydrateShallow(ctx, store, ids)
+		hydrated, err = s.HydrateShallowBatch(ctx, store, ids)
 	} else {
 		hydrated, err = s.Hydrate(ctx, store, "", ids)
 	}
@@ -172,7 +240,6 @@ func (s *GraphService) enrichNodes(ctx context.Context, store *meb.MEBStore, gra
 	return nil
 }
 
-// mapChildren recursively maps hydrated symbols to D3 nodes.
 func (s *GraphService) mapChildren(hydrated []HydratedSymbol) []export.D3Node {
 	if len(hydrated) == 0 {
 		return nil

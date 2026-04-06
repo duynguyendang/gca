@@ -17,13 +17,11 @@ import (
 )
 
 var (
-	cfgFile     string
-	dataDir     string
-	sourceDir   string
-	lowMem      bool
-	geminiKey   string
-	geminiModel string
-	port        string
+	cfgFile   string
+	dataDir   string
+	sourceDir string
+	lowMem    bool
+	port      string
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -38,12 +36,6 @@ Datalog, natural language, and semantic search.`,
 		_ = godotenv.Load()
 
 		// Set defaults from environment if not provided via flags
-		if geminiKey == "" {
-			geminiKey = os.Getenv("GEMINI_API_KEY")
-		}
-		if geminiModel == "" {
-			geminiModel = os.Getenv("GEMINI_MODEL")
-		}
 		if port == "" {
 			port = os.Getenv("PORT")
 			if port == "" {
@@ -68,8 +60,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&dataDir, "data", "d", "./data", "data directory for the store")
 	rootCmd.PersistentFlags().StringVarP(&sourceDir, "source", "s", "", "path to source code (for source view)")
 	rootCmd.PersistentFlags().BoolVarP(&lowMem, "low-mem", "l", false, "enable low memory mode")
-	rootCmd.PersistentFlags().StringVar(&geminiKey, "api-key", "", "Gemini API key (or set GEMINI_API_KEY env var)")
-	rootCmd.PersistentFlags().StringVar(&geminiModel, "model", "", "Gemini model to use (or set GEMINI_MODEL env var)")
 	rootCmd.PersistentFlags().StringVarP(&port, "port", "p", "8080", "port for the server (or set PORT env var)")
 }
 
