@@ -853,3 +853,89 @@ func (s *AIService) HandleRequestOODA(ctx context.Context, req AIRequest) (strin
 
 	return ooda.RunOODATask(ctx, loop, req.ProjectID, req.Query, task, req.SymbolID, req.Data)
 }
+
+type AskRequest struct {
+	ProjectID string `json:"project_id"`
+	Query     string `json:"query"`
+	SymbolID  string `json:"symbol_id,omitempty"`
+	Depth     int    `json:"depth,omitempty"`
+	Context   string `json:"context,omitempty"`
+}
+
+type AskResponse struct {
+	Answer     string      `json:"answer"`
+	Query      string      `json:"query"`
+	Intent     string      `json:"intent"`
+	Confidence float64     `json:"confidence"`
+	Results    interface{} `json:"results"`
+	Summary    string      `json:"summary"`
+	Error      string      `json:"error,omitempty"`
+}
+
+func (s *AIService) HandleAsk(ctx context.Context, req AskRequest) (*AskResponse, error) {
+	resp := &AskResponse{
+		Query: req.Query,
+	}
+
+	if req.ProjectID == "" {
+		resp.Error = "project_id is required"
+		return resp, fmt.Errorf("project_id is required")
+	}
+	if req.Query == "" {
+		resp.Error = "query is required"
+		return resp, fmt.Errorf("query is required")
+	}
+
+	store, err := s.manager.GetStore(req.ProjectID)
+	if err != nil {
+		resp.Error = fmt.Sprintf("failed to get store: %v", err)
+		return resp, fmt.Errorf("failed to get store: %w", err)
+	}
+
+	intentResult := ClassifyIntent(req.Query)
+	resp.Intent = string(intentResult.Intent)
+	resp.Confidence = intentResult.Confidence
+
+	target := intentResult.Target
+	if target == "" && req.SymbolID != "" {
+		target = req.SymbolID
+	}
+
+	queryResult, err := GenerateDatalog(ctx, req.Query, intentResult.Intent, target, store)
+	if err != nil {
+		resp.Query = queryResult.Query
+		resp.Error = fmt.Sprintf("query generation failed: %v", err)
+		resp.Answer = "I had trouble understanding your question. Could you rephrase it?"
+		return resp, nil
+	}
+
+	resp.Query = queryResult.Query
+
+	pathTool := parsePathTool(resp.Query)
+	var results interface{}
+	if pathTool != nil {
+		results, err = ExecutePathQuery(ctx, store, pathTool.Source, pathTool.Target)
+	} else {
+		results, err = ExecuteQuery(ctx, store, resp.Query)
+	}
+
+	if err != nil {
+		resp.Error = fmt.Sprintf("query execution failed: %v", err)
+		resp.Summary = "0 results"
+		resp.Answer = "I couldn't find any matching results for your query."
+		return resp, nil
+	}
+
+	resp.Results = results
+
+	synthResult, err := SynthesizeAnswer(ctx, intentResult.Intent, req.Query, resp.Query, results, store)
+	if err == nil {
+		resp.Answer = synthResult.Answer
+		resp.Summary = synthResult.Summary
+	} else {
+		resp.Answer = fmt.Sprintf("Found results but had trouble generating explanation: %v", err)
+		resp.Summary = fmt.Sprintf("Found %v", results)
+	}
+
+	return resp, nil
+}

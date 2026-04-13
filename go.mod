@@ -22,6 +22,8 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
+replace github.com/duynguyendang/meb => ../meb
+
 require (
 	bitbucket.org/creachadair/stringset v0.0.11 // indirect
 	cloud.google.com/go v0.120.0 // indirect

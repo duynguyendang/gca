@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/meb"
 )
 
@@ -196,8 +197,10 @@ func (o *GraphOrienter) Orient(ctx context.Context, frame *GCAFrame) error {
 	seen := make(map[string]bool)
 	count := 0
 
-	// Pre-fetch all defines once to build a symbol->file map
 	fileMap := o.buildFileMap(ctx, store)
+
+	centrality := o.computeDegreeCentrality(ctx, store, symbols)
+	sortByCentralityDesc(symbols, centrality)
 
 	for _, symbol := range symbols {
 		if count >= o.maxSymbols {
@@ -208,8 +211,6 @@ func (o *GraphOrienter) Orient(ctx context.Context, frame *GCAFrame) error {
 		}
 		seen[symbol] = true
 
-		// Use Scan instead of Query for better performance
-		// Scan is O(1) key lookup vs Query which parses Datalog
 		inbound := o.scanWithLimit(store, symbol, "calls", o.maxResults)
 		outbound := o.scanWithLimitOutgoing(store, symbol, o.maxResults)
 		defines := o.scanWithLimitOutgoing(store, symbol, o.maxResults)
@@ -217,20 +218,19 @@ func (o *GraphOrienter) Orient(ctx context.Context, frame *GCAFrame) error {
 		if len(inbound) > 0 || len(outbound) > 0 || len(defines) > 0 {
 			count++
 
-			// Get file context from pre-built map
 			filePath := fileMap[symbol]
+			centralityScore := centrality[symbol]
 
 			frame.Context = append(frame.Context, Atom{
 				Predicate: "symbol_context",
 				Subject:   symbol,
-				Object:    fmt.Sprintf("in:%d out:%d def:%d file:%s", len(inbound), len(outbound), len(defines), filePath),
-				Weight:    0.8,
+				Object:    fmt.Sprintf("in:%d out:%d def:%d file:%s centrality:%.2f", len(inbound), len(outbound), len(defines), filePath, centralityScore),
+				Weight:    0.8 + centralityScore*0.2,
 			})
 
-			// Add inbound callers if significant
 			if len(inbound) > 0 && len(inbound) <= 5 {
 				var callers []string
-				for f, _ := range inbound {
+				for f := range inbound {
 					callers = append(callers, f)
 				}
 				frame.Context = append(frame.Context, Atom{
@@ -243,7 +243,6 @@ func (o *GraphOrienter) Orient(ctx context.Context, frame *GCAFrame) error {
 		}
 	}
 
-	// Add project-level context
 	frame.Context = append(frame.Context, Atom{
 		Predicate: "project_context",
 		Subject:   frame.ProjectID,
@@ -312,4 +311,104 @@ func (o *GraphOrienter) scanWithLimitOutgoing(store *meb.MEBStore, symbol string
 	}
 
 	return results
+}
+
+// centralityResult holds centrality data for a symbol
+type centralityResult struct {
+	symbol    string
+	inDegree  int
+	outDegree int
+	score     float64
+}
+
+// computeDegreeCentrality computes centrality scores for a set of symbols
+// Higher scores = more architecturally significant
+func (o *GraphOrienter) computeDegreeCentrality(ctx context.Context, store *meb.MEBStore, symbols []string) map[string]float64 {
+	inDegree := make(map[string]int)
+	outDegree := make(map[string]int)
+
+	for fact := range store.Scan("", config.PredicateCalls, "") {
+		if obj, ok := fact.Object.(string); ok {
+			inDegree[obj]++
+		}
+		outDegree[fact.Subject]++
+	}
+
+	for fact := range store.Scan("", config.PredicateImports, "") {
+		if obj, ok := fact.Object.(string); ok {
+			inDegree[obj]++
+		}
+		outDegree[fact.Subject]++
+	}
+
+	symbolSet := make(map[string]bool)
+	for _, s := range symbols {
+		symbolSet[s] = true
+	}
+
+	scores := make(map[string]float64)
+	maxScore := 0.0
+
+	for _, sym := range symbols {
+		in := float64(inDegree[sym])
+		out := float64(outDegree[sym])
+
+		boost := 1.0
+		lower := strings.ToLower(sym)
+		if strings.Contains(lower, ":main") || strings.Contains(lower, ".main") ||
+			strings.Contains(lower, ":init") || strings.Contains(lower, ".init") {
+			boost *= 2.5
+		}
+
+		if out > 10 && in > 5 {
+			boost *= 1.5
+		}
+
+		if isInterfacePattern(sym) {
+			boost *= 1.3
+		}
+
+		score := (in + out) * boost
+		scores[sym] = score
+
+		if score > maxScore {
+			maxScore = score
+		}
+	}
+
+	if maxScore > 0 {
+		for sym := range scores {
+			scores[sym] = scores[sym] / maxScore
+		}
+	}
+
+	return scores
+}
+
+// isInterfacePattern checks if a symbol name matches interface-like patterns
+func isInterfacePattern(symbol string) bool {
+	lower := strings.ToLower(symbol)
+	patterns := []string{
+		"interface", "handler", "service", "repository",
+		"controller", "provider", "client", "adapter",
+		"factory", "strategy", "observer", "listener",
+		"plugin", "middleware", "builder", "parser", "validator",
+	}
+	for _, p := range patterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// sortByCentralityDesc sorts symbols by centrality score in descending order
+func sortByCentralityDesc(symbols []string, centrality map[string]float64) {
+	for i := 0; i < len(symbols)-1; i++ {
+		for j := i + 1; j < len(symbols); j++ {
+			if centrality[symbols[i]] < centrality[symbols[j]] {
+				symbols[i], symbols[j] = symbols[j], symbols[i]
+			}
+		}
+	}
 }

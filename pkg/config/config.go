@@ -35,6 +35,16 @@ const (
 	DisplayLimitMedium   = 15
 )
 
+// Query result cache settings
+const (
+	QueryCacheEnabled      = true
+	QueryCacheTTL          = 5 * time.Minute
+	QueryCacheMaxSize      = 1000
+	QueryResultLimit       = 1000 // Default limit for query results
+	QuerySymbolSearchLimit = 100  // Limit for symbol search
+	PathFindingMaxNodes    = 500  // Max nodes to visit in path finding
+)
+
 const (
 	PathfinderEdgeWeightFile     = 1
 	PathfinderEdgeWeightDir      = 10
@@ -58,7 +68,7 @@ const (
 
 // Validation constants - centralized limits for input validation
 const (
-	MaxQueryLength       = 10000
+	MaxQueryLength       = 200000
 	MaxProjectIDLength   = 255
 	MaxSymbolIDLength    = 1000
 	MaxIDsCount          = 1000

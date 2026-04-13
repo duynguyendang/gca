@@ -1,5 +1,7 @@
 package config
 
+import "time"
+
 // Predicate constants used throughout the codebase
 const (
 	PredicateDefines     = "defines"
@@ -116,4 +118,18 @@ const (
 	PredicateExports       = "exports"
 	PredicateParentDefines = "parent_defines"
 	PredicateExposesModel  = "exposes_model"
+	PredicateCalledBy      = "called_by"
+	PredicateHasName       = "has_name"
+)
+
+// Centrality configuration
+const (
+	CentralityEnabled        = true
+	CentralityCacheTTL       = 5 * time.Minute
+	CentralityBoostIn        = 1.0 // Weight for in-degree (incoming calls)
+	CentralityBoostOut       = 1.0 // Weight for out-degree (outgoing calls)
+	CentralityBoostMain      = 2.5 // Boost for main/init entry points
+	CentralityBoostEntry     = 2.0 // Boost for entry point symbols
+	CentralityBoostHub       = 1.5 // Boost for hub nodes (high in+out degree)
+	CentralityBoostInterface = 1.3 // Boost for interface-like patterns
 )

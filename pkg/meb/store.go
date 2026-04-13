@@ -2,15 +2,116 @@ package meb
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/datalog"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/keys"
 	"github.com/duynguyendang/meb/query"
 )
+
+// QueryCache provides TTL-based caching for query results
+type QueryCache struct {
+	mu      sync.RWMutex
+	entries map[string]*cacheEntry
+	maxSize int
+	ttl     time.Duration
+	enabled bool
+}
+
+type cacheEntry struct {
+	results   []map[string]any
+	expiresAt time.Time
+	createdAt time.Time
+}
+
+func NewQueryCache(ttl time.Duration, maxSize int, enabled bool) *QueryCache {
+	cache := &QueryCache{
+		entries: make(map[string]*cacheEntry),
+		maxSize: maxSize,
+		ttl:     ttl,
+		enabled: enabled,
+	}
+	if enabled {
+		go cache.cleanupExpired()
+	}
+	return cache
+}
+
+func (c *QueryCache) get(key string) ([]map[string]any, bool) {
+	if !c.enabled {
+		return nil, false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	entry, ok := c.entries[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		return nil, false
+	}
+	return entry.results, true
+}
+
+func (c *QueryCache) set(key string, results []map[string]any) {
+	if !c.enabled {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.entries) >= c.maxSize {
+		c.evictOldest()
+	}
+	c.entries[key] = &cacheEntry{
+		results:   results,
+		expiresAt: time.Now().Add(c.ttl),
+		createdAt: time.Now(),
+	}
+}
+
+func (c *QueryCache) evictOldest() {
+	var oldestKey string
+	var oldestTime time.Time
+	first := true
+	for key, entry := range c.entries {
+		if first || entry.createdAt.Before(oldestTime) {
+			oldestKey = key
+			oldestTime = entry.createdAt
+			first = false
+		}
+	}
+	if oldestKey != "" {
+		delete(c.entries, oldestKey)
+	}
+}
+
+func (c *QueryCache) cleanupExpired() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		c.mu.Lock()
+		now := time.Now()
+		for key, entry := range c.entries {
+			if now.After(entry.expiresAt) {
+				delete(c.entries, key)
+			}
+		}
+		c.mu.Unlock()
+	}
+}
+
+func (c *QueryCache) hashKey(query string) string {
+	h := sha256.Sum256([]byte(query))
+	return fmt.Sprintf("%x", h[:8])
+}
+
+var globalQueryCache = NewQueryCache(config.QueryCacheTTL, config.QueryCacheMaxSize, config.QueryCacheEnabled)
 
 type Store struct {
 	*meb.MEBStore
@@ -21,6 +122,18 @@ func NewStore(db *meb.MEBStore) *Store {
 }
 
 func Query(ctx context.Context, store *meb.MEBStore, q string) ([]map[string]any, error) {
+	return QueryWithLimit(ctx, store, q, config.QueryResultLimit)
+}
+
+func QueryWithLimit(ctx context.Context, store *meb.MEBStore, q string, limit int) ([]map[string]any, error) {
+	cacheKey := globalQueryCache.hashKey(q)
+	if cached, ok := globalQueryCache.get(cacheKey); ok {
+		if len(cached) > limit {
+			return cached[:limit], nil
+		}
+		return cached, nil
+	}
+
 	atoms, err := datalog.Parse(q)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse query: %w", err)
@@ -48,16 +161,22 @@ func Query(ctx context.Context, store *meb.MEBStore, q string) ([]map[string]any
 	var results []map[string]any
 
 	if len(triplesAtoms) == 1 {
-		results = executeSingleAtomQuery(ctx, store, triplesAtoms[0])
+		results = executeSingleAtomQuery(ctx, store, triplesAtoms[0], limit)
 	} else {
-		results = executeLFTJQuery(ctx, store, triplesAtoms)
+		results = executeLFTJQuery(ctx, store, triplesAtoms, limit)
 		if len(results) == 0 && len(triplesAtoms) > 1 {
 			log.Printf("LFTJ engine returned no results for multi-atom query, falling back to sequential join")
-			results = executeSequentialJoinQuery(ctx, store, triplesAtoms)
+			results = executeSequentialJoinQuery(ctx, store, triplesAtoms, limit)
 		}
 	}
 
 	results = applyConstraints(results, constraintAtoms)
+
+	if len(results) > limit {
+		results = results[:limit]
+	}
+
+	globalQueryCache.set(cacheKey, results)
 
 	return results, nil
 }
@@ -109,7 +228,7 @@ func scanFacts(ctx context.Context, store *meb.MEBStore, subj, pred, obj string)
 	return ch
 }
 
-func executeSingleAtomQuery(ctx context.Context, store *meb.MEBStore, atom datalog.Atom) []map[string]any {
+func executeSingleAtomQuery(ctx context.Context, store *meb.MEBStore, atom datalog.Atom, limit int) []map[string]any {
 	var results []map[string]any
 
 	subj := resolveArg(atom.Args[0])
@@ -139,13 +258,16 @@ func executeSingleAtomQuery(ctx context.Context, store *meb.MEBStore, atom datal
 
 		if len(result) > 0 {
 			results = append(results, result)
+			if limit > 0 && len(results) >= limit {
+				break
+			}
 		}
 	}
 
 	return results
 }
 
-func executeLFTJQuery(ctx context.Context, store *meb.MEBStore, atoms []datalog.Atom) []map[string]any {
+func executeLFTJQuery(ctx context.Context, store *meb.MEBStore, atoms []datalog.Atom, limit int) []map[string]any {
 	var results []map[string]any
 
 	relations, resultVars, err := buildLFTJRelations(store, atoms)
@@ -187,6 +309,10 @@ func executeLFTJQuery(ctx context.Context, store *meb.MEBStore, atoms []datalog.
 		if len(row) > 0 {
 			mu.Lock()
 			results = append(results, row)
+			if limit > 0 && len(results) >= limit {
+				mu.Unlock()
+				break
+			}
 			mu.Unlock()
 		}
 	}
@@ -194,7 +320,7 @@ func executeLFTJQuery(ctx context.Context, store *meb.MEBStore, atoms []datalog.
 	return results
 }
 
-func executeSequentialJoinQuery(ctx context.Context, store *meb.MEBStore, atoms []datalog.Atom) []map[string]any {
+func executeSequentialJoinQuery(ctx context.Context, store *meb.MEBStore, atoms []datalog.Atom, limit int) []map[string]any {
 	var results []map[string]any
 
 	firstAtom := atoms[0]
@@ -256,6 +382,9 @@ func executeSequentialJoinQuery(ctx context.Context, store *meb.MEBStore, atoms 
 
 		if len(row) > 0 {
 			results = append(results, row)
+			if limit > 0 && len(results) >= limit {
+				break
+			}
 		}
 	nextFact:
 	}

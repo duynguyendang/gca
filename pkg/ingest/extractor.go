@@ -285,12 +285,18 @@ func (e *TreeSitterExtractor) processSymbols(bundle *AnalysisBundle, symbols []S
 		}
 		bundle.Documents = append(bundle.Documents, doc)
 
+		// DEBUG
+		if sym.Name == "Execute" || sym.Name == "ResolveCallee" {
+			fmt.Printf("DEBUG processSymbols: symbol=%s, ID=%s, Name=%s, Type=%s\n", sym.Name, sym.ID, sym.Name, sym.Type)
+		}
+
 		// Create Facts
 		bundle.Facts = append(bundle.Facts,
 			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateType, Object: sym.Type},
 			meb.Fact{Subject: string(relPath), Predicate: config.PredicateDefines, Object: sym.ID},
 			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateInPackage, Object: filePackage},
 			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateName, Object: sym.Name},
+			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateHasName, Object: sym.Name},
 		)
 
 		// Role Tagging

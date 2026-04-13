@@ -432,7 +432,7 @@ func ValidateQuery(query string) error {
 	if query == "" {
 		return &ValidationError{Field: "query", Message: "is required"}
 	}
-	if len(query) > 10000 {
+	if len(query) > config.MaxQueryLength {
 		return &ValidationError{Field: "query", Message: "exceeds maximum length"}
 	}
 	return nil

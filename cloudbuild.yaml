@@ -1,9 +1,12 @@
 steps:
+  # Build and push Docker image
   - name: 'gcr.io/cloud-builders/docker'
     args: ['build', '-t', 'gcr.io/$PROJECT_ID/gca-be', '-f', 'gca/Dockerfile', '.']
+
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/gca-be']
 
+  # Deploy to Cloud Run with secret from Secret Manager
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -20,8 +23,10 @@ steps:
       - '1Gi'
       - '--port'
       - '8080'
+      - '--set-secrets'
+      - 'LLM_API_KEY=GEMINI_KEY:latest'
       - '--set-env-vars'
-      - 'LOW_MEM=true'
+      - 'LOW_MEM=true,LLM_MODEL=googleai/gemma-4-31b-it,LLM_PROVIDER=googleai,CORS_ALLOW_ORIGINS=https://gca-hackathon.web.app'
       - '--allow-unauthenticated'
 
 images:

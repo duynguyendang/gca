@@ -10,6 +10,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
+	"github.com/duynguyendang/gca/pkg/service/ai"
 	"github.com/gin-gonic/gin"
 )
 
@@ -804,4 +805,230 @@ func (s *Server) handleGraphPaginated(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, paginatedGraph)
+}
+
+// handleWhoCalls returns all callers of a symbol (backward slice).
+// Query parameters:
+//   - project: project ID
+//   - symbol: symbol ID to find callers for
+//   - depth: maximum traversal depth (default: 3, max: 10)
+//
+// Response: JSON graph with callers and call relationships.
+func (s *Server) handleWhoCalls(c *gin.Context) {
+	projectID := c.Query("project")
+	symbolID := c.Query("symbol")
+	depth, _ := strconv.Atoi(c.Query("depth"))
+
+	if err := ValidateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+	if symbolID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing symbol parameter", nil))
+		return
+	}
+
+	graph, err := s.graphService.GetWhoCalls(c.Request.Context(), projectID, symbolID, depth)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, graph)
+}
+
+// handleWhatCalls returns all callees of a symbol (forward slice).
+// Query parameters:
+//   - project: project ID
+//   - symbol: symbol ID to find callees for
+//   - depth: maximum traversal depth (default: 3, max: 10)
+//
+// Response: JSON graph with callees and call relationships.
+func (s *Server) handleWhatCalls(c *gin.Context) {
+	projectID := c.Query("project")
+	symbolID := c.Query("symbol")
+	depth, _ := strconv.Atoi(c.Query("depth"))
+
+	if err := ValidateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+	if symbolID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing symbol parameter", nil))
+		return
+	}
+
+	graph, err := s.graphService.GetWhatCalls(c.Request.Context(), projectID, symbolID, depth)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, graph)
+}
+
+// handleCheckReachability checks if symbol A can reach symbol B.
+// Query parameters:
+//   - project: project ID
+//   - from: source symbol ID
+//   - to: target symbol ID
+//   - depth: maximum traversal depth (default: 5, max: 20)
+//
+// Response: JSON with reachable: true/false
+func (s *Server) handleCheckReachability(c *gin.Context) {
+	projectID := c.Query("project")
+	fromID := c.Query("from")
+	toID := c.Query("to")
+	depth, _ := strconv.Atoi(c.Query("depth"))
+
+	if err := ValidateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+	if fromID == "" || toID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing from or to parameter", nil))
+		return
+	}
+
+	reachable, err := s.graphService.CheckReachability(c.Request.Context(), projectID, fromID, toID, depth)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"reachable": reachable, "from": fromID, "to": toID})
+}
+
+// handleDetectCycles returns all cycles in the call graph.
+// Query parameters:
+//   - project: project ID
+//
+// Response: JSON with array of cycles (each cycle is array of symbol IDs)
+func (s *Server) handleDetectCycles(c *gin.Context) {
+	projectID := c.Query("project")
+
+	if err := ValidateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+
+	cycles, err := s.graphService.DetectCycles(c.Request.Context(), projectID)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"cycles": cycles, "count": len(cycles)})
+}
+
+// handleFindLCA finds the least common ancestor of two symbols.
+// Query parameters:
+//   - project: project ID
+//   - a: first symbol ID
+//   - b: second symbol ID
+//   - depth: maximum traversal depth (default: 10, max: 30)
+//
+// Response: JSON with lca: symbol ID or null
+func (s *Server) handleFindLCA(c *gin.Context) {
+	projectID := c.Query("project")
+	symbolA := c.Query("a")
+	symbolB := c.Query("b")
+	depth, _ := strconv.Atoi(c.Query("depth"))
+
+	if err := ValidateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+	if symbolA == "" || symbolB == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing a or b parameter", nil))
+		return
+	}
+
+	lca, err := s.graphService.FindLCA(c.Request.Context(), projectID, symbolA, symbolB, depth)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"lca": lca, "a": symbolA, "b": symbolB})
+}
+
+// handleEnrichCalledBy adds called_by predicates to the graph store.
+// Query parameters:
+//   - project: project ID
+//
+// Response: JSON with status
+func (s *Server) handleEnrichCalledBy(c *gin.Context) {
+	projectID := c.Query("project")
+
+	if err := ValidateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
+		return
+	}
+
+	err := s.graphService.EnrichWithCalledBy(c.Request.Context(), projectID)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "enriched", "predicate": "called_by"})
+}
+
+// handleAsk is a unified endpoint for natural language queries.
+// It classifies the intent, converts to Datalog, executes, and synthesizes an answer.
+//
+// Request body: ai.AskRequest
+//   - project_id: project ID (required)
+//   - query: natural language question (required)
+//   - symbol_id: optional symbol to focus on
+//   - depth: optional traversal depth
+//   - context: optional conversation history
+//
+// Response: ai.AskResponse
+//   - answer: synthesized natural language answer
+//   - query: generated Datalog query
+//   - intent: detected intent (who_calls, what_calls, explain, etc.)
+//   - confidence: intent classification confidence (0-1)
+//   - results: raw query results
+//   - summary: brief summary
+//   - error: error message if any
+func (s *Server) handleAsk(c *gin.Context) {
+	var req struct {
+		ProjectID string `json:"project_id"`
+		Query     string `json:"query"`
+		SymbolID  string `json:"symbol_id"`
+		Depth     int    `json:"depth"`
+		Context   string `json:"context"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "Invalid request body", err))
+		return
+	}
+
+	if req.ProjectID == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "project_id is required", nil))
+		return
+	}
+	if req.Query == "" {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "query is required", nil))
+		return
+	}
+
+	askReq := ai.AskRequest{
+		ProjectID: req.ProjectID,
+		Query:     req.Query,
+		SymbolID:  req.SymbolID,
+		Depth:     req.Depth,
+		Context:   req.Context,
+	}
+
+	resp, err := s.aiService.HandleAsk(c.Request.Context(), askReq)
+	if err != nil {
+		handleError(c, errors.NewAppError(http.StatusInternalServerError, err.Error(), err))
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
 }

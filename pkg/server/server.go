@@ -169,8 +169,19 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/api/v1/graph/hybrid-cluster", s.handleHybridCluster)
 	s.router.POST("/api/v1/graph/subgraph", s.handleGraphSubgraph)
 
+	// Cross-Reference Analysis
+	s.router.GET("/api/v1/graph/who-calls", s.handleWhoCalls)
+	s.router.GET("/api/v1/graph/what-calls", s.handleWhatCalls)
+	s.router.GET("/api/v1/graph/reachable", s.handleCheckReachability)
+	s.router.GET("/api/v1/graph/cycles", s.handleDetectCycles)
+	s.router.GET("/api/v1/graph/lca", s.handleFindLCA)
+	s.router.POST("/api/v1/graph/enrich-called-by", s.handleEnrichCalledBy)
+
 	// AI Endpoints
 	s.router.POST("/api/v1/ai/ask", s.handleAIAsk)
+
+	// Unified Ask Endpoint (NL -> Datalog -> Answer)
+	s.router.POST("/api/v1/ask", s.handleAsk)
 
 	// Agent Endpoint (multi-step reasoning)
 	s.router.POST("/api/v1/agent/execute", s.handleAgentExecute)

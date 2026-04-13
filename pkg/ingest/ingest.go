@@ -348,8 +348,26 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 				}
 			}
 		}
+
+		// DEBUG has_name facts
+		if f.Predicate == config.PredicateHasName {
+			fmt.Printf("DEBUG INGEST: has_name fact: Subject=%s, Object=%v\n", f.Subject, f.Object)
+		}
+
 		finalFacts = append(finalFacts, f)
 	}
+
+	fmt.Printf("DEBUG INGEST: Total facts being added: %d (has_name count: %d)\n",
+		len(finalFacts),
+		func() int {
+			count := 0
+			for _, f := range finalFacts {
+				if f.Predicate == config.PredicateHasName {
+					count++
+				}
+			}
+			return count
+		}())
 
 	return s.AddFactBatch(finalFacts)
 }
