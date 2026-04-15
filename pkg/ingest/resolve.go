@@ -2,11 +2,11 @@ package ingest
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 )
 
@@ -456,7 +456,7 @@ func AddResolvedCallsAsCalledBy(store *meb.MEBStore, cg *CallGraph) error {
 				Object:    caller,
 			}
 			if err := store.AddFact(fact); err != nil {
-				fmt.Printf("[Resolve] Warning: failed to add called_by fact for %s <- %s: %v\n", callee, caller, err)
+				logger.Warn("Failed to add called_by fact", "callee", callee, "caller", caller, "error", err)
 			}
 		}
 	}

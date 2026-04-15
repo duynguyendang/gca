@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
+
+	"github.com/duynguyendang/gca/pkg/logger"
 )
 
 // ModelAdapter abstracts the LLM call so the planner is testable.
@@ -39,7 +40,7 @@ func NewPlanner(model ModelAdapter) *Planner {
 func (p *Planner) Plan(ctx context.Context, query string, predicates []string) ([]PlanStep, error) {
 	prompt := buildPlannerPrompt(query, predicates)
 
-	log.Printf("[Agent/Planner] Sending plan request (query=%q, predicates=%d)", query, len(predicates))
+	logger.Debug("Agent/Planner Sending plan request", "query", query, "predicates", len(predicates))
 
 	response, err := p.model.GenerateContent(ctx, prompt)
 	if err != nil {
@@ -51,7 +52,7 @@ func (p *Planner) Plan(ctx context.Context, query string, predicates []string) (
 		return nil, fmt.Errorf("failed to parse plan response: %w", err)
 	}
 
-	log.Printf("[Agent/Planner] Generated %d steps", len(steps))
+	logger.Debug("Agent/Planner Generated steps", "steps", len(steps))
 	return steps, nil
 }
 

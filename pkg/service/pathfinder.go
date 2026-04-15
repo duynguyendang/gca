@@ -12,6 +12,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 )
 
@@ -31,7 +32,7 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 		return &export.D3Graph{Nodes: []export.D3Node{}, Links: []export.D3Link{}}, nil
 	}
 
-	fmt.Printf("[Pathfinder] Dijkstra %s -> %s\n", cleanStart, cleanEnd)
+	logger.Debug("Pathfinder Dijkstra", "start", cleanStart, "end", cleanEnd)
 
 	// Dijkstra State
 	pq := &PriorityQueue{}
@@ -66,7 +67,7 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 	edgePred := make(map[string]string) // curr -> predicate from parent
 	depth[cleanStart] = 0
 
-	fmt.Printf("[Pathfinder] Dijkstra START: %s -> %s\n", cleanStart, cleanEnd)
+	logger.Debug("Pathfinder Dijkstra start", "start", cleanStart, "end", cleanEnd)
 
 	for pq.Len() > 0 {
 		item := heap.Pop(pq).(*Item)
@@ -135,7 +136,7 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 		}
 	}
 
-	fmt.Printf("[Pathfinder] Processed %d nodes in %v. Found: %v\n", processed, time.Since(startT), found)
+	logger.Debug("Pathfinder processed", "nodes", processed, "duration", time.Since(startT), "found", found)
 
 	if found {
 		// Reconstruct Path
@@ -154,7 +155,7 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 			}
 			curr = p
 		}
-		fmt.Printf("[Pathfinder] Path RECONSTRUCTED: %d nodes, %d links\n", len(path), len(links))
+		logger.Debug("Pathfinder path reconstructed", "nodes", len(path), "links", len(links))
 		return s.buildGraphFromPath(ctx, store, path, links)
 	}
 
@@ -164,7 +165,7 @@ func (s *GraphService) FindShortestPath(ctx context.Context, projectID, startID,
 
 	if (strings.Contains(cleanStart, ":") || strings.Contains(cleanEnd, ":")) &&
 		(startFile != cleanStart || endFile != cleanEnd) {
-		fmt.Printf("[Pathfinder] Fallback to file-level: %s -> %s\n", startFile, endFile)
+		logger.Debug("Pathfinder fallback to file-level", "start", startFile, "end", endFile)
 		return s.FindShortestPath(ctx, projectID, startFile, endFile)
 	}
 

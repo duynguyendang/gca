@@ -3,8 +3,9 @@ package agent
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
+
+	"github.com/duynguyendang/gca/pkg/logger"
 )
 
 // NarrativeResult is the structured output for the UI.
@@ -66,7 +67,7 @@ Rules:
 	corrected = strings.TrimSuffix(corrected, "```")
 	corrected = strings.TrimSpace(corrected)
 
-	log.Printf("[Agent/Reflector] Corrected step %d: %q -> %q", stepIndex, step.Query, corrected)
+	logger.Debug("Agent/Reflector Corrected step", "stepIndex", stepIndex, "originalQuery", step.Query, "correctedQuery", corrected)
 	return corrected, nil
 }
 

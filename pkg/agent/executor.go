@@ -3,12 +3,12 @@ package agent
 import (
 	"context"
 	"fmt"
-	"log"
 	"regexp"
 	"strings"
 	"time"
 
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/circuit"
 )
@@ -55,7 +55,7 @@ func (e *Executor) ExecuteStep(ctx context.Context, session *ExecutionSession, s
 	queryCtx, cancel := WithQueryTimeout(ctx)
 	defer cancel()
 
-	log.Printf("[Agent/Executor] Step %d: executing query: %s", stepIndex, resolvedQuery)
+	logger.Debug("Agent/Executor executing query", "stepIndex", stepIndex, "query", resolvedQuery)
 
 	var results []map[string]any
 
@@ -88,7 +88,7 @@ func (e *Executor) ExecuteStep(ctx context.Context, session *ExecutionSession, s
 		s.EndTime = &now
 	})
 
-	log.Printf("[Agent/Executor] Step %d: returned %d results, hydrated %d nodes", stepIndex, len(results), len(hydrated))
+	logger.Debug("Agent/Executor step results", "stepIndex", stepIndex, "results", len(results), "hydrated", len(hydrated))
 	return nil
 }
 
@@ -184,7 +184,7 @@ func (e *Executor) extractID(row map[string]any) string {
 func (e *Executor) ExecuteAllSteps(ctx context.Context, session *ExecutionSession) error {
 	for i := 0; i < len(session.Steps); i++ {
 		if err := e.ExecuteStep(ctx, session, i); err != nil {
-			log.Printf("[Agent/Executor] Step %d failed: %v", i, err)
+			logger.Warn("Agent/Executor step failed", "stepIndex", i, "error", err)
 			if corrected := e.attemptCorrection(ctx, session, i); corrected {
 				continue
 			}
@@ -200,7 +200,7 @@ func (e *Executor) attemptCorrection(ctx context.Context, session *ExecutionSess
 		return false
 	}
 
-	log.Printf("[Agent/Executor] Attempting correction for step %d: %s", stepIndex, step.Query)
+	logger.Debug("Agent/Executor attempting correction", "stepIndex", stepIndex, "query", step.Query)
 
 	originalQuery := step.Query
 
@@ -210,7 +210,7 @@ func (e *Executor) attemptCorrection(ctx context.Context, session *ExecutionSess
 		corrected = `triples(?s, ?p, ?o) LIMIT 5`
 	}
 
-	log.Printf("[Agent/Executor] Corrected query: %s", corrected)
+	logger.Debug("Agent/Executor corrected query", "query", corrected)
 
 	session.UpdateStep(stepIndex, func(s *PlanStep) {
 		s.Query = corrected

@@ -3,7 +3,6 @@ package ai
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"regexp"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/duynguyendang/gca/pkg/config"
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/gca/pkg/ooda"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/meb"
@@ -117,18 +117,18 @@ func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService,
 	loadPrompt := func(name string) *prompts.Prompt {
 		path, ok := config.PromptPaths[name]
 		if !ok {
-			log.Printf("Warning: No prompt path configured for %s", name)
+			logger.Warn("No prompt path configured", "name", name)
 			return nil
 		}
 		p, err := prompts.LoadPrompt(path)
 		if err != nil {
-			log.Printf("Warning: Failed to load %s from %s: %v", name, path, err)
+			logger.Warn("Failed to load prompt", "name", name, "path", path, "error", err)
 			return nil
 		}
 		return p
 	}
 
-	log.Printf("AI Service initialized: provider=%s, model=%s, embedding=%s", provider, defaultModel, embeddingModel)
+	logger.Info("AI Service initialized", "provider", provider, "model", defaultModel, "embedding", embeddingModel)
 
 	return &AIService{
 		g:                    g,
@@ -152,14 +152,14 @@ func (s *AIService) GenerateText(ctx context.Context, prompt string) (string, er
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
-	log.Printf("Sending Prompt to LLM (%s):\n%s", s.provider, prompt)
+	logger.Debug("Sending Prompt to LLM", "provider", s.provider, "prompt", prompt)
 
 	resp, err := genkit.Generate(ctx, s.g,
 		ai.WithModelName(s.defaultModel),
 		ai.WithPrompt(prompt),
 	)
 	if err != nil {
-		log.Printf("LLM Request Failed:\n%s\nError: %v", prompt, err)
+		logger.Error("LLM Request Failed", "prompt", prompt, "error", err)
 		return "", err
 	}
 
@@ -218,7 +218,7 @@ func (s *AIService) HandleRequest(ctx context.Context, req AIRequest) (string, e
 		return "", fmt.Errorf("failed to build prompt: %w", err)
 	}
 
-	log.Printf("Sending AI Prompt (Task: %s, Length: %d chars)", req.Task, len(prompt))
+	logger.Debug("Sending AI Prompt", "task", req.Task, "length", len(prompt))
 
 	return s.GenerateText(ctx, prompt)
 }
@@ -389,7 +389,9 @@ func (s *AIService) buildMultiFileSummaryPrompt(ctx context.Context, store *meb.
 			localCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			defer cancel()
 
-			if err := s.appendSymbolContext(localCtx, store, id, &localSb); err == nil {
+			if err := s.appendSymbolContext(localCtx, store, id, &localSb); err != nil {
+				logger.Warn("Failed to get context for symbol", "symbolID", id, "error", err)
+			} else {
 				mu.Lock()
 				contextBuilder.WriteString(localSb.String())
 				mu.Unlock()
@@ -636,7 +638,7 @@ func extractPotentialSymbols(query string) []string {
 func (s *AIService) BuildPrompt(ctx context.Context, store *meb.MEBStore, query string, symbolID string) (string, error) {
 	startTime := time.Now()
 	defer func() {
-		log.Printf("BuildPrompt took %v\n", time.Since(startTime))
+		logger.Debug("BuildPrompt took", "duration", time.Since(startTime))
 	}()
 
 	var contextBuilder strings.Builder
@@ -644,11 +646,11 @@ func (s *AIService) BuildPrompt(ctx context.Context, store *meb.MEBStore, query 
 
 	if symbolID != "" {
 		if err := s.appendSymbolContext(ctx, store, symbolID, &contextBuilder); err != nil {
-			log.Printf("Failed to fetch symbol context for %s: %v", symbolID, err)
+			logger.Warn("Failed to fetch symbol context", "symbolID", symbolID, "error", err)
 		}
 	} else {
 		if err := s.buildSemanticContext(ctx, store, query, &contextBuilder); err != nil {
-			log.Printf("Failed to build semantic context: %v", err)
+			logger.Warn("Failed to build semantic context", "error", err)
 		}
 	}
 
@@ -735,12 +737,17 @@ Answer concisely and accurately based on the code provided.`, context, query)
 func (s *AIService) appendSymbolContext(ctx context.Context, store *meb.MEBStore, symbolID string, sb *strings.Builder) error {
 	content, err := s.getSymbolContent(store, symbolID)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get symbol content for %s: %w", symbolID, err)
 	}
 
 	inbound, outbound, defines, err := s.querySymbolRelationships(ctx, store, symbolID)
 	if err != nil {
-		log.Printf("failed to query symbol relationships for %s: %v", symbolID, err)
+		// Log but continue with empty relationships - partial context is better than no context
+		logger.Warn("Failed to query symbol relationships", "symbolID", symbolID, "error", err)
+		// Initialize empty slices to avoid nil panics
+		inbound = nil
+		outbound = nil
+		defines = nil
 	}
 
 	s.formatSymbolContext(symbolID, content, inbound, outbound, defines, sb)
@@ -756,9 +763,23 @@ func (s *AIService) getSymbolContent(store *meb.MEBStore, symbolID string) (stri
 }
 
 func (s *AIService) querySymbolRelationships(ctx context.Context, store *meb.MEBStore, symbolID string) (inbound, outbound, defines []map[string]any, err error) {
-	inbound, _ = gcamdb.Query(ctx, store, fmt.Sprintf(`triples(?s, "%s", "%s")`, config.PredicateCalls, symbolID))
-	outbound, _ = gcamdb.Query(ctx, store, fmt.Sprintf(`triples("%s", "%s", ?o)`, symbolID, config.PredicateCalls))
-	defines, _ = gcamdb.Query(ctx, store, fmt.Sprintf(`triples("%s", "%s", ?o)`, symbolID, config.PredicateDefines))
+	var err1, err2, err3 error
+
+	inbound, err1 = gcamdb.Query(ctx, store, fmt.Sprintf(`triples(?s, "%s", "%s")`, config.PredicateCalls, symbolID))
+	outbound, err2 = gcamdb.Query(ctx, store, fmt.Sprintf(`triples("%s", "%s", ?o)`, symbolID, config.PredicateCalls))
+	defines, err3 = gcamdb.Query(ctx, store, fmt.Sprintf(`triples("%s", "%s", ?o)`, symbolID, config.PredicateDefines))
+
+	// Return the first error encountered, if any
+	if err1 != nil {
+		return nil, nil, nil, fmt.Errorf("failed to query inbound relationships: %w", err1)
+	}
+	if err2 != nil {
+		return nil, nil, nil, fmt.Errorf("failed to query outbound relationships: %w", err2)
+	}
+	if err3 != nil {
+		return nil, nil, nil, fmt.Errorf("failed to query defines: %w", err3)
+	}
+
 	return inbound, outbound, defines, nil
 }
 

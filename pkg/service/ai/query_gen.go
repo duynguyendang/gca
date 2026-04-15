@@ -10,6 +10,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/datalog"
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 )
 
@@ -135,8 +136,10 @@ func searchSymbols(store *meb.MEBStore, query string) []string {
 	upperQuery := strings.ToUpper(query)
 	lowerQuery := strings.ToLower(query)
 
+	var scanErrors int
 	for fact, err := range store.Scan("", config.PredicateDefines, "") {
 		if err != nil {
+			scanErrors++
 			continue
 		}
 		symID, ok := fact.Object.(string)
@@ -157,6 +160,10 @@ func searchSymbols(store *meb.MEBStore, query string) []string {
 				break
 			}
 		}
+	}
+
+	if scanErrors > 0 {
+		logger.Warn("Scan errors while searching symbols", "errors", scanErrors, "query", query)
 	}
 
 	return results

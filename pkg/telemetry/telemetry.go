@@ -2,10 +2,10 @@ package telemetry
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 )
 
@@ -53,32 +53,32 @@ func (s *LoggerSink) Count() int64 {
 func (s *LoggerSink) logCircuitStateChange(event meb.TelemetryEvent, count int64) {
 	state := event.Data["state"]
 	reason := event.Data["reason"]
-	log.Printf("[TELEMETRY #%d] Circuit breaker state changed to %v (reason: %v)", count, state, reason)
+	logger.Info("Circuit breaker state changed", "count", count, "state", state, "reason", reason)
 }
 
 func (s *LoggerSink) logGCFailure(event meb.TelemetryEvent, count int64) {
 	err := event.Data["error"]
-	log.Printf("[TELEMETRY #%d] GC failure: %v", count, err)
+	logger.Warn("GC failure", "count", count, "error", err)
 }
 
 func (s *LoggerSink) logRetention(event meb.TelemetryEvent, count int64) {
 	action := event.Data["action"]
 	deleted := event.Data["deleted"]
-	log.Printf("[TELEMETRY #%d] Retention event: action=%v, deleted=%v", count, action, deleted)
+	logger.Info("Retention event", "count", count, "action", action, "deleted", deleted)
 }
 
 func (s *LoggerSink) logWALIssue(event meb.TelemetryEvent, count int64) {
 	err := event.Data["error"]
-	log.Printf("[TELEMETRY #%d] WAL issue: %v", count, err)
+	logger.Warn("WAL issue", "count", count, "error", err)
 }
 
 func (s *LoggerSink) logDeprecatedCleanup(event meb.TelemetryEvent, count int64) {
 	err := event.Data["error"]
-	log.Printf("[TELEMETRY #%d] Deprecated cleanup event: %v (type=%s)", count, err, event.Type)
+	logger.Warn("Deprecated cleanup event", "count", count, "error", err, "type", event.Type)
 }
 
 func (s *LoggerSink) logGeneric(event meb.TelemetryEvent, count int64) {
-	log.Printf("[TELEMETRY #%d] Event %s: %s", count, event.Type, formatData(event.Data))
+	logger.Debug("Telemetry event", "count", count, "type", event.Type, "data", formatData(event.Data))
 }
 
 func formatData(data map[string]any) string {
@@ -143,9 +143,9 @@ func (s *MetricsSink) reportLocked() {
 		total += c
 	}
 
-	log.Printf("[METRICS] Uptime: %v, Total events: %d", uptime.Truncate(time.Second), total)
+	logger.Info("Metrics report", "uptime", uptime.Truncate(time.Second), "totalEvents", total)
 	for eventType, count := range s.eventCount {
-		log.Printf("[METRICS]   %s: %d", eventType, count)
+		logger.Debug("Event count", "type", eventType, "count", count)
 	}
 }
 

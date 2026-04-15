@@ -3,13 +3,13 @@ package service
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 )
 
@@ -280,11 +280,11 @@ func (s *GraphService) findFilesWithPrefix(store *meb.MEBStore, prefix string) [
 func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID string, depth int) (*export.D3Graph, error) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("GetFileCalls recovered from panic: %v", r)
+			logger.Warn("GetFileCalls recovered from panic", "error", r)
 		}
 	}()
 
-	fmt.Printf("GetFileCalls START: projectID=%s, fileID=%s, depth=%d\n", projectID, fileID, depth)
+	logger.Debug("GetFileCalls start", "projectID", projectID, "fileID", fileID, "depth", depth)
 	if depth <= 0 {
 		depth = config.DefaultFileDepthLimit
 	}
@@ -302,11 +302,11 @@ func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID strin
 
 	store, err := s.getStore(projectID)
 	if err != nil {
-		log.Printf("GetFileCalls: getStore error: %v", err)
+		logger.Error("GetFileCalls getStore error", "error", err)
 		return nil, err
 	}
 	if store == nil {
-		log.Printf("GetFileCalls: store is nil for project %s", projectID)
+		logger.Error("GetFileCalls store is nil", "projectID", projectID)
 		return nil, fmt.Errorf("store is nil for project: %s", projectID)
 	}
 
@@ -328,9 +328,9 @@ func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID strin
 		}
 	}
 
-	log.Printf("GetFileCalls: fileID=%s, storedFileID=%s", cleanFileID, storedFileID)
+	logger.Debug("GetFileCalls fileID vs storedFileID", "cleanFileID", cleanFileID, "storedFileID", storedFileID)
 
-	log.Printf("GetFileCalls: cleanFileID=%s, storedFileID=%s, projectID=%s", cleanFileID, storedFileID, projectID)
+	logger.Debug("GetFileCalls IDs", "cleanFileID", cleanFileID, "storedFileID", storedFileID, "projectID", projectID)
 
 	nodesMap := make(map[string]export.D3Node)
 	linksMap := make(map[string]export.D3Link)
@@ -367,7 +367,7 @@ func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID strin
 		q := fmt.Sprintf("triples(\"%s\", \"%s\", ?sym), triples(?sym, \"%s\", ?o)", cleanCurrentFile, config.PredicateDefines, config.PredicateCalls)
 		results, err := gcamdb.Query(ctx, store, q)
 		if err != nil {
-			log.Printf("GetFileCalls: calls query error: %v", err)
+			logger.Warn("GetFileCalls calls query error", "error", err)
 		}
 
 		if len(results) == 0 {
@@ -375,7 +375,7 @@ func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID strin
 			q = fmt.Sprintf("triples(\"%s\", \"%s\", ?o)", cleanCurrentFile, config.PredicateImports)
 			results, err = gcamdb.Query(ctx, store, q)
 			if err != nil {
-				log.Printf("GetFileCalls: imports query error: %v", err)
+				logger.Warn("GetFileCalls imports query error", "error", err)
 			}
 		}
 

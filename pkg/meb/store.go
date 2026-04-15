@@ -4,12 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/datalog"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/keys"
 	"github.com/duynguyendang/meb/query"
@@ -165,7 +165,7 @@ func QueryWithLimit(ctx context.Context, store *meb.MEBStore, q string, limit in
 	} else {
 		results = executeLFTJQuery(ctx, store, triplesAtoms, limit)
 		if len(results) == 0 && len(triplesAtoms) > 1 {
-			log.Printf("LFTJ engine returned no results for multi-atom query, falling back to sequential join")
+			logger.Debug("LFTJ engine returned no results, falling back to sequential join")
 			results = executeSequentialJoinQuery(ctx, store, triplesAtoms, limit)
 		}
 	}
@@ -395,7 +395,7 @@ func buildLFTJRelations(store *meb.MEBStore, atoms []datalog.Atom) ([]query.Rela
 				strVal := resolveArg(arg)
 				dictID, found := store.LookupID(strVal)
 				if !found {
-					log.Printf("Warning: dictionary lookup failed for %q in atom %v, skipping atom", strVal, atom)
+					logger.Warn("Dictionary lookup failed for atom, skipping", "value", strVal, "atom", atom)
 					skipAtom = true
 					break
 				}

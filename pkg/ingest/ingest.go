@@ -59,7 +59,7 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 		logger.Info("Embedding service initialized for semantic doc search")
 	}
 
-	fmt.Printf("Pass 1: Collecting symbols and index for %s...\n", projectName)
+	logger.Info("Pass 1: Collecting symbols and index", "project", projectName)
 	state.SymbolTable = make(map[string]string)
 	state.FileIndex = make(map[string]bool)
 
@@ -67,7 +67,7 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 	var projectMeta *ProjectMetadata
 	metadataPath := filepath.Join(sourceDir, "project.yaml")
 	if _, err := os.Stat(metadataPath); err == nil {
-		fmt.Printf("Found project metadata at %s\n", metadataPath)
+		logger.Info("Found project metadata", "path", metadataPath)
 		var metaErr error
 		projectMeta, metaErr = LoadProjectMetadata(metadataPath)
 		if metaErr != nil {
@@ -127,7 +127,7 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 	}
 
 	// Pass 2: Concurrent Processing
-	fmt.Printf("Pass 2: Processing files for %s...\n", projectName)
+	logger.Info("Pass 2: Processing files", "project", projectName)
 	jobs := make(chan string, 100)
 	var wg sync.WaitGroup
 	var embeddingWg sync.WaitGroup // Wait for embeddings to finish
@@ -147,7 +147,7 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 			sem := make(chan struct{}, 10)
 			for path := range jobs {
 				rel, _ := filepath.Rel(sourceDir, path)
-				fmt.Printf("  Processing %s/%s...\n", projectName, rel)
+				logger.Debug("Processing file", "project", projectName, "file", rel)
 				if err := processFile(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta, &embeddingWg, sem, state); err != nil {
 					logger.Error("Failed to process file", "error", err)
 					pass2Err.Add(1)
@@ -179,7 +179,7 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 	TagRoles(s)
 
 	if embeddingService != nil {
-		fmt.Println("Waiting for embeddings to complete...")
+		logger.Info("Waiting for embeddings to complete")
 		embeddingWg.Wait()
 	}
 

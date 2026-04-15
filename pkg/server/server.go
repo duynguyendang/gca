@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -11,6 +10,7 @@ import (
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/agent"
 	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/gca/pkg/registry"
 	"github.com/duynguyendang/gca/pkg/service"
 	"github.com/duynguyendang/gca/pkg/service/ai"
@@ -84,26 +84,26 @@ func NewServer(mgr *manager.StoreManager, sourceDir string) *Server {
 
 	aiSvc, err := ai.NewAIService(context.Background(), mgr)
 	if err != nil {
-		log.Printf("Warning: Failed to initialize AI Service: %v. AI features disabled.", err)
+		logger.Warn("Failed to initialize AI Service", "error", err)
 		aiSvc = nil
 	} else {
-		log.Println("AI Service initialized successfully")
+		logger.Info("AI Service initialized successfully")
 	}
 
 	// Initialize Manglekit Client for GenePool queries
 	mangleClient, err := manglesdk.NewClient(context.Background())
 	if err != nil {
-		log.Printf("Warning: Failed to initialize Manglekit Client: %v. Query features disabled.", err)
+		logger.Warn("Failed to initialize Manglekit Client", "error", err)
 		mangleClient = nil
 	} else {
-		log.Println("Manglekit Client initialized successfully")
+		logger.Info("Manglekit Client initialized successfully")
 
 		// Load query policies
 		policyPath := config.GenePoolPath
 		if err := mangleClient.Engine().LoadPolicy(context.Background(), policyPath); err != nil {
-			log.Printf("Warning: Failed to load query policies from %s: %v", policyPath, err)
+			logger.Warn("Failed to load query policies", "path", policyPath, "error", err)
 		} else {
-			log.Printf("Query policies loaded from %s", policyPath)
+			logger.Info("Query policies loaded", "path", policyPath)
 		}
 	}
 
@@ -113,9 +113,9 @@ func NewServer(mgr *manager.StoreManager, sourceDir string) *Server {
 		queryRegistry := registry.NewQueryRegistry(mangleClient.Engine())
 		policyPath := config.GenePoolPath
 		if err := queryRegistry.LoadQueriesFromGenePool(context.Background(), policyPath); err != nil {
-			log.Printf("Warning: Failed to load query registry: %v", err)
+			logger.Warn("Failed to load query registry", "error", err)
 		} else {
-			log.Println("Query registry initialized successfully")
+			logger.Info("Query registry initialized successfully")
 		}
 		queryService = registry.NewQueryService(queryRegistry)
 	}
@@ -189,7 +189,7 @@ func (s *Server) setupRoutes() {
 	// Query Registry (GenePool pre-defined queries)
 	if s.queryService != nil {
 		s.queryService.AddRoute(s.router)
-		log.Println("Query service routes registered")
+		logger.Info("Query service routes registered")
 	}
 }
 
@@ -235,14 +235,14 @@ func (s *Server) handleAIAsk(c *gin.Context) {
 	if useOODA {
 		answer, err = s.aiService.HandleRequestOODA(c.Request.Context(), req)
 		if err != nil {
-			log.Printf("AI OODA Error: %v", err)
+			logger.Error("AI OODA Error", "error", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 	} else {
 		answer, err = s.aiService.HandleRequest(c.Request.Context(), req)
 		if err != nil {
-			log.Printf("AI Error: %v", err)
+			logger.Error("AI Error", "error", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -307,7 +307,7 @@ func (s *Server) handleAgentExecute(c *gin.Context) {
 	ctx := c.Request.Context()
 	session, err := orch.Run(ctx, req.ProjectID, req.Query, predicateNames)
 	if err != nil {
-		log.Printf("[Agent] Execute failed: %v", err)
+		logger.Error("Agent Execute failed", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

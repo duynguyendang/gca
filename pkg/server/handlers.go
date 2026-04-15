@@ -1,8 +1,6 @@
 package server
 
 import (
-	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +8,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/gca/pkg/service/ai"
 	"github.com/gin-gonic/gin"
 )
@@ -20,7 +19,7 @@ import (
 func (s *Server) handleProjects(c *gin.Context) {
 	projects, err := s.graphService.ListProjects()
 	if err != nil {
-		log.Printf("handleProjects error: %v", err)
+		logger.Error("handleProjects error", "error", err)
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -486,7 +485,7 @@ func (s *Server) handleFileCalls(c *gin.Context) {
 
 	graph, err := s.graphService.GetFileCalls(c.Request.Context(), projectID, id, depth)
 	if err != nil {
-		fmt.Printf("handleFileCalls error: %v\n", err)
+		logger.Error("handleFileCalls error", "error", err)
 		handleError(c, err)
 		return
 	}

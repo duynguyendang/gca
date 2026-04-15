@@ -3,11 +3,11 @@ package service
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
+	"github.com/duynguyendang/gca/pkg/logger"
 )
 
 // CommunityHierarchy represents a hierarchical community structure.
@@ -124,7 +124,7 @@ func (s *GraphService) GetClusterGraph(ctx context.Context, projectID, query str
 
 // ClusterGraphData takes an existing D3Graph and applies clustering to it.
 func (s *GraphService) ClusterGraphData(fullGraph *export.D3Graph) (*export.D3Graph, error) {
-	log.Printf("[ClusterGraphData] Starting with %d nodes and %d links", len(fullGraph.Nodes), len(fullGraph.Links))
+	logger.Debug("ClusterGraphData starting", "nodes", len(fullGraph.Nodes), "links", len(fullGraph.Links))
 
 	if len(fullGraph.Nodes) == 0 {
 		return &export.D3Graph{Nodes: []export.D3Node{}, Links: []export.D3Link{}}, nil
@@ -152,9 +152,9 @@ func (s *GraphService) ClusterGraphData(fullGraph *export.D3Graph) (*export.D3Gr
 	}
 
 	clusteringSvc := NewClusteringService()
-	log.Println("[ClusterGraphData] Running Leiden algorithm...")
+	logger.Debug("Running Leiden algorithm")
 	result := clusteringSvc.DetectCommunitiesLeiden(nodes, links)
-	log.Printf("[ClusterGraphData] Leiden returned %d clusters", len(result.Clusters))
+	logger.Debug("Leiden returned clusters", "clusters", len(result.Clusters))
 
 	superNodes := make([]export.D3Node, 0, len(result.Clusters))
 	superLinks := make([]export.D3Link, 0)

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,6 +16,7 @@ import (
 	"sync/atomic"
 
 	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 )
 
@@ -87,7 +87,7 @@ func getFileGraphName(relPath string) string {
 // deleteFileFacts removes all facts associated with a specific file.
 func deleteFileFacts(s *meb.MEBStore, relPath string) error {
 	if err := s.DeleteFactsBySubject(relPath); err != nil {
-		log.Printf("Warning: Failed to delete facts for file %s: %v", relPath, err)
+		logger.Warn("Failed to delete facts for file", "file", relPath, "error", err)
 		return err
 	}
 	return nil
@@ -106,26 +106,26 @@ func RunIncrementalWithState(s *meb.MEBStore, projectName string, sourceDir stri
 	// Set topic ID for project-scoped ingestion
 	topicID := hashToTopicID(projectName)
 	s.SetTopicID(topicID)
-	log.Printf("Using topic ID %d for incremental project %s", topicID, projectName)
+	logger.Info("Using topic ID for incremental project", "topicID", topicID, "project", projectName)
 
 	existingHashes, err := LoadFileHashes(s)
 	if err != nil {
-		log.Printf("Warning: Could not load existing hashes: %v (starting fresh)", err)
+		logger.Warn("Could not load existing hashes, starting fresh", "error", err)
 		existingHashes = make(FileHashMap)
 	}
 
 	embeddingService, embeddingErr := NewEmbeddingService(ctx)
 	if embeddingErr != nil {
-		log.Printf("Warning: Embedding service unavailable: %v (skipping doc embeddings)", embeddingErr)
+		logger.Warn("Embedding service unavailable, skipping doc embeddings", "error", embeddingErr)
 	} else {
 		defer embeddingService.Close()
-		log.Println("Embedding service initialized for semantic doc search")
+		logger.Info("Embedding service initialized for semantic doc search")
 	}
 
 	var projectMeta *ProjectMetadata
 	metadataPath := filepath.Join(sourceDir, "project.yaml")
 	if _, err := os.Stat(metadataPath); err == nil {
-		fmt.Printf("Found project metadata at %s\n", metadataPath)
+		logger.Info("Found project metadata", "path", metadataPath)
 		projectMeta, _ = LoadProjectMetadata(metadataPath)
 		if projectMeta != nil {
 			s.AddFact(meb.Fact{
@@ -175,7 +175,7 @@ func RunIncrementalWithState(s *meb.MEBStore, projectName string, sourceDir stri
 
 			hash, mtime, hashErr := computeFileHash(path)
 			if hashErr != nil {
-				log.Printf("Warning: Could not hash %s: %v", path, hashErr)
+				logger.Warn("Could not hash file", "path", path, "error", hashErr)
 				changedFiles = append(changedFiles, path)
 				return nil
 			}
@@ -198,28 +198,30 @@ func RunIncrementalWithState(s *meb.MEBStore, projectName string, sourceDir stri
 		deletedFiles = append(deletedFiles, path)
 	}
 
-	fmt.Printf("Incremental Ingestion: %d changed, %d deleted, %d unchanged\n",
-		len(changedFiles), len(deletedFiles), len(newHashes)-len(changedFiles))
+	logger.Info("Incremental Ingestion stats",
+		"changed", len(changedFiles),
+		"deleted", len(deletedFiles),
+		"unchanged", len(newHashes)-len(changedFiles))
 
 	if len(changedFiles) == 0 && len(deletedFiles) == 0 {
-		fmt.Println("No changes detected. Skipping processing.")
+		logger.Info("No changes detected. Skipping processing.")
 		EnhanceVirtualTriples(s)
 		TagRoles(s)
 		return nil
 	}
 
 	if len(changedFiles) > 0 {
-		fmt.Printf("Processing %d changed files...\n", len(changedFiles))
+		logger.Info("Processing changed files", "count", len(changedFiles))
 
 		// Clean up old facts for changed files before re-ingestion
-		fmt.Println("Cleaning up old facts for changed files...")
+		logger.Info("Cleaning up old facts for changed files")
 		for _, path := range changedFiles {
 			rel, _ := filepath.Rel(sourceDir, path)
 			if projectName != "" {
 				rel = filepath.Join(projectName, rel)
 			}
 			if err := cleanupFileFacts(s, rel); err != nil {
-				log.Printf("Warning: Failed to cleanup old facts for %s: %v", rel, err)
+				logger.Warn("Failed to cleanup old facts", "file", rel, "error", err)
 			}
 		}
 
@@ -260,9 +262,9 @@ func RunIncrementalWithState(s *meb.MEBStore, projectName string, sourceDir stri
 				sem := make(chan struct{}, 10)
 				for path := range jobs {
 					rel, _ := filepath.Rel(sourceDir, path)
-					fmt.Printf("  Processing %s/%s...\n", projectName, rel)
+					logger.Debug("Processing file", "project", projectName, "file", rel)
 					if err := processFile(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta, &embeddingWg, sem, state); err != nil {
-						log.Printf("Error: %v", err)
+						logger.Error("Error processing file", "error", err)
 						passErr.Add(1)
 					}
 				}
@@ -276,18 +278,18 @@ func RunIncrementalWithState(s *meb.MEBStore, projectName string, sourceDir stri
 		wg.Wait()
 
 		if embeddingService != nil {
-			fmt.Println("Waiting for embeddings to complete...")
+			logger.Info("Waiting for embeddings to complete")
 			embeddingWg.Wait()
 		}
 	}
 
 	if len(deletedFiles) > 0 {
-		fmt.Printf("Removing %d deleted files from graph...\n", len(deletedFiles))
+		logger.Info("Removing deleted files from graph", "count", len(deletedFiles))
 		removeDeletedFiles(s, projectName, deletedFiles)
 	}
 
 	if err := SaveFileHashes(s, newHashes); err != nil {
-		log.Printf("Warning: Could not save file hashes: %v", err)
+		logger.Warn("Could not save file hashes", "error", err)
 	}
 
 	EnhanceVirtualTriples(s)
@@ -301,9 +303,9 @@ func RunIncrementalWithState(s *meb.MEBStore, projectName string, sourceDir stri
 func removeDeletedFiles(s *meb.MEBStore, projectName string, deletedFiles []string) {
 	for _, filePath := range deletedFiles {
 		if err := deleteFileFacts(s, filePath); err != nil {
-			log.Printf("Error: Failed to delete facts for %s: %v", filePath, err)
+			logger.Error("Failed to delete facts for deleted file", "file", filePath, "error", err)
 		} else {
-			log.Printf("Successfully removed facts for deleted file: %s", filePath)
+			logger.Info("Successfully removed facts for deleted file", "file", filePath)
 		}
 	}
 }

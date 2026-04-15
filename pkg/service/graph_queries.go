@@ -11,6 +11,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/datalog"
 	"github.com/duynguyendang/gca/pkg/export"
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/gca/pkg/repl"
 )
 
@@ -488,7 +489,7 @@ func (s *GraphService) GetBackboneGraph(ctx context.Context, projectID string, a
 
 	if len(backbone.Nodes) > 0 {
 		if err := s.enrichNodes(ctx, store, backbone, true); err != nil {
-			fmt.Printf("Backbone enrichment warning: %v\n", err)
+			logger.Warn("Backbone enrichment warning", "error", err)
 		}
 	}
 

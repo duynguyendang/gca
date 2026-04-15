@@ -3,9 +3,9 @@ package agent
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 	"github.com/google/uuid"
 )
@@ -31,7 +31,7 @@ func (o *Orchestrator) Run(ctx context.Context, projectID, query string, predica
 	sessionID := uuid.New().String()
 	session := NewExecutionSession(sessionID, projectID, query)
 
-	log.Printf("[Agent/Orchestrator] Starting session %s for project %s", sessionID, projectID)
+	logger.Info("Agent/Orchestrator Starting session", "sessionID", sessionID, "projectID", projectID)
 
 	// Phase 1: Plan
 	planCtx, planCancel := context.WithTimeout(ctx, 30*time.Second)
@@ -46,11 +46,11 @@ func (o *Orchestrator) Run(ctx context.Context, projectID, query string, predica
 		session.AddStep(step)
 	}
 
-	log.Printf("[Agent/Orchestrator] Plan generated %d steps", len(steps))
+	logger.Debug("Agent/Orchestrator Plan generated", "steps", len(steps))
 
 	// Phase 2: Execute all steps
 	if err := o.executor.ExecuteAllSteps(ctx, session); err != nil {
-		log.Printf("[Agent/Orchestrator] Execution completed with errors: %v", err)
+		logger.Error("Agent/Orchestrator Execution completed with errors", "error", err)
 		// Continue to narrative synthesis even with partial failures
 	}
 
@@ -60,13 +60,13 @@ func (o *Orchestrator) Run(ctx context.Context, projectID, query string, predica
 
 	narrative, err := o.reflector.SynthesizeNarrative(narrCtx, session)
 	if err != nil {
-		log.Printf("[Agent/Orchestrator] Narrative synthesis failed: %v", err)
+		logger.Warn("Agent/Orchestrator Narrative synthesis failed", "error", err)
 		narrative = o.buildFallbackNarrative(session)
 	}
 
 	session.SetNarrative(narrative)
 
-	log.Printf("[Agent/Orchestrator] Session %s completed in %v", sessionID, time.Since(session.CreatedAt))
+	logger.Info("Agent/Orchestrator Session completed", "sessionID", sessionID, "duration", time.Since(session.CreatedAt))
 	return session, nil
 }
 

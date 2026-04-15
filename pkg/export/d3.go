@@ -9,6 +9,7 @@ import (
 
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/datalog"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 )
 
@@ -263,7 +264,7 @@ func (t *D3Transformer) Transform(ctx context.Context, query string, results []m
 func (t *D3Transformer) createNode(id string) D3Node {
 	// Debug logging for node creation
 	if strings.Contains(id, "_test.go") {
-		fmt.Printf("[D3Transformer] Creating node for test file: %s\n", id)
+		logger.Debug("Creating node for test file", "file", id)
 	}
 	displayName := t.generateDisplayName(id)
 	kind, language, code := t.getMetadata(id)

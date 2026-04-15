@@ -1,9 +1,9 @@
 package server
 
 import (
-	"log"
 	"net/http"
 
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/gin-gonic/gin"
 )
 
@@ -34,14 +34,14 @@ func (s *Server) handleFileBackbone(c *gin.Context) {
 
 	// Auto-cluster if too many nodes (>500)
 	if autocluster && len(graph.Nodes) > 500 {
-		log.Printf("[Auto-Clustering] Backbone has %d nodes, clustering...", len(graph.Nodes))
+		logger.Debug("Auto-Clustering Backbone clustering", "nodes", len(graph.Nodes))
 		clustered, clusterErr := s.graphService.ClusterGraphData(graph)
 		if clusterErr == nil && len(clustered.Nodes) > 0 {
-			log.Printf("[Auto-Clustering] Success! Returning %d cluster nodes", len(clustered.Nodes))
+			logger.Debug("Auto-Clustering Success", "clusterNodes", len(clustered.Nodes))
 			c.JSON(http.StatusOK, clustered)
 			return
 		}
-		log.Printf("[Auto-Clustering] Failed or empty result: %v", clusterErr)
+		logger.Warn("Auto-Clustering Failed", "error", clusterErr)
 	}
 
 	c.JSON(http.StatusOK, graph)

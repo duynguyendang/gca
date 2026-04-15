@@ -1,13 +1,13 @@
 package ingest
 
 import (
-	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 )
 
@@ -118,7 +118,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 				s.AddFact(meb.Fact{Subject: string(route), Predicate: config.PredicateHandledBy, Object: targetID})
 				s.AddFact(meb.Fact{Subject: string(targetID), Predicate: config.PredicateHasRole, Object: config.RoleAPIHandler})
 			} else {
-				fmt.Printf("[Virtual] Failed to link route %s to handler %s (token: %s). Symbol not found.\n", route, rawHandler, handlerToken)
+				logger.Warn("Failed to link route to handler", "route", route, "handler", rawHandler, "token", handlerToken)
 			}
 		}
 	}
@@ -190,7 +190,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		}
 	}
 
-	fmt.Println("[Virtual] Scanning internal BE calls...")
+	logger.Info("Scanning internal BE calls")
 	methodCallRegex := regexp.MustCompile(`\.([A-Za-z0-9_]+)\(`)
 
 	for _, f := range files {
@@ -222,7 +222,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		name := common.ExtractSymbolName(sID)
 		contractMap[name] = append(contractMap[name], sID)
 	}
-	fmt.Println("[Virtual] Scanning for Data Lineage...")
+	logger.Info("Scanning for Data Lineage")
 	for _, f := range files {
 		for modelName, targets := range contractMap {
 			if strings.Contains(f.Content, modelName) {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/manglekit/sdk/ooda"
 )
 
@@ -137,7 +138,7 @@ func NewGCALoop(observer Observer, orienter Orienter, decider Decider, verifier 
 func (l *GCALoop) Run(ctx context.Context, frame *GCAFrame) (*GCAFrame, error) {
 	startTime := time.Now()
 	defer func() {
-		fmt.Printf("OODA Loop completed in %v\n", time.Since(startTime))
+		logger.Debug("OODA Loop completed", "duration", time.Since(startTime))
 	}()
 
 	phases := []Phase{PhaseObserve, PhaseOrient, PhaseDecide, PhaseVerify, PhaseAct}
