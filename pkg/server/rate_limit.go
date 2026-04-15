@@ -18,6 +18,7 @@ type RateLimiter struct {
 	rate     int           // tokens per second
 	capacity int           // max tokens
 	cleanup  time.Duration // cleanup interval for stale buckets
+	stopCh   chan struct{}
 }
 
 type bucket struct {
@@ -32,12 +33,18 @@ func NewRateLimiter(rate, capacity int) *RateLimiter {
 		rate:     rate,
 		capacity: capacity,
 		cleanup:  5 * time.Minute,
+		stopCh:   make(chan struct{}),
 	}
 
 	// Start cleanup goroutine
 	go rl.cleanupStaleBuckets()
 
 	return rl
+}
+
+// Stop stops the rate limiter cleanup goroutine
+func (rl *RateLimiter) Stop() {
+	close(rl.stopCh)
 }
 
 // Allow checks if a request from the given key is allowed
@@ -79,15 +86,20 @@ func (rl *RateLimiter) cleanupStaleBuckets() {
 	ticker := time.NewTicker(rl.cleanup)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		rl.mu.Lock()
-		now := time.Now()
-		for key, b := range rl.buckets {
-			if now.Sub(b.lastReset) > rl.cleanup {
-				delete(rl.buckets, key)
+	for {
+		select {
+		case <-rl.stopCh:
+			return
+		case <-ticker.C:
+			rl.mu.Lock()
+			now := time.Now()
+			for key, b := range rl.buckets {
+				if now.Sub(b.lastReset) > rl.cleanup {
+					delete(rl.buckets, key)
+				}
 			}
+			rl.mu.Unlock()
 		}
-		rl.mu.Unlock()
 	}
 }
 

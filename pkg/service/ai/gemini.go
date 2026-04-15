@@ -376,11 +376,15 @@ func (s *AIService) buildMultiFileSummaryPrompt(ctx context.Context, store *meb.
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+	sem := make(chan struct{}, 10) // limit concurrent goroutines
 
 	for _, fileID := range fileIDs {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
+			sem <- struct{}{}        // acquire
+			defer func() { <-sem }() // release
+
 			var localSb strings.Builder
 			localCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			defer cancel()

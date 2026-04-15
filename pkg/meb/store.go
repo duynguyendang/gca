@@ -399,7 +399,7 @@ func buildLFTJRelations(store *meb.MEBStore, atoms []datalog.Atom) ([]query.Rela
 					skipAtom = true
 					break
 				}
-				packedID := keys.PackID(topicID, keys.UnpackLocalID(dictID))
+				packedID := keys.PackID(topicID, dictID)
 				boundPositions[argIdx] = packedID
 			}
 		}

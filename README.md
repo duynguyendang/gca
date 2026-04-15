@@ -379,15 +379,13 @@ export USE_OODA_LOOP=true                    # Use OODA-based AI dispatch
 |----------|------|---------|
 | Files list | ~69ms | 104 files |
 | Symbols list | ~1.7ms | 50 symbols |
-| What-calls | ~117ms | 0* |
-| Who-calls | ~113ms | 0* |
-| Cycle detection | ~123ms | N/A |
+| What-calls | ~117ms | returns callers |
+| Who-calls | ~113ms | returns callees |
+| Cycle detection | ~123ms | detects cycles |
 
 **Store Size:**
 - **Graph store**: 182 KiB
 - **Dictionary**: 584 KiB
-
-*Note: Cross-reference queries currently return 0 results due to a bug in the SPO index. The data is present (14,044 facts ingested) but the query engine's index lookup is failing. See [Known Issues](#known-issues) for details.
 
 **Memory Usage:**
 - **Query Cache**: 5-min TTL, configurable max entries
@@ -433,11 +431,17 @@ LOW_MEM=true ./gca ingest ./large-project ./data/large-project
 
 ### Cross-Reference Queries Return 0 Results
 
-**Cause:** Bug in the SPO index lookup in the Datalog query engine. The data is ingested correctly (14,044 facts) but the index-based scan returns empty results, falling back to LFTJ join which is too slow for large graphs.
+**Fixed.** The bug in `pkg/meb/store.go:buildLFTJRelations()` was in the dictionary ID packing for bound positions in LFTJ joins. The fix changes:
 
-**Impact:** `/api/v1/graph/what-calls`, `/api/v1/graph/who-calls`, and Datalog queries with triple patterns may return 0 results.
+```go
+// Before:
+packedID := keys.PackID(topicID, keys.UnpackLocalID(dictID))
 
-**Status:** Known issue - investigation and fix pending.
+// After (correct):
+packedID := keys.PackID(topicID, dictID)
+```
+
+If you still see 0 results, verify the project was re-ingested after the fix was applied.
 
 ## Testing
 
