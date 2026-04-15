@@ -9,6 +9,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/meb"
 )
 
 // GetFileBackbone returns the bidirectional file-level dependency graph (depth 1) for a specific file.
@@ -33,13 +34,6 @@ func (s *GraphService) GetFileBackbone(ctx context.Context, projectID, fileID st
 
 	quotedFileID := fmt.Sprintf("\"%s\"", cleanFileID)
 
-	symbolToFile := make(map[string]string)
-	for fact, _ := range store.Scan("", config.PredicateDefines, "") {
-		if sym, ok := fact.Object.(string); ok {
-			symbolToFile[sym] = fact.Subject
-		}
-	}
-
 	nodesMap := make(map[string]export.D3Node)
 	linksMap := make(map[string]export.D3Link)
 
@@ -59,7 +53,7 @@ func (s *GraphService) GetFileBackbone(ctx context.Context, projectID, fileID st
 		if !ok {
 			continue
 		}
-		targetFile := extractFileFromSymbol(targetAuth, symbolToFile)
+		targetFile := extractFileFromSymbolWithStore(ctx, store, targetAuth)
 		if targetFile == "" || targetFile == cleanFileID {
 			continue
 		}
@@ -130,13 +124,19 @@ func (s *GraphService) GetFileBackbone(ctx context.Context, projectID, fileID st
 	return &export.D3Graph{Nodes: nodes, Links: links}, nil
 }
 
-func extractFileFromSymbol(symbol string, symbolToFile map[string]string) string {
+func extractFileFromSymbolWithStore(ctx context.Context, store *meb.MEBStore, symbol string) string {
 	parts := strings.SplitN(symbol, ":", 2)
 	if len(parts) >= 2 && isValidFilePath(parts[0]) {
 		return parts[0]
 	}
-	if defFile, exists := symbolToFile[symbol]; exists {
-		return defFile
+	// Use MEB O(1) lookup via defines predicate
+	for fact, err := range store.ScanContext(ctx, "", config.PredicateDefines, symbol) {
+		if err != nil {
+			continue
+		}
+		if obj, ok := fact.Object.(string); ok && obj == symbol {
+			return fact.Subject
+		}
 	}
 	return ""
 }

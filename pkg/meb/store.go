@@ -185,8 +185,7 @@ func (s *Store) Query(ctx context.Context, q string) ([]map[string]any, error) {
 	return Query(ctx, s.MEBStore, q)
 }
 
-// scanFacts works around the MEB store's broken SPO index for subject lookups.
-// When subject is bound, it scans using OPS index and filters by subject.
+// scanFacts scans facts using meb's ScanContext with proper SPO index support.
 func scanFacts(ctx context.Context, store *meb.MEBStore, subj, pred, obj string) <-chan struct {
 	Fact meb.Fact
 	Err  error
@@ -198,30 +197,11 @@ func scanFacts(ctx context.Context, store *meb.MEBStore, subj, pred, obj string)
 
 	go func() {
 		defer close(ch)
-		if subj == "" {
-			for fact, err := range store.ScanContext(ctx, subj, pred, obj) {
-				ch <- struct {
-					Fact meb.Fact
-					Err  error
-				}{Fact: fact, Err: err}
-			}
-			return
-		}
-		// SPO index is broken for subject lookups, use OPS index
-		for fact, err := range store.ScanContext(ctx, "", pred, obj) {
-			if err != nil {
-				ch <- struct {
-					Fact meb.Fact
-					Err  error
-				}{Err: err}
-				continue
-			}
-			if fact.Subject == subj {
-				ch <- struct {
-					Fact meb.Fact
-					Err  error
-				}{Fact: fact, Err: nil}
-			}
+		for fact, err := range store.ScanContext(ctx, subj, pred, obj) {
+			ch <- struct {
+				Fact meb.Fact
+				Err  error
+			}{Fact: fact, Err: err}
 		}
 	}()
 

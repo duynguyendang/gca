@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 	sitter "github.com/tree-sitter/go-tree-sitter"
 	golang "github.com/tree-sitter/tree-sitter-go/bindings/go"
@@ -285,10 +286,12 @@ func (e *TreeSitterExtractor) processSymbols(bundle *AnalysisBundle, symbols []S
 		}
 		bundle.Documents = append(bundle.Documents, doc)
 
-		// DEBUG
-		if sym.Name == "Execute" || sym.Name == "ResolveCallee" {
-			fmt.Printf("DEBUG processSymbols: symbol=%s, ID=%s, Name=%s, Type=%s\n", sym.Name, sym.ID, sym.Name, sym.Type)
-		}
+		// Log key symbol processing at debug level
+		logger.Debug("processSymbols: processing symbol",
+			"symbol", sym.Name,
+			"id", sym.ID,
+			"type", sym.Type,
+		)
 
 		// Create Facts
 		bundle.Facts = append(bundle.Facts,

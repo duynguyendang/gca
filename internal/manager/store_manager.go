@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/telemetry"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/store"
@@ -20,7 +22,12 @@ type ProjectMetadata struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	Version     string `json:"version,omitempty"`
 }
+
+// CurrentSchemaVersion is the current version of the knowledge schema.
+// Bump this when breaking changes require re-ingestion.
+const CurrentSchemaVersion = "2.0"
 
 // MemoryProfile defines the memory optimization strategy
 type MemoryProfile string
@@ -102,12 +109,20 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 		return nil, fmt.Errorf("failed to open store for project %s: %w", projectID, err)
 	}
 
+	// Set TopicID for project-scoped queries
+	// Uses a hash of the project name to generate a unique 24-bit topic ID
+	// This must be set before any query operations to ensure correct data filtering
+	topicID := hashToTopicID(projectID)
+	s.SetTopicID(topicID)
+
 	// Register telemetry sink
 	s.RegisterTelemetrySink(sm.telemetrySink)
-	log.Printf("Registered telemetry sink for project %s", projectID)
+	log.Printf("Registered telemetry sink for project %s (topicID=%d)", projectID, topicID)
 
 	// Set retention policy to prevent unbounded growth
-	s.SetRetention(DefaultMaxFacts)
+	if err := s.SetRetention(DefaultMaxFacts); err != nil {
+		return nil, fmt.Errorf("failed to set retention for project %s: %w", projectID, err)
+	}
 
 	sm.projects.Add(projectID, s)
 	return s, nil
@@ -146,6 +161,7 @@ func (sm *StoreManager) ListProjects() ([]ProjectMetadata, error) {
 						meta.Name = jsonMeta.Name
 					}
 					meta.Description = jsonMeta.Description
+					meta.Version = jsonMeta.Version
 				}
 			}
 			projects = append(projects, meta)
@@ -163,4 +179,80 @@ func (sm *StoreManager) ListProjects() ([]ProjectMetadata, error) {
 // CloseAll closes all open stores.
 func (sm *StoreManager) CloseAll() {
 	sm.projects.Purge()
+}
+
+// NeedsMigration checks if a project needs to be re-ingested for schema updates.
+// It returns true if the project lacks has_name triples (new requirement for symbol resolution).
+func (sm *StoreManager) NeedsMigration(projectID string) (bool, string, error) {
+	store, err := sm.GetStore(projectID)
+	if err != nil {
+		return false, "", err
+	}
+
+	return CheckStoreNeedsMigration(store)
+}
+
+// CheckStoreNeedsMigration checks if a store lacks has_name triples.
+func CheckStoreNeedsMigration(s *meb.MEBStore) (bool, string, error) {
+	ctx := context.Background()
+	count := 0
+	for range s.FindSubjectsByObject(ctx, config.PredicateHasName, "") {
+		count++
+		if count > 0 {
+			break // Found at least one, no migration needed
+		}
+	}
+
+	if count == 0 {
+		return true, "no has_name triples found - re-ingestion required", nil
+	}
+	return false, "", nil
+}
+
+// GetProjectMetadata returns metadata for a project.
+func (sm *StoreManager) GetProjectMetadata(projectID string) (*ProjectMetadata, error) {
+	metaPath := filepath.Join(sm.baseDir, projectID, "metadata.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read metadata for %s: %w", projectID, err)
+	}
+
+	var meta ProjectMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("failed to parse metadata for %s: %w", projectID, err)
+	}
+
+	return &meta, nil
+}
+
+// SetProjectVersion updates the version in metadata.json.
+func (sm *StoreManager) SetProjectVersion(projectID, version string) error {
+	metaPath := filepath.Join(sm.baseDir, projectID, "metadata.json")
+
+	var meta ProjectMetadata
+	if data, err := os.ReadFile(metaPath); err == nil {
+		_ = json.Unmarshal(data, &meta)
+	}
+
+	meta.Version = version
+
+	newData, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
+
+	return os.WriteFile(metaPath, newData, 0644)
+}
+
+// hashToTopicID generates a deterministic 24-bit topic ID from a project name.
+func hashToTopicID(name string) uint32 {
+	if name == "" {
+		return 1
+	}
+	var h uint32 = 2166136261 // FNV-1a offset basis
+	for i := 0; i < len(name); i++ {
+		h ^= uint32(name[i])
+		h *= 16777619 // FNV-1a prime
+	}
+	return (h & 0xFFFFFF) | 1 // ensure non-zero (0 is reserved)
 }

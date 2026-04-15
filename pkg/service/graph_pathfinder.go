@@ -103,31 +103,31 @@ func (s *GraphService) GetFileGraph(ctx context.Context, projectID, fileID strin
 	return mergedGraph, nil
 }
 
+// extractFileFromID extracts file path from a node ID (format: "file:symbol" or just "file")
+func extractFileFromID(id string) string {
+	if strings.Contains(id, ":") {
+		return strings.SplitN(id, ":", 2)[0]
+	}
+	return id
+}
+
 // filterToFilesOnly removes function-level nodes and aggregates links to file level
 func (s *GraphService) filterToFilesOnly(graph *export.D3Graph) {
 	fileNodes := make(map[string]export.D3Node)
-	symbolToFile := make(map[string]string)
 
 	for _, n := range graph.Nodes {
-		if !strings.Contains(n.ID, ":") {
-			fileNodes[n.ID] = n
-		} else {
-			parts := strings.SplitN(n.ID, ":", 2)
-			filePath := parts[0]
-			symbolToFile[n.ID] = filePath
-
-			if _, exists := fileNodes[filePath]; !exists {
-				fileName := filePath
-				if idx := strings.LastIndex(filePath, "/"); idx != -1 {
-					fileName = filePath[idx+1:]
-				}
-				isInternal := true
-				fileNodes[filePath] = export.D3Node{
-					ID:         filePath,
-					Name:       fileName,
-					Kind:       config.SymbolKindFile,
-					IsInternal: &isInternal,
-				}
+		fileID := extractFileFromID(n.ID)
+		if _, exists := fileNodes[fileID]; !exists {
+			fileName := fileID
+			if idx := strings.LastIndex(fileID, "/"); idx != -1 {
+				fileName = fileID[idx+1:]
+			}
+			isInternal := true
+			fileNodes[fileID] = export.D3Node{
+				ID:         fileID,
+				Name:       fileName,
+				Kind:       config.SymbolKindFile,
+				IsInternal: &isInternal,
 			}
 		}
 	}
@@ -136,15 +136,8 @@ func (s *GraphService) filterToFilesOnly(graph *export.D3Graph) {
 	var newLinks []export.D3Link
 
 	for _, l := range graph.Links {
-		sourceFile := l.Source
-		targetFile := l.Target
-
-		if sf, ok := symbolToFile[l.Source]; ok {
-			sourceFile = sf
-		}
-		if tf, ok := symbolToFile[l.Target]; ok {
-			targetFile = tf
-		}
+		sourceFile := extractFileFromID(l.Source)
+		targetFile := extractFileFromID(l.Target)
 
 		if sourceFile == targetFile {
 			continue
@@ -339,21 +332,6 @@ func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID strin
 
 	log.Printf("GetFileCalls: cleanFileID=%s, storedFileID=%s, projectID=%s", cleanFileID, storedFileID, projectID)
 
-	symbolToFile := make(map[string]string)
-	// Build symbol-to-file mapping using the fixed query path
-	q := fmt.Sprintf("triples(?f, \"%s\", ?sym)", config.PredicateDefines)
-	defineResults, err := gcamdb.Query(ctx, store, q)
-	if err != nil {
-		log.Printf("GetFileCalls: defines query error: %v", err)
-	}
-	for _, row := range defineResults {
-		if f, ok := row["?f"].(string); ok {
-			if sym, ok := row["?sym"].(string); ok {
-				symbolToFile[sym] = f
-			}
-		}
-	}
-
 	nodesMap := make(map[string]export.D3Node)
 	linksMap := make(map[string]export.D3Link)
 
@@ -411,12 +389,9 @@ func (s *GraphService) GetFileCalls(ctx context.Context, projectID, fileID strin
 			parts := strings.SplitN(targetSymbol, ":", 2)
 			if len(parts) >= 2 && isValidFilePath(parts[0]) {
 				targetFile = parts[0]
-			} else if defFile, exists := symbolToFile[targetSymbol]; exists {
-				targetFile = defFile
 			} else {
-				// Try to resolve external calls like "api.KeyFromName" or "core.NewError"
-				// by searching the symbolToFile map for matching symbols
-				targetFile = findFileForSymbol(targetSymbol, symbolToFile)
+				// Use MEB-based O(1) lookup instead of O(N) map scan
+				targetFile = findFileForSymbolByStore(ctx, store, targetSymbol)
 				if targetFile == "" {
 					// For imports, convert package path to project file
 					targetFile = findProjectFileForImport(targetSymbol, projectID)
@@ -574,10 +549,69 @@ func (s *GraphService) GetFlowPath(ctx context.Context, projectID, fromID, toID 
 	return &export.D3Graph{Nodes: nodes, Links: links}, nil
 }
 
-// findFileForSymbol looks up the file that defines a symbol.
+// findFileForSymbolByStore looks up the file that defines a symbol using MEB store.
 // It handles both qualified symbols (e.g., "main.go:main") and unqualified
-// symbols (e.g., "fmt.Println" or just "Println") by checking if any
-// defined symbol in symbolToFile ends with the target symbol name.
+// symbols (e.g., "fmt.Println" or just "Println") by querying has_name and defines predicates.
+func findFileForSymbolByStore(ctx context.Context, store *meb.MEBStore, target string) string {
+	// If target already has file prefix (format "file:symbol"), extract it
+	if strings.Contains(target, ":") && isValidFilePath(strings.SplitN(target, ":", 2)[0]) {
+		return strings.SplitN(target, ":", 2)[0]
+	}
+
+	// Try direct lookup via defines predicate (O(1) via OPS index)
+	// Query: find subjects where defines(subject, target)
+	for fact, err := range store.ScanContext(ctx, "", config.PredicateDefines, target) {
+		if err != nil {
+			continue
+		}
+		if obj, ok := fact.Object.(string); ok && obj == target {
+			return fact.Subject
+		}
+	}
+
+	// Try by short name using has_name predicate
+	shortName := target
+	if strings.Contains(target, ".") {
+		parts := strings.Split(target, ".")
+		shortName = parts[len(parts)-1]
+	}
+
+	// Find all symbols with this short name
+	var candidates []string
+	for subject := range store.FindSubjectsByObject(ctx, config.PredicateHasName, shortName) {
+		candidates = append(candidates, subject)
+	}
+
+	if len(candidates) == 0 {
+		return ""
+	}
+
+	// Find best candidate - prefer same package, shortest match
+	bestFile := ""
+	bestScore := -1
+	for _, sym := range candidates {
+		file := findFileForSymbolByStore(ctx, store, sym)
+		if file == "" {
+			continue
+		}
+		score := 0
+		if strings.Contains(sym, shortName) {
+			score++
+		}
+		if len(sym) < 50 {
+			score++
+		}
+		if score > bestScore {
+			bestScore = score
+			bestFile = file
+		}
+	}
+
+	return bestFile
+}
+
+// findFileForSymbol looks up the file that defines a symbol.
+// NOTE: This function is kept for backward compatibility but should use findFileForSymbolByStore for better performance.
 func findFileForSymbol(target string, symbolToFile map[string]string) string {
 	// Direct lookup first
 	if file, exists := symbolToFile[target]; exists {

@@ -27,7 +27,8 @@ func (sr *SymbolResolver) BuildSymbolIndex(store *meb.MEBStore) error {
 }
 
 func (sr *SymbolResolver) BuildImportMap(store *meb.MEBStore) error {
-	for fact, err := range store.Scan("", config.PredicateImports, "") {
+	ctx := context.Background()
+	for fact, err := range store.ScanContext(ctx, "", config.PredicateImports, "") {
 		if err != nil {
 			continue
 		}
@@ -240,7 +241,8 @@ func (sr *SymbolResolver) BuildCallGraph(store *meb.MEBStore) (*CallGraph, error
 	}
 	sr.BuildImportMap(store)
 
-	for fact, err := range store.Scan("", config.PredicateCalls, "") {
+	ctx := context.Background()
+	for fact, err := range store.ScanContext(ctx, "", config.PredicateCalls, "") {
 		if err != nil {
 			continue
 		}

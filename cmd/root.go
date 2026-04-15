@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/duynguyendang/gca/internal/manager"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/store"
 	"github.com/joho/godotenv"
@@ -34,6 +35,11 @@ Datalog, natural language, and semantic search.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		// Load .env file if exists
 		_ = godotenv.Load()
+
+		// Configure log level from environment
+		if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {
+			logger.SetLevelFromString(logLevel)
+		}
 
 		// Set defaults from environment if not provided via flags
 		if port == "" {

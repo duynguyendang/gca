@@ -46,20 +46,20 @@ func (s *CentralityService) ComputeDegreeCentrality(ctx context.Context, store *
 	outDegree := make(map[string]int)
 	kindMap := make(map[string]string)
 
-	for fact := range store.Scan("", config.PredicateCalls, "") {
+	for fact := range store.ScanContext(ctx, "", config.PredicateCalls, "") {
 		if obj, ok := fact.Object.(string); ok {
 			inDegree[obj]++
 		}
 		outDegree[fact.Subject]++
 	}
 
-	for fact := range store.Scan("", config.PredicateDefines, "") {
+	for fact := range store.ScanContext(ctx, "", config.PredicateDefines, "") {
 		if sym, ok := fact.Object.(string); ok {
 			kindMap[sym] = s.inferKind(sym)
 		}
 	}
 
-	for fact := range store.Scan("", config.PredicateImports, "") {
+	for fact := range store.ScanContext(ctx, "", config.PredicateImports, "") {
 		if obj, ok := fact.Object.(string); ok {
 			inDegree[obj]++
 		}
@@ -268,7 +268,7 @@ func IsInterfacePattern(symbol string) bool {
 	return interfacePatternRegex.MatchString(strings.ToLower(symbol))
 }
 
-func ComputePageRankCentrality(store *meb.MEBStore, iterations int, damping float64) (map[string]float64, error) {
+func ComputePageRankCentrality(ctx context.Context, store *meb.MEBStore, iterations int, damping float64) (map[string]float64, error) {
 	if iterations <= 0 {
 		iterations = 10
 	}
@@ -279,7 +279,7 @@ func ComputePageRankCentrality(store *meb.MEBStore, iterations int, damping floa
 	nodes := make(map[string]struct{})
 	edges := make(map[string][]string)
 
-	for fact := range store.Scan("", config.PredicateCalls, "") {
+	for fact := range store.ScanContext(ctx, "", config.PredicateCalls, "") {
 		if obj, ok := fact.Object.(string); ok {
 			nodes[fact.Subject] = struct{}{}
 			nodes[obj] = struct{}{}

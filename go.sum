@@ -41,6 +41,8 @@ github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkp
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/duynguyendang/manglekit v0.0.0-20260330150740-81e7572ffb31 h1:5J5hXPucLvnkUtpvc2s3MTPS/PDKJrWZWtURG05cKSY=
 github.com/duynguyendang/manglekit v0.0.0-20260330150740-81e7572ffb31/go.mod h1:OyZ5j/7mxANK8GUq94VYBCn9Thc199aTIkTv5ue8m0M=
+github.com/duynguyendang/meb v0.0.0-20260414090359-4b53b8dde65d h1:+hLNyPEjR/elLiH0sbpo3pkRXOneejUcKv4YkpPQcVM=
+github.com/duynguyendang/meb v0.0.0-20260414090359-4b53b8dde65d/go.mod h1:MTJAO4B5k+hjrHWCpu/6Ylp/8VLH+M6ieB9ajL9Ir0I=
 github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/firebase/genkit/go v1.4.0 h1:CP1hNWk7z0hosyY53zMH6MFKFO1fMLtj58jGPllQo6I=

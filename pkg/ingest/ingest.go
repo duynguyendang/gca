@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/keys"
 )
@@ -46,17 +46,17 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 	// Uses a hash of the project name to generate a unique 24-bit topic ID
 	topicID := hashToTopicID(projectName)
 	s.SetTopicID(topicID)
-	log.Printf("Using topic ID %d for project %s", topicID, projectName)
+	logger.Info("Using topic ID for project", "topic_id", topicID, "project", projectName)
 
 	var embeddingService *EmbeddingService
 	var embeddingErr error
 
 	embeddingService, embeddingErr = NewEmbeddingService(ctx)
 	if embeddingErr != nil {
-		log.Printf("Warning: Embedding service unavailable: %v (skipping doc embeddings)", embeddingErr)
+		logger.Warn("Embedding service unavailable, skipping doc embeddings", "error", embeddingErr)
 	} else {
 		defer embeddingService.Close()
-		log.Println("Embedding service initialized for semantic doc search")
+		logger.Info("Embedding service initialized for semantic doc search")
 	}
 
 	fmt.Printf("Pass 1: Collecting symbols and index for %s...\n", projectName)
@@ -71,7 +71,7 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 		var metaErr error
 		projectMeta, metaErr = LoadProjectMetadata(metadataPath)
 		if metaErr != nil {
-			log.Printf("Warning: Failed to load project metadata: %v", metaErr)
+			logger.Warn("Failed to load project metadata", "error", metaErr)
 		} else {
 			// Create Project Node
 			s.AddFact(meb.Fact{
@@ -149,7 +149,7 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 				rel, _ := filepath.Rel(sourceDir, path)
 				fmt.Printf("  Processing %s/%s...\n", projectName, rel)
 				if err := processFile(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta, &embeddingWg, sem, state); err != nil {
-					log.Printf("Error: %v", err)
+					logger.Error("Failed to process file", "error", err)
 					pass2Err.Add(1)
 				}
 			}
@@ -224,21 +224,21 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 	for retries := 0; retries < 3; retries++ {
 		addErr = s.AddDocumentWithTopic(s.TopicID(), string(relPath), content, nil, map[string]any{"project": projectName})
 		if addErr == nil {
-			log.Printf("DEBUG Ingest: Successfully stored raw content for %s using AddDocumentWithTopic", relPath)
+			logger.Debug("Successfully stored raw content", "file", relPath)
 			break
 		}
 		// fast retry for conflicts
 		time.Sleep(time.Millisecond * time.Duration(10*(retries+1)))
 	}
 	if addErr != nil {
-		log.Printf("DEBUG Ingest: FAILED to store raw content for %s: %v", relPath, addErr)
+		logger.Error("Failed to store raw content", "file", relPath, "error", addErr)
 		return fmt.Errorf("failed to add document %s: %w", relPath, addErr)
 	}
 
 	// Store symbol documents (with file, start_line, end_line metadata for snippet extraction)
 	for _, doc := range bundle.Documents {
 		if err := s.AddDocumentWithTopic(s.TopicID(), doc.ID, nil, nil, doc.Metadata); err != nil {
-			log.Printf("Warning: failed to add symbol doc %s: %v", doc.ID, err)
+			logger.Warn("Failed to add symbol doc", "doc_id", doc.ID, "error", err)
 		}
 	}
 
@@ -250,19 +250,19 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 			if fact.Predicate == config.PredicateHasDoc {
 				docFactsFound++
 				docText, ok := fact.Object.(string)
-				log.Printf("DEBUG: Found doc for %s (len=%d)", fact.Subject, len(docText))
+				logger.Debug("Found doc for symbol", "subject", fact.Subject, "length", len(docText))
 
 				if ok && len(docText) > 10 { // Only embed meaningful docs
 					if embeddingWg != nil {
 						embeddingWg.Add(1)
 					} else {
-						log.Printf("Warning: embeddingWg is nil for %s", fact.Subject)
+						logger.Warn("embeddingWg is nil", "subject", fact.Subject)
 					}
 
 					go func(symbolID string, text string) {
 						defer func() {
 							if r := recover(); r != nil {
-								log.Printf("Panic in embedding goroutine for %s: %v", symbolID, r)
+								logger.Error("Panic in embedding goroutine", "symbol", symbolID, "panic", r)
 							}
 						}()
 
@@ -280,33 +280,33 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 						ctxWithTimeout, cancel := context.WithTimeout(context.Background(), config.EmbeddingTimeout)
 						defer cancel()
 
-						log.Printf("Generating embedding for %s (len=%d)...", symbolID, len(text))
+						logger.Debug("Generating embedding", "symbol", symbolID, "length", len(text))
 						embed, err := embedder.GetEmbedding(ctxWithTimeout, text)
 						if err != nil {
-							log.Printf("Error generating embedding for %s: %v", symbolID, err)
+							logger.Error("Error generating embedding", "symbol", symbolID, "error", err)
 							return
 						}
 
 						if len(embed) == 0 {
-							log.Printf("Error: empty embedding for %s", symbolID)
+							logger.Error("Empty embedding", "symbol", symbolID)
 							return
 						}
 
 						// Look up the correct dictionary ID for the symbol
 						dictID, found := s.LookupID(string(symbolID))
 						if !found {
-							log.Printf("Error: ID not found in dictionary for %s (cannot store vector)", symbolID)
+							logger.Error("ID not found in dictionary, cannot store vector", "symbol", symbolID)
 							return
 						}
 
 						if err := s.Vectors().Add(dictID, embed); err != nil {
-							log.Printf("Error adding vector to store for %s: %v", symbolID, err)
+							logger.Error("Error adding vector to store", "symbol", symbolID, "error", err)
 						} else {
-							log.Printf("Successfully stored embedding for %s (ID=%d)", symbolID, dictID)
+							logger.Info("Successfully stored embedding", "symbol", symbolID, "dict_id", dictID)
 						}
 					}(fact.Subject, docText)
 				} else if ok {
-					log.Printf("Skipping embedding for %s: text too short (%d chars)", fact.Subject, len(docText))
+					logger.Debug("Skipping embedding, text too short", "subject", fact.Subject, "length", len(docText))
 				}
 			}
 		}
@@ -315,7 +315,6 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 	finalFacts := make([]meb.Fact, 0, len(bundle.Facts)+2)
 
 	// Inject Role Tags based on path or metadata
-	// fmt.Printf("DEBUG: relPath=%s\n", relPath)
 	tagged := false
 	if meta != nil && meta.Components != nil {
 		for _, comp := range meta.Components {
@@ -329,10 +328,8 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 
 	if !tagged {
 		if strings.HasSuffix(relPath, ".go") {
-			// fmt.Printf("DEBUG: Tagging %s as backend\n", relPath)
 			finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateHasTag, Object: "backend"})
 		} else if strings.HasSuffix(relPath, ".ts") || strings.HasSuffix(relPath, ".tsx") {
-			// fmt.Printf("DEBUG: Tagging %s as frontend\n", relPath)
 			finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateHasTag, Object: "frontend"})
 		}
 	}
@@ -340,6 +337,7 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 	// Make sure file has type "file"
 	finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateType, Object: config.SymbolKindFile})
 
+	hasNameCount := 0
 	for _, f := range bundle.Facts {
 		if f.Predicate == config.PredicateCalls {
 			if objStr, ok := f.Object.(string); ok {
@@ -349,25 +347,15 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 			}
 		}
 
-		// DEBUG has_name facts
+		// Track has_name facts for debug logging
 		if f.Predicate == config.PredicateHasName {
-			fmt.Printf("DEBUG INGEST: has_name fact: Subject=%s, Object=%v\n", f.Subject, f.Object)
+			hasNameCount++
 		}
 
 		finalFacts = append(finalFacts, f)
 	}
 
-	fmt.Printf("DEBUG INGEST: Total facts being added: %d (has_name count: %d)\n",
-		len(finalFacts),
-		func() int {
-			count := 0
-			for _, f := range finalFacts {
-				if f.Predicate == config.PredicateHasName {
-					count++
-				}
-			}
-			return count
-		}())
+	logger.Debug("Total facts being added", "total", len(finalFacts), "has_name_count", hasNameCount)
 
 	return s.AddFactBatch(finalFacts)
 }

@@ -26,7 +26,7 @@ steps:
       - '--set-secrets'
       - 'LLM_API_KEY=GEMINI_KEY:latest'
       - '--set-env-vars'
-      - 'LOW_MEM=true,LLM_MODEL=googleai/gemma-4-31b-it,LLM_PROVIDER=googleai,CORS_ALLOW_ORIGINS=https://gca-hackathon.web.app'
+      - 'LOW_MEM=true,LLM_MODEL=googleai/gemma-4-31b-it,LLM_PROVIDER=googleai,EMBEDDING_MODEL=googleai/gemini-embedding-001,CORS_ALLOW_ORIGINS=https://gca-hackathon.web.app'
       - '--allow-unauthenticated'
 
 images:

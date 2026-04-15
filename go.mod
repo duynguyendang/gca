@@ -5,7 +5,7 @@ go 1.25.1
 require (
 	github.com/agext/levenshtein v1.2.3
 	github.com/duynguyendang/manglekit v0.0.0-20260330150740-81e7572ffb31
-	github.com/duynguyendang/meb v0.0.0-20260331154920-4de5f2ae927a
+	github.com/duynguyendang/meb v0.0.0-20260414090359-4b53b8dde65d
 	github.com/firebase/genkit/go v1.4.0
 	github.com/gin-gonic/gin v1.11.0
 	github.com/google/uuid v1.6.0
@@ -21,8 +21,6 @@ require (
 	github.com/tree-sitter/tree-sitter-typescript v0.23.2
 	gopkg.in/yaml.v3 v3.0.1
 )
-
-replace github.com/duynguyendang/meb => ../meb
 
 require (
 	bitbucket.org/creachadair/stringset v0.0.11 // indirect

@@ -211,9 +211,9 @@ func (o *GraphOrienter) Orient(ctx context.Context, frame *GCAFrame) error {
 		}
 		seen[symbol] = true
 
-		inbound := o.scanWithLimit(store, symbol, "calls", o.maxResults)
-		outbound := o.scanWithLimitOutgoing(store, symbol, o.maxResults)
-		defines := o.scanWithLimitOutgoing(store, symbol, o.maxResults)
+		inbound := o.scanWithLimit(ctx, store, symbol, "calls", o.maxResults)
+		outbound := o.scanWithLimitOutgoing(ctx, store, symbol, o.maxResults)
+		defines := o.scanWithLimitOutgoing(ctx, store, symbol, o.maxResults)
 
 		if len(inbound) > 0 || len(outbound) > 0 || len(defines) > 0 {
 			count++
@@ -270,7 +270,7 @@ func (o *GraphOrienter) buildFileMap(ctx context.Context, store *meb.MEBStore) m
 
 	// Scan for defines predicate - get symbol -> file relationships
 	// This is more efficient than querying each symbol individually
-	for fact := range store.Scan("", "defines", "") {
+	for fact := range store.ScanContext(ctx, "", "defines", "") {
 		if sym, ok := fact.Object.(string); ok {
 			fileMap[sym] = fact.Subject
 		}
@@ -280,11 +280,11 @@ func (o *GraphOrienter) buildFileMap(ctx context.Context, store *meb.MEBStore) m
 }
 
 // scanWithLimit scans for inbound references (who calls this symbol)
-func (o *GraphOrienter) scanWithLimit(store *meb.MEBStore, symbol string, predicate string, limit int) map[string]bool {
+func (o *GraphOrienter) scanWithLimit(ctx context.Context, store *meb.MEBStore, symbol string, predicate string, limit int) map[string]bool {
 	results := make(map[string]bool)
 	count := 0
 
-	for fact := range store.Scan("", predicate, symbol) {
+	for fact := range store.ScanContext(ctx, "", predicate, symbol) {
 		if count >= limit {
 			break
 		}
@@ -296,11 +296,11 @@ func (o *GraphOrienter) scanWithLimit(store *meb.MEBStore, symbol string, predic
 }
 
 // scanWithLimitOutgoing scans for outbound references (what this symbol calls)
-func (o *GraphOrienter) scanWithLimitOutgoing(store *meb.MEBStore, symbol string, limit int) map[string]bool {
+func (o *GraphOrienter) scanWithLimitOutgoing(ctx context.Context, store *meb.MEBStore, symbol string, limit int) map[string]bool {
 	results := make(map[string]bool)
 	count := 0
 
-	for fact := range store.Scan(symbol, "calls", "") {
+	for fact := range store.ScanContext(ctx, symbol, "calls", "") {
 		if count >= limit {
 			break
 		}
@@ -327,14 +327,14 @@ func (o *GraphOrienter) computeDegreeCentrality(ctx context.Context, store *meb.
 	inDegree := make(map[string]int)
 	outDegree := make(map[string]int)
 
-	for fact := range store.Scan("", config.PredicateCalls, "") {
+	for fact := range store.ScanContext(ctx, "", config.PredicateCalls, "") {
 		if obj, ok := fact.Object.(string); ok {
 			inDegree[obj]++
 		}
 		outDegree[fact.Subject]++
 	}
 
-	for fact := range store.Scan("", config.PredicateImports, "") {
+	for fact := range store.ScanContext(ctx, "", config.PredicateImports, "") {
 		if obj, ok := fact.Object.(string); ok {
 			inDegree[obj]++
 		}
