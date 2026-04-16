@@ -120,6 +120,7 @@ const (
 	PredicateExposesModel  = "exposes_model"
 	PredicateCalledBy      = "called_by"
 	PredicateHasName       = "has_name"
+	PredicateHasSecurityRisk = "has_security_risk"
 )
 
 // Centrality configuration

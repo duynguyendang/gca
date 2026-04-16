@@ -1,0 +1,15 @@
+# Cloud Build ignore file for gca service
+# Exclude these patterns
+vendor/
+source-code/
+gca-fe/
+.claude/
+.git/
+*.log
+*.db
+*.db.lock
+*.db.wal
+server.log
+.env
+# Include data folder explicitly
+!data/

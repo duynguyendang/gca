@@ -1,7 +1,7 @@
 steps:
   # Build and push Docker image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/gca-be', '-f', 'gca/Dockerfile', '.']
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/gca-be', '-f', 'Dockerfile', '.']
 
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/gca-be']

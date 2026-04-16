@@ -194,23 +194,33 @@ go build -o gca .
 # Set API key for embeddings and AI features
 export GEMINI_API_KEY="your_api_key_here"
 
-# Ingest a project
+# Ingest a project (default: generates embeddings for doc comments)
 ./gca ingest ./my-project ./data/my-project
+
+# Skip embedding generation (faster, saves API quota)
+./gca ingest ./my-project ./data/my-project --no-embed
+# or via env var:
+SKIP_EMBEDDINGS=true ./gca ingest ./my-project ./data/my-project
+
+# Re-embed all symbols from source code (not just doc comments)
+./gca ingest ./my-project ./data/my-project --re-embed
 
 # Example: Ingest GCA itself
 ./gca ingest ./gca ./data/gca
 ```
 
 > [!TIP]
-> To skip embedding generation and save memory/API quota, set `LOW_MEM=true` before running ingestion.
+> Skip embedding generation with `--no-embed` or `SKIP_EMBEDDINGS=true` to save memory and API quota. Embeddings are only needed for semantic search.
 
 **What happens during ingestion:**
 1. **Parse**: tree-sitter extracts AST from source files
 2. **Extract**: Facts (calls, imports, defines) and documentation are extracted
 3. **Resolve**: Symbol resolution builds call graph with resolved symbol IDs
-4. **Embed**: Documentation is embedded using Gemini embeddings
+4. **Embed**: Documentation embedded using Gemini (unless `--no-embed`)
 5. **Compress**: 768-d vectors → 64-d int8 using MRL
 6. **Store**: Facts saved to BadgerDB, vectors flushed to disk on shutdown
+
+**Incremental ingestion:** Use `--incremental` to re-ingest only changed files. Old facts and vectors are automatically cleaned up before re-ingestion.
 
 ### 2. Start Server
 
@@ -426,6 +436,10 @@ rm -rf ./data/my-project
 ### Out of Memory During Ingestion
 
 ```bash
+# Option 1: Skip embeddings entirely (fastest, most memory savings)
+SKIP_EMBEDDINGS=true ./gca ingest ./large-project ./data/large-project
+
+# Option 2: Use low-memory mode (still generates embeddings)
 LOW_MEM=true ./gca ingest ./large-project ./data/large-project
 ```
 

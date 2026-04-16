@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/duynguyendang/gca/pkg/ingest"
@@ -13,6 +14,8 @@ import (
 var _ context.Context // Explicitly reference context package type
 
 var incremental bool
+var noEmbed bool
+var reEmbed bool
 
 // ingestCmd represents the ingest command
 var ingestCmd = &cobra.Command{
@@ -36,6 +39,17 @@ Arguments:
 		sourceDir = sourcePath
 		dataDir = dataPath
 
+		// Check env var for skip embeddings
+		if os.Getenv("SKIP_EMBEDDINGS") == "true" {
+			noEmbed = true
+		}
+
+		// Build ingest options
+		opts := &ingest.IngestOptions{
+			SkipEmbeddings: noEmbed,
+			ReEmbed:        reEmbed,
+		}
+
 		// Create context with signal handling
 		ctx, cancel := createBaseContext()
 		defer cancel()
@@ -53,9 +67,9 @@ Arguments:
 
 		go func() {
 			if incremental {
-				errChan <- ingest.RunIncremental(s, projectName, sourcePath)
+				errChan <- ingest.RunIncrementalWithOptions(s, projectName, sourcePath, opts)
 			} else {
-				errChan <- ingest.Run(s, projectName, sourcePath)
+				errChan <- ingest.RunWithOptions(s, projectName, sourcePath, opts)
 			}
 		}()
 
@@ -86,4 +100,6 @@ Arguments:
 func init() {
 	rootCmd.AddCommand(ingestCmd)
 	ingestCmd.Flags().BoolVarP(&incremental, "incremental", "i", false, "Enable incremental ingestion (only process changed files)")
+	ingestCmd.Flags().BoolVarP(&noEmbed, "no-embed", "e", false, "Skip embedding generation during ingestion")
+	ingestCmd.Flags().BoolVar(&reEmbed, "re-embed", false, "Regenerate embeddings for all symbols from source code")
 }

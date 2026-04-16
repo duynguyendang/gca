@@ -174,6 +174,68 @@ func (s *GraphService) GetWhatCalls(ctx context.Context, projectID, symbolID str
 	return graph, nil
 }
 
+// GetWhoCallsFocused returns callers of a symbol using direct store scan.
+// For depth=1, this avoids building the full call graph - much faster for exploration.
+func (s *GraphService) GetWhoCallsFocused(ctx context.Context, projectID, symbolID string, depth int) ([]string, error) {
+	store, err := s.getStore(projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	// For depth=1, do direct scan without building full graph
+	if depth <= 1 {
+		var callers []string
+		seen := make(map[string]bool)
+		for fact := range store.ScanContext(ctx, "", config.PredicateCalls, symbolID) {
+			if fact.Subject != "" && !seen[fact.Subject] {
+				callers = append(callers, fact.Subject)
+				seen[fact.Subject] = true
+			}
+		}
+		return callers, nil
+	}
+
+	// For depth > 1, fall back to recursive (still builds graph but limited depth)
+	resolver := ingest.NewSymbolResolver(store)
+	cg, err := resolver.BuildCallGraph(store)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build call graph: %w", err)
+	}
+	return cg.GetCallersRecursive(symbolID, depth), nil
+}
+
+// GetWhatCallsFocused returns callees of a symbol using direct store scan.
+// For depth=1, this avoids building the full call graph - much faster for exploration.
+func (s *GraphService) GetWhatCallsFocused(ctx context.Context, projectID, symbolID string, depth int) ([]string, error) {
+	store, err := s.getStore(projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	// For depth=1, do direct scan without building full graph
+	if depth <= 1 {
+		var callees []string
+		seen := make(map[string]bool)
+		for fact := range store.ScanContext(ctx, symbolID, config.PredicateCalls, "") {
+			if obj, ok := fact.Object.(string); ok {
+				if obj != "" && !seen[obj] {
+					callees = append(callees, obj)
+					seen[obj] = true
+				}
+			}
+		}
+		return callees, nil
+	}
+
+	// For depth > 1, fall back to recursive
+	resolver := ingest.NewSymbolResolver(store)
+	cg, err := resolver.BuildCallGraph(store)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build call graph: %w", err)
+	}
+	return cg.GetCalleesRecursive(symbolID, depth), nil
+}
+
 func (s *GraphService) CheckReachability(ctx context.Context, projectID, fromID, toID string, maxDepth int) (bool, error) {
 	store, err := s.getStore(projectID)
 	if err != nil {

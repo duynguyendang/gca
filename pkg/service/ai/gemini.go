@@ -2,6 +2,8 @@ package ai
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"regexp"
@@ -10,8 +12,8 @@ import (
 	"time"
 
 	"github.com/duynguyendang/gca/pkg/config"
-	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/logger"
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/ooda"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/meb"
@@ -44,6 +46,17 @@ type AIService struct {
 	SmartSearchPrompt    *prompts.Prompt
 	MultiFilePrompt      *prompts.Prompt
 	DefaultContextPrompt *prompts.Prompt
+
+	// Response caching for AI synthesis
+	responseCache    map[string]*cachedResponse
+	responseCacheMu  sync.RWMutex
+	responseCacheTTL time.Duration
+}
+
+type cachedResponse struct {
+	Answer  string
+	Summary string
+	Time    time.Time
 }
 
 func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService, error) {
@@ -130,6 +143,12 @@ func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService,
 
 	logger.Info("AI Service initialized", "provider", provider, "model", defaultModel, "embedding", embeddingModel)
 
+	// Initialize cache TTL from config or default to 5 minutes
+	cacheTTL := 5 * time.Minute
+	if ttl, ok := config.QueryCacheTTL; ok {
+		cacheTTL = ttl
+	}
+
 	return &AIService{
 		g:                    g,
 		manager:              manager,
@@ -145,6 +164,8 @@ func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService,
 		SmartSearchPrompt:    loadPrompt("smart_search"),
 		MultiFilePrompt:      loadPrompt("multi_file"),
 		DefaultContextPrompt: loadPrompt("default_context"),
+		responseCache:        make(map[string]*cachedResponse),
+		responseCacheTTL:     cacheTTL,
 	}, nil
 }
 
@@ -164,6 +185,48 @@ func (s *AIService) GenerateText(ctx context.Context, prompt string) (string, er
 	}
 
 	return resp.Text(), nil
+}
+
+// cacheResponse caches an AI response for a given query
+func (s *AIService) cacheResponse(cacheKey string, answer, summary string) {
+	s.responseCacheMu.Lock()
+	defer s.responseCacheMu.Unlock()
+	s.responseCache[cacheKey] = &cachedResponse{
+		Answer:  answer,
+		Summary: summary,
+		Time:    time.Now(),
+	}
+}
+
+// getCachedResponse retrieves a cached response if valid
+func (s *AIService) getCachedResponse(cacheKey string) (string, string, bool) {
+	s.responseCacheMu.RLock()
+	defer s.responseCacheMu.RUnlock()
+	if cached, ok := s.responseCache[cacheKey]; ok {
+		if time.Since(cached.Time) < s.responseCacheTTL {
+			return cached.Answer, cached.Summary, true
+		}
+	}
+	return "", "", false
+}
+
+// generateCacheKey creates a deterministic cache key from query + results hash
+func (s *AIService) generateCacheKey(query string, intent Intent, results interface{}) string {
+	data := fmt.Sprintf("%s|%s|%v", query, intent, results)
+	hash := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(hash[:])
+}
+
+// cleanupExpiredCache removes expired cache entries
+func (s *AIService) cleanupExpiredCache() {
+	s.responseCacheMu.Lock()
+	defer s.responseCacheMu.Unlock()
+	now := time.Now()
+	for key, cached := range s.responseCache {
+		if now.Sub(cached.Time) >= s.responseCacheTTL {
+			delete(s.responseCache, key)
+		}
+	}
 }
 
 func (s *AIService) GetEmbedding(ctx context.Context, text string) ([]float32, error) {
@@ -953,13 +1016,30 @@ func (s *AIService) HandleAsk(ctx context.Context, req AskRequest) (*AskResponse
 
 	resp.Results = results
 
+	// Check cache before AI synthesis
+	cacheKey := s.generateCacheKey(req.Query, intentResult.Intent, results)
+	if cachedAnswer, cachedSummary, found := s.getCachedResponse(cacheKey); found {
+		logger.Debug("AI response cache hit", "query", req.Query)
+		resp.Answer = cachedAnswer
+		resp.Summary = cachedSummary
+		return resp, nil
+	}
+
+	// Call AI synthesis (the slow part)
 	synthResult, err := SynthesizeAnswer(ctx, intentResult.Intent, req.Query, resp.Query, results, store)
 	if err == nil {
 		resp.Answer = synthResult.Answer
 		resp.Summary = synthResult.Summary
+		// Cache the successful response
+		s.cacheResponse(cacheKey, synthResult.Answer, synthResult.Summary)
 	} else {
 		resp.Answer = fmt.Sprintf("Found results but had trouble generating explanation: %v", err)
 		resp.Summary = fmt.Sprintf("Found %v", results)
+	}
+
+	// Periodic cleanup of expired cache entries (every 100 requests)
+	if len(s.responseCache) > 500 {
+		go s.cleanupExpiredCache()
 	}
 
 	return resp, nil

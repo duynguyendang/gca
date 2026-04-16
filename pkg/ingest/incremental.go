@@ -95,10 +95,14 @@ func deleteFileFacts(s *meb.MEBStore, relPath string) error {
 
 func RunIncremental(s *meb.MEBStore, projectName string, sourceDir string) error {
 	state := NewIngestState()
-	return RunIncrementalWithState(s, projectName, sourceDir, state)
+	return RunIncrementalWithOptions(s, projectName, sourceDir, state, nil)
 }
 
 func RunIncrementalWithState(s *meb.MEBStore, projectName string, sourceDir string, state *IngestState) error {
+	return RunIncrementalWithOptions(s, projectName, sourceDir, state, nil)
+}
+
+func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state *IngestState, opts *IngestOptions) error {
 	SetIngestState(state)
 	ctx := context.Background()
 	ext := NewTreeSitterExtractor()
@@ -114,12 +118,20 @@ func RunIncrementalWithState(s *meb.MEBStore, projectName string, sourceDir stri
 		existingHashes = make(FileHashMap)
 	}
 
-	embeddingService, embeddingErr := NewEmbeddingService(ctx)
-	if embeddingErr != nil {
-		logger.Warn("Embedding service unavailable, skipping doc embeddings", "error", embeddingErr)
+	var embeddingService *EmbeddingService
+	var embeddingErr error
+
+	// Skip embedding initialization if requested
+	if opts != nil && opts.SkipEmbeddings {
+		logger.Info("Skipping embeddings due to --no-embed flag or SKIP_EMBEDDINGS env var")
 	} else {
-		defer embeddingService.Close()
-		logger.Info("Embedding service initialized for semantic doc search")
+		embeddingService, embeddingErr = NewEmbeddingService(ctx)
+		if embeddingErr != nil {
+			logger.Warn("Embedding service unavailable, skipping doc embeddings", "error", embeddingErr)
+		} else {
+			defer embeddingService.Close()
+			logger.Info("Embedding service initialized for semantic doc search")
+		}
 	}
 
 	var projectMeta *ProjectMetadata
@@ -263,7 +275,7 @@ func RunIncrementalWithState(s *meb.MEBStore, projectName string, sourceDir stri
 				for path := range jobs {
 					rel, _ := filepath.Rel(sourceDir, path)
 					logger.Debug("Processing file", "project", projectName, "file", rel)
-					if err := processFile(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta, &embeddingWg, sem, state); err != nil {
+					if err := processFile(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta, &embeddingWg, sem, state, opts); err != nil {
 						logger.Error("Error processing file", "error", err)
 						passErr.Add(1)
 					}
@@ -310,8 +322,38 @@ func removeDeletedFiles(s *meb.MEBStore, projectName string, deletedFiles []stri
 	}
 }
 
-// cleanupFileFacts removes all facts for a file before re-ingestion.
-// This ensures old facts are cleared when a file is modified.
+// cleanupFileFacts removes all facts and vectors for a file before re-ingestion.
+// This ensures old facts and vectors are cleared when a file is modified.
 func cleanupFileFacts(s *meb.MEBStore, relPath string) error {
-	return deleteFileFacts(s, relPath)
+	// First, collect symbol IDs defined in this file so we can delete their vectors
+	symbolIDs := []string{}
+	for fact, err := range s.ScanContext(context.Background(), relPath, config.PredicateDefines, "") {
+		if err != nil {
+			continue
+		}
+		if objStr, ok := fact.Object.(string); ok {
+			symbolIDs = append(symbolIDs, objStr)
+		}
+	}
+
+	// Delete facts first
+	if err := deleteFileFacts(s, relPath); err != nil {
+		logger.Warn("Failed to delete facts for file", "file", relPath, "error", err)
+		return err
+	}
+
+	// Delete vectors for each symbol defined in this file
+	for _, symbolID := range symbolIDs {
+		dictID, found := s.LookupID(symbolID)
+		if !found {
+			continue
+		}
+		if ok := s.Vectors().Delete(dictID); !ok {
+			logger.Debug("No vector found for symbol", "symbolID", symbolID)
+		} else {
+			logger.Debug("Deleted vector for symbol", "symbolID", symbolID)
+		}
+	}
+
+	return nil
 }

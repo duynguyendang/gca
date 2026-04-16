@@ -1,25 +1,9 @@
-# Stage 1: Build the Go binary
-FROM golang:1.25.1-alpine AS builder
-# Install build tools for CGO (required by tree-sitter)
-RUN apk add --no-cache build-base
+# Build and runtime in one stage
+FROM golang:1.25.1-alpine
+RUN apk add --no-cache build-base ca-certificates
 WORKDIR /app
-# Copy the entire monorepo to resolve local module dependencies like meb and manglekit
+# Copy source (vendor/ is excluded via .gcloudignore, data/ is included)
 COPY . .
-# Enable CGO for tree-sitter bindings
 ENV CGO_ENABLED=1
-WORKDIR /app/gca
-RUN go build -o gca .
-
-# Stage 2: Minimal Runtime (No build tools needed)
-FROM alpine:latest
-RUN apk add --no-cache ca-certificates
-WORKDIR /root/
-COPY --from=builder /app/gca/gca /usr/local/bin/
-# Include your pre-ingested BadgerDB and vector data
-COPY --from=builder /app/gca/data /data
-# Copy prompts for AI service (relative to WORKDIR /root/)
-COPY --from=builder /app/gca/prompts ./prompts
-
-# Start in server mode using Cobra CLI syntax
-# New syntax: gca server --data /data
-ENTRYPOINT ["gca", "server", "--data", "/data"] 
+RUN go build -v -o gca .
+ENTRYPOINT ["./gca", "server", "--data", "/app/data"]

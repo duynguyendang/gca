@@ -18,6 +18,12 @@ import (
 	"github.com/duynguyendang/meb/keys"
 )
 
+// IngestOptions controls embedding behavior during ingestion.
+type IngestOptions struct {
+	SkipEmbeddings bool // Skip all embedding generation
+	ReEmbed        bool // Re-embed ALL symbols (not just has_doc facts)
+}
+
 type IngestState struct {
 	SymbolTable map[string]string
 	FileIndex   map[string]bool
@@ -33,11 +39,16 @@ func NewIngestState() *IngestState {
 // Run executes the ingestion process with an optional projectName prefix.
 func Run(s *meb.MEBStore, projectName string, sourceDir string) error {
 	state := NewIngestState()
-	return RunWithState(s, projectName, sourceDir, state)
+	return RunWithOptions(s, projectName, sourceDir, state, nil)
 }
 
 // RunWithState executes the ingestion process with explicit state management.
 func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *IngestState) error {
+	return RunWithOptions(s, projectName, sourceDir, state, nil)
+}
+
+// RunWithOptions executes the ingestion process with explicit state and embedding options.
+func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state *IngestState, opts *IngestOptions) error {
 	SetIngestState(state)
 	ctx := context.Background()
 	ext := NewTreeSitterExtractor()
@@ -51,12 +62,17 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 	var embeddingService *EmbeddingService
 	var embeddingErr error
 
-	embeddingService, embeddingErr = NewEmbeddingService(ctx)
-	if embeddingErr != nil {
-		logger.Warn("Embedding service unavailable, skipping doc embeddings", "error", embeddingErr)
+	// Skip embedding initialization if requested
+	if opts != nil && opts.SkipEmbeddings {
+		logger.Info("Skipping embeddings due to --no-embed flag or SKIP_EMBEDDINGS env var")
 	} else {
-		defer embeddingService.Close()
-		logger.Info("Embedding service initialized for semantic doc search")
+		embeddingService, embeddingErr = NewEmbeddingService(ctx)
+		if embeddingErr != nil {
+			logger.Warn("Embedding service unavailable, skipping doc embeddings", "error", embeddingErr)
+		} else {
+			defer embeddingService.Close()
+			logger.Info("Embedding service initialized for semantic doc search")
+		}
 	}
 
 	logger.Info("Pass 1: Collecting symbols and index", "project", projectName)
@@ -148,7 +164,7 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 			for path := range jobs {
 				rel, _ := filepath.Rel(sourceDir, path)
 				logger.Debug("Processing file", "project", projectName, "file", rel)
-				if err := processFile(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta, &embeddingWg, sem, state); err != nil {
+				if err := processFile(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta, &embeddingWg, sem, state, opts); err != nil {
 					logger.Error("Failed to process file", "error", err)
 					pass2Err.Add(1)
 				}
@@ -186,7 +202,53 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 	return nil
 }
 
-func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *EmbeddingService, path string, projectName string, sourceRoot string, meta *ProjectMetadata, embeddingWg *sync.WaitGroup, sem chan struct{}, state *IngestState) error {
+// symbolEmbedTarget holds a symbol ID and text to embed
+type symbolEmbedTarget struct {
+	symbolID string
+	text     string
+}
+
+// buildEmbedText constructs embedding text for re-embedding.
+// Uses has_name (symbol name), has_doc (doc comment), and content from the bundle.
+// The symbolID is used to look up related facts in the bundle.
+func buildEmbedText(symbolID string, bundleFacts []meb.Fact, content []byte) string {
+	var parts []string
+
+	// Look up name and doc from facts
+	var name, doc string
+	for _, fact := range bundleFacts {
+		if string(fact.Subject) == symbolID {
+			if fact.Predicate == config.PredicateHasName {
+				if n, ok := fact.Object.(string); ok {
+					name = n
+				}
+			} else if fact.Predicate == config.PredicateHasDoc {
+				if d, ok := fact.Object.(string); ok {
+					doc = d
+				}
+			}
+		}
+	}
+
+	if name != "" {
+		parts = append(parts, name)
+	}
+	if doc != "" {
+		parts = append(parts, doc)
+	}
+	// Add content preview (truncated to avoid bloat)
+	if len(content) > 0 {
+		contentStr := string(content)
+		if len(contentStr) > 500 {
+			contentStr = contentStr[:500] + "..."
+		}
+		parts = append(parts, contentStr)
+	}
+
+	return strings.Join(parts, "\n---\n")
+}
+
+func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *EmbeddingService, path string, projectName string, sourceRoot string, meta *ProjectMetadata, embeddingWg *sync.WaitGroup, sem chan struct{}, state *IngestState, opts *IngestOptions) error {
 	relPath, _ := filepath.Rel(sourceRoot, path)
 
 	// Apply Logical Path Mapping from Metadata
@@ -246,69 +308,89 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 	if embedder != nil {
 		docFactsFound := 0
 
-		for _, fact := range bundle.Facts {
-			if fact.Predicate == config.PredicateHasDoc {
-				docFactsFound++
-				docText, ok := fact.Object.(string)
-				logger.Debug("Found doc for symbol", "subject", fact.Subject, "length", len(docText))
+		// Determine which symbols to embed
+		var symbolsToEmbed []symbolEmbedTarget
 
-				if ok && len(docText) > 10 { // Only embed meaningful docs
-					if embeddingWg != nil {
-						embeddingWg.Add(1)
-					} else {
-						logger.Warn("embeddingWg is nil", "subject", fact.Subject)
-					}
-
-					go func(symbolID string, text string) {
-						defer func() {
-							if r := recover(); r != nil {
-								logger.Error("Panic in embedding goroutine", "symbol", symbolID, "panic", r)
-							}
-						}()
-
-						// Acquire semaphore
-						if sem != nil {
-							sem <- struct{}{}
-							defer func() { <-sem }()
-						}
-
-						if embeddingWg != nil {
-							defer embeddingWg.Done()
-						}
-
-						// Add a timeout to prevent hanging
-						ctxWithTimeout, cancel := context.WithTimeout(context.Background(), config.EmbeddingTimeout)
-						defer cancel()
-
-						logger.Debug("Generating embedding", "symbol", symbolID, "length", len(text))
-						embed, err := embedder.GetEmbedding(ctxWithTimeout, text)
-						if err != nil {
-							logger.Error("Error generating embedding", "symbol", symbolID, "error", err)
-							return
-						}
-
-						if len(embed) == 0 {
-							logger.Error("Empty embedding", "symbol", symbolID)
-							return
-						}
-
-						// Look up the correct dictionary ID for the symbol
-						dictID, found := s.LookupID(string(symbolID))
-						if !found {
-							logger.Error("ID not found in dictionary, cannot store vector", "symbol", symbolID)
-							return
-						}
-
-						if err := s.Vectors().Add(dictID, embed); err != nil {
-							logger.Error("Error adding vector to store", "symbol", symbolID, "error", err)
-						} else {
-							logger.Info("Successfully stored embedding", "symbol", symbolID, "dict_id", dictID)
-						}
-					}(fact.Subject, docText)
-				} else if ok {
-					logger.Debug("Skipping embedding, text too short", "subject", fact.Subject, "length", len(docText))
+		if opts != nil && opts.ReEmbed {
+			// ReEmbed mode: embed ALL symbols from their source code
+			for _, doc := range bundle.Documents {
+				// Build embed text from name + doc + content
+				text := buildEmbedText(doc.ID, bundle.Facts, doc.Content)
+				if len(text) > 10 {
+					symbolsToEmbed = append(symbolsToEmbed, symbolEmbedTarget{
+						symbolID: doc.ID,
+						text:     text,
+					})
 				}
 			}
+			logger.Debug("Re-embed mode: embedding all symbols", "count", len(symbolsToEmbed))
+		} else {
+			// Normal mode: only embed has_doc facts > 10 chars
+			for _, fact := range bundle.Facts {
+				if fact.Predicate == config.PredicateHasDoc {
+					docFactsFound++
+					docText, ok := fact.Object.(string)
+					if ok && len(docText) > 10 {
+						symbolsToEmbed = append(symbolsToEmbed, symbolEmbedTarget{
+							symbolID: fact.Subject,
+							text:     docText,
+						})
+					}
+				}
+			}
+		}
+
+		for _, target := range symbolsToEmbed {
+			if embeddingWg != nil {
+				embeddingWg.Add(1)
+			}
+
+			go func(symbolID string, text string) {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Error("Panic in embedding goroutine", "symbol", symbolID, "panic", r)
+					}
+				}()
+
+				// Acquire semaphore
+				if sem != nil {
+					sem <- struct{}{}
+					defer func() { <-sem }()
+				}
+
+				if embeddingWg != nil {
+					defer embeddingWg.Done()
+				}
+
+				// Add a timeout to prevent hanging
+				ctxWithTimeout, cancel := context.WithTimeout(context.Background(), config.EmbeddingTimeout)
+				defer cancel()
+
+				logger.Debug("Generating embedding", "symbol", symbolID, "length", len(text))
+				embed, err := embedder.GetEmbedding(ctxWithTimeout, text)
+				if err != nil {
+					logger.Error("Error generating embedding", "symbol", symbolID, "error", err)
+					return
+				}
+
+				if len(embed) == 0 {
+					logger.Error("Empty embedding", "symbol", symbolID)
+					return
+				}
+
+				// Look up the correct dictionary ID for the symbol
+				dictID, found := s.LookupID(string(symbolID))
+				if !found {
+					logger.Error("ID not found in dictionary, cannot store vector", "symbol", symbolID)
+					return
+				}
+
+				if err := s.Vectors().Add(dictID, embed); err != nil {
+					logger.Error("Error adding vector to store", "symbol", symbolID, "error", err)
+				} else {
+					logger.Info("Successfully stored embedding", "symbol", symbolID, "dict_id", dictID)
+				}
+			}(target.symbolID, target.text)
 		}
 	}
 
