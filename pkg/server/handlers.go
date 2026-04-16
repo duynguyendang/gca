@@ -818,7 +818,6 @@ func (s *Server) handleWhoCalls(c *gin.Context) {
 	projectID := c.Query("project")
 	symbolID := c.Query("symbol")
 	depth, _ := strconv.Atoi(c.Query("depth"))
-	focused := c.Query("focused") == "true"
 
 	if err := ValidateProjectID(projectID); err != nil {
 		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
@@ -839,11 +838,7 @@ func (s *Server) handleWhoCalls(c *gin.Context) {
 	var graph *export.D3Graph
 	var err error
 
-	if focused && depth <= 1 {
-		graph, err = s.graphService.GetWhoCallsFocused(c.Request.Context(), projectID, symbolID, depth)
-	} else {
-		graph, err = s.graphService.GetWhoCalls(c.Request.Context(), projectID, symbolID, depth)
-	}
+	graph, err = s.graphService.GetWhoCalls(c.Request.Context(), projectID, symbolID, depth)
 
 	if err != nil {
 		handleError(c, err)
@@ -865,7 +860,6 @@ func (s *Server) handleWhatCalls(c *gin.Context) {
 	projectID := c.Query("project")
 	symbolID := c.Query("symbol")
 	depth, _ := strconv.Atoi(c.Query("depth"))
-	focused := c.Query("focused") == "true"
 
 	if err := ValidateProjectID(projectID); err != nil {
 		handleError(c, errors.NewAppError(http.StatusBadRequest, err.Error(), err))
@@ -886,11 +880,7 @@ func (s *Server) handleWhatCalls(c *gin.Context) {
 	var graph *export.D3Graph
 	var err error
 
-	if focused && depth <= 1 {
-		graph, err = s.graphService.GetWhatCallsFocused(c.Request.Context(), projectID, symbolID, depth)
-	} else {
-		graph, err = s.graphService.GetWhatCalls(c.Request.Context(), projectID, symbolID, depth)
-	}
+	graph, err = s.graphService.GetWhatCalls(c.Request.Context(), projectID, symbolID, depth)
 
 	if err != nil {
 		handleError(c, err)

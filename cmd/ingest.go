@@ -66,10 +66,11 @@ Arguments:
 		errChan := make(chan error, 1)
 
 		go func() {
+			state := ingest.NewIngestState()
 			if incremental {
-				errChan <- ingest.RunIncrementalWithOptions(s, projectName, sourcePath, opts)
+				errChan <- ingest.RunIncrementalWithOptions(s, projectName, sourcePath, state, opts)
 			} else {
-				errChan <- ingest.RunWithOptions(s, projectName, sourcePath, opts)
+				errChan <- ingest.RunWithOptions(s, projectName, sourcePath, state, opts)
 			}
 		}()
 

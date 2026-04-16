@@ -143,11 +143,8 @@ func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService,
 
 	logger.Info("AI Service initialized", "provider", provider, "model", defaultModel, "embedding", embeddingModel)
 
-	// Initialize cache TTL from config or default to 5 minutes
-	cacheTTL := 5 * time.Minute
-	if ttl, ok := config.QueryCacheTTL; ok {
-		cacheTTL = ttl
-	}
+	// Initialize cache TTL from config
+	cacheTTL := config.QueryCacheTTL
 
 	return &AIService{
 		g:                    g,
