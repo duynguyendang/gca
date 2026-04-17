@@ -236,6 +236,148 @@ func (s *GraphService) GetWhatCallsFocused(ctx context.Context, projectID, symbo
 	return cg.GetCalleesRecursive(symbolID, depth), nil
 }
 
+// GetWhoCallsFocusedGraph returns callers as D3Graph using direct store scan (depth=1 only).
+// This avoids building the full call graph - much faster for single-level queries.
+func (s *GraphService) GetWhoCallsFocusedGraph(ctx context.Context, projectID, symbolID string) (*export.D3Graph, error) {
+	store, err := s.getStore(projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Direct scan for callers of symbolID
+	var callers []string
+	seen := make(map[string]bool)
+	for fact := range store.ScanContext(ctx, "", config.PredicateCalls, symbolID) {
+		if fact.Subject != "" && !seen[fact.Subject] {
+			callers = append(callers, fact.Subject)
+			seen[fact.Subject] = true
+		}
+	}
+
+	graph := &export.D3Graph{
+		Nodes: []export.D3Node{},
+		Links: []export.D3Link{},
+	}
+	nodeSet := make(map[string]bool)
+
+	for _, caller := range callers {
+		if !nodeSet[caller] {
+			parts := splitSymbolID(caller)
+			kind := config.SymbolKindSymbol
+			parentID := ""
+			if len(parts) >= 2 {
+				parentID = parts[0]
+				kind = guessKind(parts[1])
+			}
+			graph.Nodes = append(graph.Nodes, export.D3Node{
+				ID:       caller,
+				Name:     extractName(caller),
+				Kind:     kind,
+				ParentID: parentID,
+			})
+			nodeSet[caller] = true
+		}
+
+		if !nodeSet[symbolID] {
+			parts := splitSymbolID(symbolID)
+			kind := config.SymbolKindSymbol
+			parentID := ""
+			if len(parts) >= 2 {
+				parentID = parts[0]
+				kind = guessKind(parts[1])
+			}
+			graph.Nodes = append(graph.Nodes, export.D3Node{
+				ID:       symbolID,
+				Name:     extractName(symbolID),
+				Kind:     kind,
+				ParentID: parentID,
+			})
+			nodeSet[symbolID] = true
+		}
+
+		graph.Links = append(graph.Links, export.D3Link{
+			Source:   caller,
+			Target:   symbolID,
+			Relation: config.PredicateCalledBy,
+			Type:     "backward",
+		})
+	}
+
+	return graph, nil
+}
+
+// GetWhatCallsFocusedGraph returns callees as D3Graph using direct store scan (depth=1 only).
+// This avoids building the full call graph - much faster for single-level queries.
+func (s *GraphService) GetWhatCallsFocusedGraph(ctx context.Context, projectID, symbolID string) (*export.D3Graph, error) {
+	store, err := s.getStore(projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Direct scan for calls from symbolID
+	var callees []string
+	seen := make(map[string]bool)
+	for fact := range store.ScanContext(ctx, symbolID, config.PredicateCalls, "") {
+		if obj, ok := fact.Object.(string); ok {
+			if obj != "" && !seen[obj] {
+				callees = append(callees, obj)
+				seen[obj] = true
+			}
+		}
+	}
+
+	graph := &export.D3Graph{
+		Nodes: []export.D3Node{},
+		Links: []export.D3Link{},
+	}
+	nodeSet := make(map[string]bool)
+
+	if !nodeSet[symbolID] {
+		parts := splitSymbolID(symbolID)
+		kind := config.SymbolKindSymbol
+		parentID := ""
+		if len(parts) >= 2 {
+			parentID = parts[0]
+			kind = guessKind(parts[1])
+		}
+		graph.Nodes = append(graph.Nodes, export.D3Node{
+			ID:       symbolID,
+			Name:     extractName(symbolID),
+			Kind:     kind,
+			ParentID: parentID,
+		})
+		nodeSet[symbolID] = true
+	}
+
+	for _, callee := range callees {
+		if !nodeSet[callee] {
+			parts := splitSymbolID(callee)
+			kind := config.SymbolKindSymbol
+			parentID := ""
+			if len(parts) >= 2 {
+				parentID = parts[0]
+				kind = guessKind(parts[1])
+			}
+			graph.Nodes = append(graph.Nodes, export.D3Node{
+				ID:       callee,
+				Name:     extractName(callee),
+				Kind:     kind,
+				ParentID: parentID,
+			})
+			nodeSet[callee] = true
+		}
+
+		graph.Links = append(graph.Links, export.D3Link{
+			Source:   symbolID,
+			Target:   callee,
+			Relation: config.PredicateCalls,
+			Type:     "forward",
+		})
+	}
+
+	return graph, nil
+}
+
 func (s *GraphService) CheckReachability(ctx context.Context, projectID, fromID, toID string, maxDepth int) (bool, error) {
 	store, err := s.getStore(projectID)
 	if err != nil {

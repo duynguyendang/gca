@@ -838,7 +838,12 @@ func (s *Server) handleWhoCalls(c *gin.Context) {
 	var graph *export.D3Graph
 	var err error
 
-	graph, err = s.graphService.GetWhoCalls(c.Request.Context(), projectID, symbolID, depth)
+	// Use focused methods for depth=1 to avoid building full call graph
+	if depth == 1 {
+		graph, err = s.graphService.GetWhoCallsFocusedGraph(c.Request.Context(), projectID, symbolID)
+	} else {
+		graph, err = s.graphService.GetWhoCalls(c.Request.Context(), projectID, symbolID, depth)
+	}
 
 	if err != nil {
 		handleError(c, err)
@@ -880,7 +885,12 @@ func (s *Server) handleWhatCalls(c *gin.Context) {
 	var graph *export.D3Graph
 	var err error
 
-	graph, err = s.graphService.GetWhatCalls(c.Request.Context(), projectID, symbolID, depth)
+	// Use focused methods for depth=1 to avoid building full call graph
+	if depth == 1 {
+		graph, err = s.graphService.GetWhatCallsFocusedGraph(c.Request.Context(), projectID, symbolID)
+	} else {
+		graph, err = s.graphService.GetWhatCalls(c.Request.Context(), projectID, symbolID, depth)
+	}
 
 	if err != nil {
 		handleError(c, err)

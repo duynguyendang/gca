@@ -310,18 +310,35 @@ export LOW_MEM=true                # Low-memory mode
 
 ## Performance
 
-### Benchmarks (gca-v2 project: 104 files, 14,044 facts, 50 symbols)
+### Benchmarks
+
+#### Small Project (gca-v2): 104 files, 14,044 facts, 50 symbols
 
 | Metric | Value |
-|--------|-------|
-| **Ingestion** | ~26s with LOW_MEM=true (~240 files/min) |
-| **Files list** | ~69ms |
-| **Symbols list** | ~1.7ms |
-| **What-calls** | ~117ms |
-| **Who-calls** | ~113ms |
-| **Cycle detection** | ~123ms |
-| **Graph store size** | 182 KiB |
-| **Dictionary size** | 584 KiB |
+| ------ | ----- |
+| Ingestion | ~26s with LOW_MEM=true (~240 files/min) |
+| Files list | ~69ms |
+| Symbols list | ~1.7ms |
+| What-calls | ~117ms |
+| Who-calls | ~113ms |
+| Cycle detection | ~123ms |
+| Graph store size | 182 KiB |
+| Dictionary size | 584 KiB |
+
+#### Large Project (langchain): 2,536 files, 215,840 facts
+
+| Metric | Value |
+| ------ | ----- |
+| Ingestion | ~6min with LOW_MEM=true (skip embeddings) |
+| Files list | ~113ms |
+| Symbols list | ~750ms |
+| What-calls (depth=1) | ~10ms |
+| Who-calls (depth=1) | ~37ms |
+| What-calls (depth>1) | >30s (timed out) |
+| Who-calls (depth>1) | >30s (timed out) |
+| Cycle detection | >60s (timed out) |
+
+> Note: `depth=1` queries use direct store scan and avoid building the full call graph, making them fast even on large projects.
 
 ## Deployment
 
