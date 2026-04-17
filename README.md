@@ -6,34 +6,34 @@ GCA is a next-generation code analysis tool that ingests source code into a sema
 
 ## Features
 
-### 🔍 **Multi-Modal Search**
+### Multi-Modal Search
 
-#### **1. Datalog Queries**
+#### 1. Datalog Queries
 Precise graph queries with joins, constraints, and regex:
 ```prolog
 triples(A, "calls", B), triples(B, "calls", C)  # Find call chains
 triples(?F, "defines", ?S), regex(?F, "handler")  # Find all handlers
 ```
 
-#### **2. Natural Language**
+#### 2. Natural Language
 Ask questions in plain English, auto-converted to Datalog:
 ```text
 "Who calls the panic function?"
 "Find all functions that import http"
 ```
 
-#### **3. Semantic Search**
+#### 3. Semantic Search
 Find code by meaning using vector embeddings:
 ```bash
 GET /api/v1/semantic-search?project=gca&q=authentication%20logic&k=10
 ```
-- **768-dimensional embeddings** compressed to **64-d int8** using MRL
+- **1536-dimensional embeddings** compressed to **int8** using hybrid block quantization
 - **Sub-300ms** vector similarity search with SIMD optimization
 - Matches documentation, not just symbol names
 
-### 🧠 **AI-Powered Analysis**
+### AI-Powered Analysis
 
-#### **Multi-LLM Support**
+#### Multi-LLM Support
 Powered by Firebase Genkit with support for multiple providers:
 - **Google Gemini** - Default provider
 - **OpenAI GPT-4** - via OpenAI API
@@ -41,7 +41,7 @@ Powered by Firebase Genkit with support for multiple providers:
 - **MiniMax M2** - via MiniMax OpenAI-compatible API
 - **Ollama** - Local LLM support
 
-#### **Smart Features**
+#### Smart Features
 - **Unified NL Pipeline**: Natural language → Datalog → LLM answer
 - **Graph Centrality**: Symbols ranked by architectural significance (entry points, hubs, interfaces)
 - **Intent Classification**: 14+ task types (insight, narrative, resolve_symbol, etc.)
@@ -49,7 +49,7 @@ Powered by Firebase Genkit with support for multiple providers:
 - **Path Narratives**: Traces and explains interaction flows
 - **Context-Aware Prompts**: Injects local symbols, relations, and documentation
 
-### 🔗 **Cross-Reference Analysis**
+### Cross-Reference Analysis
 
 Deep call graph analysis with:
 - **Who Calls**: Find all callers of a symbol (backward slice)
@@ -59,7 +59,7 @@ Deep call graph analysis with:
 - **Reachability**: Check if symbol A can reach symbol B
 - **LCA**: Find least common ancestor in call graph
 
-### 📦 **Code Ingestion**
+### Code Ingestion
 
 - **Multi-Language Support**: Go, Python, TypeScript, JavaScript via tree-sitter
 - **High-Fidelity Extraction**: Preserves structure, documentation, and relationships
@@ -67,20 +67,38 @@ Deep call graph analysis with:
 - **Incremental Updates**: Re-ingest only changed files
 - **Symbol Resolution**: Resolves callee names to symbol IDs for accurate cross-references
 
-### 🗄️ **Knowledge Graph Storage**
+### Knowledge Graph Storage
 
-#### **MEB (Memory-Efficient Bidirectional) Store**
+#### MEB (Memory-Efficient Bidirectional) Store
 - **BadgerDB Backend**: LSM-tree storage for durability
 - **Dual Indexing**: SPO and OPS indices for bidirectional queries
 - **Dictionary Compression**: String interning reduces memory 10x
 - **Query Cache**: TTL-based caching for frequent queries
 
-#### **Vector Registry (MRL Compression)**
-- **768d → 64d int8**: Matryoshka Representation Learning compression
+#### Vector Registry (Hybrid Quantization)
+- **1536d → int8**: Hybrid block quantization (block size 32, 8-bit)
 - **SIMD Search**: Vectorized dot product on int8 arrays
 - **Snapshot Persistence**: Auto-save compressed vectors to disk
 
-### 🌐 **RESTful API**
+### Planned Features
+
+The following features are planned for future releases:
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Generate Integration Tests | 🔴 TODO | AI-powered integration test generation |
+| Architecture Smell Detection | 🔴 TODO | Detect god files, circular deps, hub anomalies |
+| Automated Code Review | 🟡 TODO | PR analysis for bugs and security issues |
+| Dependency Migration Advisor | 🟡 TODO | Impact analysis for library upgrades |
+| Incident Debugging Assistant | 🟡 TODO | Trace errors to source code locations |
+| API Contract Analysis | 🟡 TODO | Detect breaking API changes |
+| License Compliance Scanning | 🟡 TODO | Scan dependencies for license types |
+| Codebase Summarization | 🟡 TODO | Auto-generate README and API docs |
+| Test Impact Analysis | 🟡 TODO | Map changed files to affected tests |
+| Onboarding Assistant | 🟡 TODO | Guided tours of code architecture |
+| Framework Migration | 🟢 TODO | Convert code between languages/frameworks |
+
+### RESTful API
 
 **Discovery**
 - `GET /api/v1/projects` - List all ingested projects
@@ -217,7 +235,7 @@ SKIP_EMBEDDINGS=true ./gca ingest ./my-project ./data/my-project
 2. **Extract**: Facts (calls, imports, defines) and documentation are extracted
 3. **Resolve**: Symbol resolution builds call graph with resolved symbol IDs
 4. **Embed**: Documentation embedded using Gemini (unless `--no-embed`)
-5. **Compress**: 768-d vectors → 64-d int8 using MRL
+5. **Compress**: 1536-d vectors → int8 using hybrid block quantization
 6. **Store**: Facts saved to BadgerDB, vectors flushed to disk on shutdown
 
 **Incremental ingestion:** Use `--incremental` to re-ingest only changed files. Old facts and vectors are automatically cleaned up before re-ingestion.
@@ -491,4 +509,4 @@ go test -cover ./...
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Apache License 2.0 - see [LICENSE](LICENSE) for details.
