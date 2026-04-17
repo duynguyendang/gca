@@ -1,28 +1,55 @@
 # GCA (Gem Code Analysis)
 
-**Neuro-Symbolic Code Analysis Platform** powered by Knowledge Graphs and Multi-LLM AI
+**Master Your Codebase Complexity** — GCA uncovers hidden relationships and architectural patterns, enabling safer refactoring and instant onboarding for complex systems.
 
-GCA is a next-generation code analysis tool that ingests source code into a semantic knowledge graph, enabling powerful queries through Datalog, natural language, and semantic search. It combines symbolic reasoning with neural language models for deep code understanding.
+## Why GCA?
+
+Reading code is easy; understanding its impact is hard. Traditional tools give you symbols and text search, but they fail to explain the "why" and the "what if" of a codebase.
+
+GCA solves this by transforming your source code into a **Semantic Knowledge Graph**. It doesn't just find keywords; it understands how components interact, allowing you to:
+
+- **Navigate with Certainty**: Map full call trees and detect circular dependencies instantly.
+- **Refactor without Fear**: Precisely calculate the "blast radius" of any change.
+- **Onboard in Minutes**: Let AI narrate the architectural flow of a new repository using grounded graph data.
+
+## The Core Advantage: Neuro-Symbolic AI
+
+GCA combines the **rigorous logic** of Datalog (via the Mangle engine) with the **intuitive reasoning** of modern LLMs. This "Neuro-Symbolic" approach ensures that AI insights are not just "hallucinations" but are grounded in the actual facts of your code's structure.
+
+## Built for Production
+
+GCA runs efficiently on modest hardware — no external databases or services required:
+
+| Capability | Details |
+| --------- | ------- |
+| **Low Memory Mode** | `LOW_MEM=true` ingests large projects on limited RAM |
+| **Single Binary** | Graph store, vector embeddings, and source content — all in one BadgerDB instance |
+| **Zero External Dependencies** | No Elasticsearch, no Neo4j, no Redis — just Go and BadgerDB |
+| **Disk Persistence** | Facts and vectors survive restarts |
+| **Efficient Storage** | Dictionary compression reduces memory 10x |
+| **Vector Compression** | 1536d → int8 hybrid quantization with SIMD acceleration |
 
 ## Features
 
 ### Multi-Modal Search
 
-#### 1. Datalog Queries
+GCA offers three complementary ways to query your codebase:
+
+#### Datalog Queries
 Precise graph queries with joins, constraints, and regex:
 ```prolog
 triples(A, "calls", B), triples(B, "calls", C)  # Find call chains
 triples(?F, "defines", ?S), regex(?F, "handler")  # Find all handlers
 ```
 
-#### 2. Natural Language
+#### Natural Language
 Ask questions in plain English, auto-converted to Datalog:
-```text
+```
 "Who calls the panic function?"
 "Find all functions that import http"
 ```
 
-#### 3. Semantic Search
+#### Semantic Search
 Find code by meaning using vector embeddings:
 ```bash
 GET /api/v1/semantic-search?project=gca&q=authentication%20logic&k=10
@@ -31,33 +58,35 @@ GET /api/v1/semantic-search?project=gca&q=authentication%20logic&k=10
 - **Sub-300ms** vector similarity search with SIMD optimization
 - Matches documentation, not just symbol names
 
-### AI-Powered Analysis
-
-#### Multi-LLM Support
-Powered by Firebase Genkit with support for multiple providers:
-- **Google Gemini** - Default provider
-- **OpenAI GPT-4** - via OpenAI API
-- **Anthropic Claude** - via Anthropic API
-- **MiniMax M2** - via MiniMax OpenAI-compatible API
-- **Ollama** - Local LLM support
-
-#### Smart Features
-- **Unified NL Pipeline**: Natural language → Datalog → LLM answer
-- **Graph Centrality**: Symbols ranked by architectural significance (entry points, hubs, interfaces)
-- **Intent Classification**: 14+ task types (insight, narrative, resolve_symbol, etc.)
-- **Cross-Reference Analysis**: "Who calls X?" / "What calls Y?" with recursive traversal
-- **Path Narratives**: Traces and explains interaction flows
-- **Context-Aware Prompts**: Injects local symbols, relations, and documentation
-
 ### Cross-Reference Analysis
 
 Deep call graph analysis with:
+
 - **Who Calls**: Find all callers of a symbol (backward slice)
 - **What Calls**: Find all callees of a symbol (forward slice)
 - **Recursive Traversal**: Get full caller/callee trees
 - **Cycle Detection**: Find circular dependencies
 - **Reachability**: Check if symbol A can reach symbol B
 - **LCA**: Find least common ancestor in call graph
+
+### AI-Powered Analysis
+
+#### Multi-LLM Support
+Powered by Firebase Genkit with support for multiple providers:
+
+- **Google Gemini** — Default provider
+- **OpenAI GPT-4** — via OpenAI API
+- **Anthropic Claude** — via Anthropic API
+- **MiniMax M2** — via MiniMax OpenAI-compatible API
+- **Ollama** — Local LLM support
+
+#### Smart Features
+
+- **Unified NL Pipeline**: Natural language → Datalog → LLM answer
+- **Graph Centrality**: Symbols ranked by architectural significance (entry points, hubs, interfaces)
+- **Intent Classification**: 14+ task types (insight, narrative, resolve_symbol, etc.)
+- **Path Narratives**: Traces and explains interaction flows
+- **Context-Aware Prompts**: Injects local symbols, relations, and documentation
 
 ### Code Ingestion
 
@@ -67,20 +96,16 @@ Deep call graph analysis with:
 - **Incremental Updates**: Re-ingest only changed files
 - **Symbol Resolution**: Resolves callee names to symbol IDs for accurate cross-references
 
-### Knowledge Graph Storage
+## Why This Matters for Code Understanding
 
-#### MEB (Memory-Efficient Bidirectional) Store
-- **BadgerDB Backend**: LSM-tree storage for durability
-- **Dual Indexing**: SPO and OPS indices for bidirectional queries
-- **Dictionary Compression**: String interning reduces memory 10x
-- **Query Cache**: TTL-based caching for frequent queries
+| Question | Without GCA | With GCA |
+|----------|-------------|----------|
+| "What calls this function?" | Manual grep, miss indirect callers | Full backward slice, recursive |
+| "Find all auth-related code" | Keyword search, many false positives | Semantic search + graph traversal |
+| "Will this change break anything?" | Code review guesswork | Blast radius calculation |
+| "Explain this codebase to me" | Read files linearly | AI narrates with graph context |
 
-#### Vector Registry (Hybrid Quantization)
-- **1536d → int8**: Hybrid block quantization (block size 32, 8-bit)
-- **SIMD Search**: Vectorized dot product on int8 arrays
-- **Snapshot Persistence**: Auto-save compressed vectors to disk
-
-### Planned Features
+## Planned Features
 
 The following features are planned for future releases:
 
@@ -98,38 +123,43 @@ The following features are planned for future releases:
 | Onboarding Assistant | 🟡 TODO | Guided tours of code architecture |
 | Framework Migration | 🟢 TODO | Convert code between languages/frameworks |
 
-### RESTful API
+## RESTful API
 
-**Discovery**
-- `GET /api/v1/projects` - List all ingested projects
-- `GET /api/v1/files` - List files in a project
-- `GET /api/v1/symbols` - List symbols in a project
+### Discovery
 
-**Querying**
-- `POST /api/v1/query` - Execute Datalog queries
-- `GET /api/v1/semantic-search` - Vector similarity search
+- `GET /api/v1/projects` — List all ingested projects
+- `GET /api/v1/files` — List files in a project
+- `GET /api/v1/symbols` — List symbols in a project
 
-**Graph Exploration**
-- `GET /api/v1/graph/file-calls` - File-to-file call graph
-- `GET /api/v1/graph/file-backbone` - Cross-file dependency graph
-- `GET /api/v1/graph/path` - Shortest path between symbols
-- `GET /api/v1/graph/cluster` - Graph clusters (Leiden algorithm)
+### Querying
 
-**Cross-Reference**
-- `GET /api/v1/graph/who-calls` - Find who calls a symbol (backward slice)
-- `GET /api/v1/graph/what-calls` - Find what a symbol calls (forward slice)
-- `GET /api/v1/graph/reachable` - Check reachability between symbols
-- `GET /api/v1/graph/cycles` - Detect cycles in call graph
-- `GET /api/v1/graph/lca` - Find least common ancestor
-- `GET /api/v1/graph/centrality` - Get symbols ranked by centrality
+- `POST /api/v1/query` — Execute Datalog queries
+- `GET /api/v1/semantic-search` — Vector similarity search
 
-**AI Integration**
-- `POST /api/v1/ai/ask` - Legacy AI-powered analysis
-- `POST /api/v1/ask` - Unified NL → Datalog → LLM pipeline
+### Graph Exploration
 
-**Source Code**
-- `GET /api/v1/source` - Retrieve embedded source code
-- `GET /api/v1/hydrate` - Get hydrated symbol with code + metadata
+- `GET /api/v1/graph/file-calls` — File-to-file call graph
+- `GET /api/v1/graph/file-backbone` — Cross-file dependency graph
+- `GET /api/v1/graph/path` — Shortest path between symbols
+- `GET /api/v1/graph/cluster` — Graph clusters (Leiden algorithm)
+
+### Cross-Reference
+
+- `GET /api/v1/graph/who-calls` — Find who calls a symbol (backward slice)
+- `GET /api/v1/graph/what-calls` — Find what a symbol calls (forward slice)
+- `GET /api/v1/graph/reachable` — Check reachability between symbols
+- `GET /api/v1/graph/cycles` — Detect cycles in call graph
+- `GET /api/v1/graph/lca` — Find least common ancestor
+- `GET /api/v1/graph/centrality` — Get symbols ranked by centrality
+
+### AI Integration
+
+- `POST /api/v1/ask` — Unified NL → Datalog → LLM pipeline
+
+### Source Code
+
+- `GET /api/v1/source` — Retrieve embedded source code
+- `GET /api/v1/hydrate` — Get hydrated symbol with code + metadata
 
 ## Architecture
 
@@ -150,10 +180,8 @@ gca/
 │   │   ├── ingest.go          # Parallel worker orchestration
 │   │   ├── incremental.go     # Incremental updates
 │   │   ├── resolve.go         # Symbol resolution & call graph building
-│   │   ├── virtual.go         # Virtual predicate enrichment
-│   │   └── ...
+│   │   └── virtual.go         # Virtual predicate enrichment
 │   ├── meb/                   # MEB store wrapper
-│   │   └── store.go           # Query wrapper, Scan API, QueryCache
 │   ├── ooda/                  # OODA cognitive loop
 │   │   ├── ooda.go            # Core types (GCAFrame, GCALoop)
 │   │   ├── observer.go        # Intent classification + centrality
@@ -162,23 +190,14 @@ gca/
 │   │   └── verifier_actor.go  # Policy enforcement
 │   ├── service/               # Business logic layer
 │   │   ├── ai/                # AI service (Genkit-based)
-│   │   │   ├── gemini.go      # Main AI service
-│   │   │   ├── intent.go      # Intent classification
-│   │   │   ├── query_gen.go   # NL → Datalog generation
-│   │   │   └── synthesize.go  # Answer synthesis
 │   │   ├── graph.go           # Graph operations
 │   │   ├── graph_xref.go      # Cross-reference analysis
 │   │   ├── centrality.go      # Graph centrality computation
 │   │   ├── pathfinder.go      # Weighted path finding
-│   │   ├── clustering.go      # Graph clustering (Leiden)
-│   │   └── ...
+│   │   └── clustering.go      # Graph clustering (Leiden)
 │   ├── server/                # HTTP API handlers
-│   │   ├── server.go          # Gin server setup
-│   │   ├── handlers.go        # Route handlers
-│   │   └── ...
 │   ├── repl/                  # Interactive CLI
-│   ├── mcp/                   # Model Context Protocol server
-│   └── common/                # Shared utilities
+│   └── mcp/                   # Model Context Protocol server
 └── internal/
     └── manager/               # Multi-project store manager
 ```
@@ -186,6 +205,7 @@ gca/
 ## Installation
 
 ### Prerequisites
+
 - **Go 1.25+**
 - **GCC** (for tree-sitter CGO bindings)
 - **API Key** for AI features (Gemini, OpenAI, Anthropic, or MiniMax)
@@ -193,174 +213,68 @@ gca/
 ### Build
 
 ```bash
-# Clone repository
 git clone https://github.com/duynguyendang/gca.git
 cd gca
-
-# Install dependencies
 go mod tidy
-
-# Build binary
 go build -o gca .
 ```
 
 ## Usage
 
-### 1. Ingest Code
+### Ingest Code
 
 ```bash
-# Set API key for embeddings and AI features
+# Set API key
 export GEMINI_API_KEY="your_api_key_here"
 
-# Ingest a project (default: generates embeddings for doc comments)
+# Ingest a project
 ./gca ingest ./my-project ./data/my-project
 
 # Skip embedding generation (faster, saves API quota)
 ./gca ingest ./my-project ./data/my-project --no-embed
-# or via env var:
-SKIP_EMBEDDINGS=true ./gca ingest ./my-project ./data/my-project
 
-# Re-embed all symbols from source code (not just doc comments)
-./gca ingest ./my-project ./data/my-project --re-embed
-
-# Example: Ingest GCA itself
-./gca ingest ./gca ./data/gca
+# Use low-memory mode
+LOW_MEM=true ./gca ingest ./my-project ./data/my-project
 ```
 
-> [!TIP]
-> Skip embedding generation with `--no-embed` or `SKIP_EMBEDDINGS=true` to save memory and API quota. Embeddings are only needed for semantic search.
-
-**What happens during ingestion:**
-1. **Parse**: tree-sitter extracts AST from source files
-2. **Extract**: Facts (calls, imports, defines) and documentation are extracted
-3. **Resolve**: Symbol resolution builds call graph with resolved symbol IDs
-4. **Embed**: Documentation embedded using Gemini (unless `--no-embed`)
-5. **Compress**: 1536-d vectors → int8 using hybrid block quantization
-6. **Store**: Facts saved to BadgerDB, vectors flushed to disk on shutdown
-
-**Incremental ingestion:** Use `--incremental` to re-ingest only changed files. Old facts and vectors are automatically cleaned up before re-ingestion.
-
-### 2. Start Server
+### Start Server
 
 ```bash
-# Start REST API server
 ./gca server
-
 # Server starts on port 8080 by default
-# Environment variables:
-#   PORT=8080
-#   LLM_PROVIDER=googleai  # or openai, anthropic, minimax, ollama
-#   LLM_API_KEY=your_key
 ```
 
-### 3. Interactive REPL
+### Interactive REPL
 
 ```bash
-# Start interactive query mode
 ./gca repl ./data/my-project
-
-# Commands:
-# > triples(?A, "calls", "panic")    # Datalog query
-# > Who calls panic?                  # Natural language
-# > show main.go:main                 # View source code
-# > .schema                           # Show predicates
-# > .exit                             # Quit
+# > triples(?A, "calls", "panic")    # Datalog
+# > Who calls panic?                    # Natural language
+# > show main.go:main                  # View source
+# > .exit
 ```
 
-### 4. MCP Server
+### MCP Server
 
 ```bash
-# Start MCP server for AI coding assistants
 ./gca mcp ./data/my-project
 ```
-
-## API Reference
-
-### Unified NL → Datalog → LLM Pipeline
-
-**Endpoint:** `POST /api/v1/ask`
-
-Single endpoint for natural language code analysis:
-
-**Request:**
-```json
-{
-  "project_id": "gca",
-  "query": "How does authentication work?",
-  "symbol_id": "auth.go:Authenticate",
-  "depth": 2
-}
-```
-
-**Response:**
-```json
-{
-  "answer": "Based on the analysis...",
-  "query": "triples(?s, 'calls', 'auth.go:Authenticate')",
-  "intent": "narrative",
-  "confidence": 0.95,
-  "results": [...]
-}
-```
-
-### Cross-Reference Analysis
-
-**Who Calls (Backward Slice):**
-```bash
-curl 'http://localhost:8080/api/v1/graph/who-calls?project=gca&symbol=main.go:main'
-```
-
-**What Calls (Forward Slice):**
-```bash
-curl 'http://localhost:8080/api/v1/graph/what-calls?project=gca&symbol=main.go:main'
-```
-
-**Recursive Callers:**
-```bash
-curl 'http://localhost:8080/api/v1/graph/who-calls?project=gca&symbol=main.go:main&recursive=true&depth=3'
-```
-
-**Cycle Detection:**
-```bash
-curl 'http://localhost:8080/api/v1/graph/cycles?project=gca'
-```
-
-**Reachability Check:**
-```bash
-curl 'http://localhost:8080/api/v1/graph/reachable?project=gca&from=main.go:main&to=handlers.go:handleQuery'
-```
-
-### Graph Centrality
-
-**Get Top Symbols by Centrality:**
-```bash
-curl 'http://localhost:8080/api/v1/graph/centrality?project=gca&limit=20'
-```
-
-Returns symbols ranked by architectural importance:
-- Entry points (main, init) boosted 2.5x
-- Hub nodes (high in+out degree) boosted 1.5x
-- Interface-like patterns boosted 1.3x
 
 ## Configuration
 
 ### Environment Variables
 
 ```bash
-# AI Provider Configuration
-export GEMINI_API_KEY="your_gemini_api_key"  # Default AI provider
-export LLM_PROVIDER="googleai"                # googleai, openai, anthropic, minimax, ollama
-export LLM_API_KEY="your_api_key"            # Override default provider's API key
-export LLM_MODEL=""                          # Override default model
+# AI Provider
+export GEMINI_API_KEY="your_gemini_api_key"
+export LLM_PROVIDER="googleai"    # googleai, openai, anthropic, minimax, ollama
+export LLM_API_KEY="your_api_key"
+export LLM_MODEL=""                # Override default model
 
-# Server Configuration
+# Server
 export PORT=8080
 export DATA_DIR=./data
-export LOW_MEM=true                           # Low-memory mode
-export CORS_ALLOW_ORIGINS="https://app.example.com"
-
-# AI Behavior
-export USE_OODA_LOOP=true                    # Use OODA-based AI dispatch
+export LOW_MEM=true                # Low-memory mode
 ```
 
 ### Multi-LLM Provider Configuration
@@ -398,25 +312,16 @@ export USE_OODA_LOOP=true                    # Use OODA-based AI dispatch
 
 ### Benchmarks (gca-v2 project: 104 files, 14,044 facts, 50 symbols)
 
-**Ingestion:**
-- **gca-v2 Project** (104 files, 14,044 facts): ~26s with LOW_MEM=true
-- **Rate**: ~240 files/minute
-
-**Query Execution:**
-| Endpoint | Time | Results |
-|----------|------|---------|
-| Files list | ~69ms | 104 files |
-| Symbols list | ~1.7ms | 50 symbols |
-| What-calls | ~117ms | returns callers |
-| Who-calls | ~113ms | returns callees |
-| Cycle detection | ~123ms | detects cycles |
-
-**Store Size:**
-- **Graph store**: 182 KiB
-- **Dictionary**: 584 KiB
-
-**Memory Usage:**
-- **Query Cache**: 5-min TTL, configurable max entries
+| Metric | Value |
+|--------|-------|
+| **Ingestion** | ~26s with LOW_MEM=true (~240 files/min) |
+| **Files list** | ~69ms |
+| **Symbols list** | ~1.7ms |
+| **What-calls** | ~117ms |
+| **Who-calls** | ~113ms |
+| **Cycle detection** | ~123ms |
+| **Graph store size** | 182 KiB |
+| **Dictionary size** | 584 KiB |
 
 ## Deployment
 
@@ -426,26 +331,21 @@ export USE_OODA_LOOP=true                    # Use OODA-based AI dispatch
 docker build -t gca:latest .
 docker run -p 8080:8080 \
   -e GEMINI_API_KEY=$GEMINI_API_KEY \
-  -e LLM_PROVIDER=googleai \
   gca:latest
 ```
 
 ### Cloud Run + Firebase
 
 ```bash
-# Deploy backend to Cloud Run
 ./deploy.sh
-
-# Frontend auto-deploys to Firebase
 ```
 
 ## Troubleshooting
 
 ### Semantic Search Returns 0 Results
 
-**Cause:** Project was ingested without API key
+Project was ingested without API key. Re-ingest with:
 
-**Fix:**
 ```bash
 rm -rf ./data/my-project
 ./gca ingest ./my-project ./data/my-project
@@ -454,59 +354,27 @@ rm -rf ./data/my-project
 ### Out of Memory During Ingestion
 
 ```bash
-# Option 1: Skip embeddings entirely (fastest, most memory savings)
-SKIP_EMBEDDINGS=true ./gca ingest ./large-project ./data/large-project
+# Skip embeddings entirely
+SKIP_EMBEDDINGS=true ./gca ingest ./my-project ./data/my-project
 
-# Option 2: Use low-memory mode (still generates embeddings)
-LOW_MEM=true ./gca ingest ./large-project ./data/large-project
+# Or use low-memory mode
+LOW_MEM=true ./gca ingest ./my-project ./data/my-project
 ```
-
-### Cross-Reference Queries Return 0 Results
-
-**Fixed.** The bug in `pkg/meb/store.go:buildLFTJRelations()` was in the dictionary ID packing for bound positions in LFTJ joins. The fix changes:
-
-```go
-// Before:
-packedID := keys.PackID(topicID, keys.UnpackLocalID(dictID))
-
-// After (correct):
-packedID := keys.PackID(topicID, dictID)
-```
-
-If you still see 0 results, verify the project was re-ingested after the fix was applied.
 
 ## Testing
 
 ```bash
-# Run all tests
 go test ./...
-
-# Run specific package tests
-go test ./pkg/datalog/...
-go test ./pkg/server/...
-go test ./pkg/service/...
-
-# Run with coverage
 go test -cover ./...
 ```
 
-## Recent Changes
+## Built With
 
-### Graph Centrality (April 2026)
-- Symbols ranked by architectural significance in AI context
-- Entry points, hubs, and interfaces prioritized
-
-### Multi-LLM Support (April 2026)
-- Added MiniMax, OpenAI, Anthropic, Ollama providers via Genkit
-
-### Cross-Reference Analysis (April 2026)
-- Who-calls, what-calls, reachability, cycles, LCA endpoints
-- Symbol resolution for accurate call graphs
-
-### Unified NL Pipeline (April 2026)
-- Single `POST /api/v1/ask` endpoint
-- Intent classification + Datalog generation + LLM answer
+| Project | Purpose |
+| ------- | ------- |
+| [MEB](https://github.com/duynguyendang/meb) | Memory-Efficient Bidirectional graph store — purpose-built for join-heavy code analysis workloads |
+| [Mangle](https://github.com/google/mangle) | Datalog extension for deductive database programming — powers the symbolic reasoning engine |
 
 ## License
 
-Apache License 2.0 - see [LICENSE](LICENSE) for details.
+Apache License 2.0 — see [LICENSE](LICENSE) for details.
