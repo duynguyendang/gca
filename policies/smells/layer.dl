@@ -1,0 +1,15 @@
+% Layer Violation Detection
+% Detects cross-layer dependency violations
+
+query_metadata("smell_layer_violation", "Detect cross-layer dependency violations").
+query_metadata("smell_layer_violation", "category", "smell").
+query_metadata("smell_layer_violation", "tier", "1").
+query_metadata("smell_layer_violation", "severity", "high").
+query_metadata("smell_layer_violation", "smell_type", "layer_violation").
+
+% Frontend importing backend packages directly
+query("smell_layer_violation", File, Target, LayerTag) :-
+    triples(File, "imports", Target),
+    triples(File, "has_tag", LayerTag),
+    triples(Target, "has_tag", "backend"),
+    LayerTag != "backend".

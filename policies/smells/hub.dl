@@ -1,0 +1,20 @@
+% Hub Anomaly Detection
+% Detects files that are called by many (in-degree) and call many (out-degree)
+
+query_metadata("smell_hub", "Detect hub files with high out-degree (>10) and in-degree (>5)").
+query_metadata("smell_hub", "category", "smell").
+query_metadata("smell_hub", "tier", "1").
+query_metadata("smell_hub", "severity", "medium").
+query_metadata("smell_hub", "smell_type", "hub_anomaly").
+
+query("smell_hub", File, Out, In) :-
+    (
+        triples(File, "calls", _),
+        aggregates.Count({File}, File, Out)
+    ),
+    (
+        triples(_, "calls", File),
+        aggregates.Count({File}, File, In)
+    ),
+    Out > 10,
+    In > 5.

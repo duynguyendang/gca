@@ -97,14 +97,6 @@ func NewServer(mgr *manager.StoreManager, sourceDir string) *Server {
 		mangleClient = nil
 	} else {
 		logger.Info("Manglekit Client initialized successfully")
-
-		// Load query policies
-		policyPath := config.GenePoolPath
-		if err := mangleClient.Engine().LoadPolicy(context.Background(), policyPath); err != nil {
-			logger.Warn("Failed to load query policies", "path", policyPath, "error", err)
-		} else {
-			logger.Info("Query policies loaded", "path", policyPath)
-		}
 	}
 
 	// Initialize Query Service

@@ -285,11 +285,11 @@ func ValidateSymbolID(symbolID string) error {
 // It trims whitespace, checks length, and rejects dangerous content,
 // but does NOT HTML-escape the query — that would corrupt Datalog syntax.
 func ValidateAndSanitizeQuery(query string) (string, error) {
+	query = strings.TrimSpace(query)
+
 	if query == "" {
 		return "", fmt.Errorf("query cannot be empty")
 	}
-
-	query = strings.TrimSpace(query)
 
 	if len(query) > config.MaxQueryLength {
 		return "", fmt.Errorf("query exceeds maximum length of %d characters", config.MaxQueryLength)

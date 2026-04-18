@@ -88,7 +88,7 @@ const (
 
 // Policy and GenePool paths
 const (
-	GenePoolPath = "policies/queries.dl"
+	GenePoolPath = "policies/queries.dl" // Single file mode
 	PolicyPath   = "policies"
 )
 

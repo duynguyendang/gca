@@ -1,0 +1,22 @@
+% God File / God Module Detection
+% Detects files with excessive imports (>50) or definitions (>30)
+
+query_metadata("smell_god_file", "Detect files with excessive imports (>50) or definitions (>30)").
+query_metadata("smell_god_file", "category", "smell").
+query_metadata("smell_god_file", "tier", "1").
+query_metadata("smell_god_file", "severity", "medium").
+query_metadata("smell_god_file", "smell_type", "god_file").
+
+% Files with excessive imports
+query("smell_god_file", File, "imports", Count) :-
+    triples(File, "imports", _),
+    not contains(File, ":"),
+    aggregates.Count({File, "imports", P}, File, Count),
+    Count > 50.
+
+% Files with excessive definitions
+query("smell_god_file", File, "defines", Count) :-
+    triples(File, "defines", _),
+    not contains(File, ":"),
+    aggregates.Count({File, "defines", S}, File, Count),
+    Count > 30.

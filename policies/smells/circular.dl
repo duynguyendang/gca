@@ -1,0 +1,13 @@
+% Circular Dependency Detection
+% Detects mutual call pairs (A calls B and B calls A)
+
+query_metadata("smell_circular_direct", "Detect mutual call pairs (A calls B and B calls A)").
+query_metadata("smell_circular_direct", "category", "smell").
+query_metadata("smell_circular_direct", "tier", "1").
+query_metadata("smell_circular_direct", "severity", "high").
+query_metadata("smell_circular_direct", "smell_type", "circular_dependency").
+
+query("smell_circular_direct", A, B) :-
+    triples(A, "calls", B),
+    triples(B, "calls", A),
+    A != B.

@@ -1,0 +1,7 @@
+% Shared declarations for smell detection
+% This file is loaded first to ensure all predicates are declared
+
+Decl triples(S, P, O).
+Decl query_metadata(Name, Description).
+Decl query_metadata(Name, Key, Value).
+Decl query(Name, Arg1, Arg2, Arg3, Arg4).
