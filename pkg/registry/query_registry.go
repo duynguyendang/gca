@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/manglekit/core"
 )
 
@@ -353,17 +354,6 @@ func (r *QueryRegistry) ExecuteQuery(ctx context.Context, name string, params ma
 	return query, nil
 }
 
-// buildQueryFromTemplate substitutes parameters into the query template
-func (r *QueryRegistry) buildQueryFromTemplate(template string, params map[string]any) string {
-	query := template
-	for key, value := range params {
-		placeholder := fmt.Sprintf("{%s}", key)
-		replacement := fmt.Sprintf("%v", value)
-		query = strings.ReplaceAll(query, placeholder, replacement)
-	}
-	return query
-}
-
 // sanitizeDatalogValue prevents Datalog injection by escaping special characters
 func sanitizeDatalogValue(input string) string {
 	// Escape backslash first, then quotes
@@ -454,55 +444,7 @@ func (r *QueryRegistry) IsFactSticky(ctx context.Context, pred, subj string) boo
 
 	// Fall back to name-based pattern detection for defines predicates
 	if pred == "defines" {
-		return isAttentionWorthyName(subj)
-	}
-
-	return false
-}
-
-// isAttentionWorthyName returns true if the symbol name matches attention-worthy patterns.
-// These are name-based heuristics for detecting important code elements.
-func isAttentionWorthyName(name string) bool {
-	lower := strings.ToLower(name)
-
-	// Entry point patterns
-	if strings.Contains(lower, "main") || strings.Contains(lower, "init") || strings.Contains(lower, "start") {
-		return true
-	}
-
-	// Event/Callback patterns
-	if strings.Contains(lower, "handler") || strings.HasPrefix(lower, "on_") || strings.HasSuffix(lower, "handler") || strings.HasSuffix(lower, "callback") {
-		return true
-	}
-
-	// Lifecycle patterns
-	if strings.Contains(lower, "setup") || strings.Contains(lower, "teardown") || strings.Contains(lower, "bootstrap") || strings.Contains(lower, "cleanup") {
-		return true
-	}
-
-	// Test patterns
-	if strings.HasSuffix(name, "_test") || strings.HasSuffix(name, "Test") || strings.HasPrefix(name, "Test") || strings.HasSuffix(name, "_bench") || strings.HasSuffix(name, "Benchmark") {
-		return true
-	}
-
-	// Security/Auth patterns
-	if strings.Contains(lower, "auth") || strings.Contains(lower, "login") || strings.Contains(lower, "logout") || strings.Contains(lower, "password") || strings.Contains(lower, "credential") || strings.Contains(lower, "token") || strings.Contains(lower, "session") || strings.Contains(lower, "sanitize") || strings.Contains(lower, "authorize") {
-		return true
-	}
-
-	// Validation patterns
-	if strings.Contains(lower, "validate") || strings.Contains(lower, "verify") || strings.Contains(lower, "check") {
-		return true
-	}
-
-	// CRUD patterns (prefix-based)
-	if strings.HasPrefix(name, "Create") || strings.HasPrefix(name, "Delete") || strings.HasPrefix(name, "Update") || strings.HasPrefix(name, "Get") || strings.HasPrefix(name, "List") || strings.HasPrefix(name, "Put") {
-		return true
-	}
-
-	// Error/Recovery patterns
-	if strings.Contains(lower, "error") || strings.Contains(lower, "retry") || strings.Contains(lower, "fallback") || strings.Contains(lower, "recovery") || strings.Contains(lower, "recover") {
-		return true
+		return config.IsAttentionWorthyName(subj)
 	}
 
 	return false

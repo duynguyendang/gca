@@ -117,9 +117,9 @@ func TestBuildQueryFromTemplate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := r.buildQueryFromTemplate(tt.template, tt.params)
+			got := r.buildQueryFromTemplateSecure(tt.template, tt.params)
 			if got != tt.expected {
-				t.Errorf("buildQueryFromTemplate(%q, %v) = %q, want %q",
+				t.Errorf("buildQueryFromTemplateSecure(%q, %v) = %q, want %q",
 					tt.template, tt.params, got, tt.expected)
 			}
 		})
