@@ -134,3 +134,10 @@ const (
 	CentralityBoostHub       = 1.5 // Boost for hub nodes (high in+out degree)
 	CentralityBoostInterface = 1.3 // Boost for interface-like patterns
 )
+
+// Virtual Attention Sink configuration
+const (
+	VirtualAttentionThreshold = 0.05 // Minimum centrality score (0-1) to include symbol
+	MaxAttentionSymbols       = 8    // Maximum symbols to include in prompt context
+	StickyOnlyMode            = false // If true, query only GlobalTopicID (skip Window)
+)

@@ -38,6 +38,7 @@ const (
 	MaxOpenStores                      = 10
 	ProjectListTTL                     = 1 * time.Minute
 	DefaultMaxFacts                    = 5_000_000 // 5M facts retention limit
+	WindowMaxFacts                     = 500_000   // 500K facts window limit
 )
 
 // StoreManager manages multiple MEBStore instances.
@@ -255,4 +256,16 @@ func hashToTopicID(name string) uint32 {
 		h *= 16777619 // FNV-1a prime
 	}
 	return (h & 0xFFFFFF) | 1 // ensure non-zero (0 is reserved)
+}
+
+// GlobalTopicID returns the Attention Sink topic ID for a project (permanent storage).
+// Uses the base hash with high bit clear for Global partition.
+func GlobalTopicID(projectID string) uint32 {
+	return hashToTopicID(projectID) & 0x7FFFFF // clear high bit
+}
+
+// WindowTopicID returns the Sliding Window topic ID for a project (temporary storage).
+// Uses the base hash with high bit set for Window partition.
+func WindowTopicID(projectID string) uint32 {
+	return hashToTopicID(projectID) | 0x800000 // set high bit
 }

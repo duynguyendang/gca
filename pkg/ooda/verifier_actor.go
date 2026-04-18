@@ -155,9 +155,7 @@ type Model interface {
 }
 
 func NewGeminiActor(model Model) *GeminiActor {
-	return &GeminiActor{
-		model: model,
-	}
+	return &GeminiActor{model: model}
 }
 
 func (a *GeminiActor) Act(ctx context.Context, frame *GCAFrame) error {

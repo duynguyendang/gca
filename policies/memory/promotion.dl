@@ -1,0 +1,80 @@
+% Attention Sink Promotion Rules
+% Facts matching these rules are stored in the Global (Attention Sink) partition
+% All other facts go to the Window (Sliding Window) partition
+
+% Metadata for registry recognition
+query_metadata("check_sticky", "description", "Check if a fact should be sticky (Attention Sink)").
+query_metadata("check_sticky", "template", "is_sticky('{Predicate}', '{Subject}')").
+
+% Security-related predicates are always sticky (Attention Sink)
+is_sticky("has_security_risk", _).
+is_sticky("defines", Symbol) :- triples(Symbol, "has_role", "api_gateway").
+is_sticky("defines", Symbol) :- triples(Symbol, "has_role", "authenticator").
+is_sticky("handles", Symbol) :- triples(Symbol, "has_permission", "admin").
+
+% High-complexity backbone files are sticky
+is_sticky("backbone", File) :- triples(File, "complexity", C), C > 20.
+
+% Entry point symbols are sticky
+is_sticky("defines", Symbol) :- triples(Symbol, "has_role", "main").
+is_sticky("defines", Symbol) :- triples(Symbol, "has_role", "init").
+
+% === Name-Based Attention Pattern Detection ===
+% These rules detect attention-worthy symbols by their name patterns
+
+% Entry point patterns
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "main").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "init").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "start").
+
+% Event/Callback patterns
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "handler").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_has_prefix(Symbol, "on_").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_has_suffix(Symbol, "Handler").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_has_suffix(Symbol, "Callback").
+
+% Lifecycle patterns
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "setup").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "teardown").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "bootstrap").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "cleanup").
+
+% Test patterns (important for coverage)
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_has_suffix(Symbol, "_test").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_has_suffix(Symbol, "Test").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_has_prefix(Symbol, "Test").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_has_suffix(Symbol, "_bench").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_has_suffix(Symbol, "Benchmark").
+
+% Security/Auth patterns
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "auth").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "login").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "logout").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "password").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "credential").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "token").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "session").
+
+% Validation patterns
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "validate").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "verify").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "sanitize").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "authorize").
+
+% CRUD/Resource patterns
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_has_prefix(Symbol, "Create").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_has_prefix(Symbol, "Delete").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_has_prefix(Symbol, "Update").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_has_prefix(Symbol, "Get").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_has_prefix(Symbol, "List").
+
+% Error/Recovery patterns
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "error").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "retry").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "fallback").
+is_sticky("defines", Symbol) :- triples(Symbol, "defines", _), name_contains(Symbol, "recovery").
+
+% Public API patterns
+is_sticky("defines", Symbol) :- triples(Symbol, "has_role", "public").
+is_sticky("defines", Symbol) :- triples(Symbol, "has_tag", "exported").
+is_sticky("defines", Symbol) :- triples(Symbol, "has_tag", "api").

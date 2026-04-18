@@ -6,9 +6,36 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/meb"
 )
+
+// scanFactsWithTopicID scans facts using a specific TopicID without modifying the store's default TopicID.
+// Uses ScanInTopicContext for thread-safe operation within a specific topic partition.
+func scanFactsWithTopicID(ctx context.Context, store *meb.MEBStore, topicID uint32, subj, pred, obj string) <-chan struct {
+	Fact meb.Fact
+	Err  error
+} {
+	ch := make(chan struct {
+		Fact meb.Fact
+		Err  error
+	}, 1)
+
+	go func() {
+		defer close(ch)
+		// Use ScanInTopicContext for thread-safe scanning within a specific TopicID
+		// This avoids the race condition of SetTopicID/TopicID on shared store state
+		for fact, err := range store.ScanInTopicContext(ctx, topicID, subj, pred, obj) {
+			ch <- struct {
+				Fact meb.Fact
+				Err  error
+			}{Fact: fact, Err: err}
+		}
+	}()
+
+	return ch
+}
 
 type StoreManager interface {
 	GetStore(projectID string) (*meb.MEBStore, error)
@@ -172,16 +199,22 @@ func (o *GraphObserver) classifyIntent(input string) GCATask {
 }
 
 type GraphOrienter struct {
-	storeManager StoreManager
-	maxSymbols   int
-	maxResults   int
+	storeManager        StoreManager
+	maxSymbols          int
+	maxResults          int
+	attentionThreshold   float64
+	maxAttentionSymbols int
+	stickyOnlyMode      bool
 }
 
 func NewGraphOrienter(storeManager StoreManager) *GraphOrienter {
 	return &GraphOrienter{
-		storeManager: storeManager,
-		maxSymbols:   5,  // Increased from 3
-		maxResults:   50, // Limit results per query for performance
+		storeManager:        storeManager,
+		maxSymbols:          config.MaxAttentionSymbols,
+		maxResults:          50,
+		attentionThreshold:  config.VirtualAttentionThreshold,
+		maxAttentionSymbols: config.MaxAttentionSymbols,
+		stickyOnlyMode:      config.StickyOnlyMode,
 	}
 }
 
@@ -197,23 +230,27 @@ func (o *GraphOrienter) Orient(ctx context.Context, frame *GCAFrame) error {
 	seen := make(map[string]bool)
 	count := 0
 
-	fileMap := o.buildFileMap(ctx, store)
+	fileMap := o.buildFileMap(ctx, store, frame.ProjectID)
 
-	centrality := o.computeDegreeCentrality(ctx, store, symbols)
+	centrality := o.computeDegreeCentrality(ctx, store, symbols, frame.ProjectID)
 	sortByCentralityDesc(symbols, centrality)
 
 	for _, symbol := range symbols {
-		if count >= o.maxSymbols {
+		if count >= o.maxAttentionSymbols {
 			break
 		}
 		if seen[symbol] {
 			continue
 		}
+		// Virtual attention filter: skip symbols below centrality threshold
+		if centrality[symbol] < o.attentionThreshold {
+			continue
+		}
 		seen[symbol] = true
 
-		inbound := o.scanWithLimit(ctx, store, symbol, "calls", o.maxResults)
-		outbound := o.scanWithLimitOutgoing(ctx, store, symbol, o.maxResults)
-		defines := o.scanWithLimitOutgoing(ctx, store, symbol, o.maxResults)
+		inbound := o.scanWithLimit(ctx, store, symbol, "calls", o.maxResults, frame.ProjectID)
+		outbound := o.scanWithLimitOutgoing(ctx, store, symbol, o.maxResults, frame.ProjectID)
+		defines := o.scanWithLimitOutgoing(ctx, store, symbol, o.maxResults, frame.ProjectID)
 
 		if len(inbound) > 0 || len(outbound) > 0 || len(defines) > 0 {
 			count++
@@ -265,14 +302,25 @@ func (o *GraphOrienter) Orient(ctx context.Context, frame *GCAFrame) error {
 }
 
 // buildFileMap creates a map of symbol -> file path for quick lookup
-func (o *GraphOrienter) buildFileMap(ctx context.Context, store *meb.MEBStore) map[string]string {
+// It scans both Global (Attention Sink) and Window (Sliding Window) TopicIDs unless stickyOnlyMode is enabled
+func (o *GraphOrienter) buildFileMap(ctx context.Context, store *meb.MEBStore, projectID string) map[string]string {
 	fileMap := make(map[string]string)
 
-	// Scan for defines predicate - get symbol -> file relationships
-	// This is more efficient than querying each symbol individually
-	for fact := range store.ScanContext(ctx, "", "defines", "") {
-		if sym, ok := fact.Object.(string); ok {
-			fileMap[sym] = fact.Subject
+	globalID := manager.GlobalTopicID(projectID)
+	windowID := manager.WindowTopicID(projectID)
+
+	for item := range scanFactsWithTopicID(ctx, store, globalID, "", "defines", "") {
+		if sym, ok := item.Fact.Object.(string); ok {
+			fileMap[sym] = item.Fact.Subject
+		}
+	}
+
+	// Only scan WindowTopicID if not in sticky-only mode
+	if !o.stickyOnlyMode {
+		for item := range scanFactsWithTopicID(ctx, store, windowID, "", "defines", "") {
+			if sym, ok := item.Fact.Object.(string); ok {
+				fileMap[sym] = item.Fact.Subject
+			}
 		}
 	}
 
@@ -280,15 +328,28 @@ func (o *GraphOrienter) buildFileMap(ctx context.Context, store *meb.MEBStore) m
 }
 
 // scanWithLimit scans for inbound references (who calls this symbol)
-func (o *GraphOrienter) scanWithLimit(ctx context.Context, store *meb.MEBStore, symbol string, predicate string, limit int) map[string]bool {
+// It scans both Global and Window TopicIDs and merges results
+func (o *GraphOrienter) scanWithLimit(ctx context.Context, store *meb.MEBStore, symbol string, predicate string, limit int, projectID string) map[string]bool {
 	results := make(map[string]bool)
-	count := 0
 
-	for fact := range store.ScanContext(ctx, "", predicate, symbol) {
+	globalID := manager.GlobalTopicID(projectID)
+	windowID := manager.WindowTopicID(projectID)
+
+	count := 0
+	for item := range scanFactsWithTopicID(ctx, store, globalID, "", predicate, symbol) {
 		if count >= limit {
 			break
 		}
-		results[fact.Subject] = true
+		results[item.Fact.Subject] = true
+		count++
+	}
+
+	count = 0
+	for item := range scanFactsWithTopicID(ctx, store, windowID, "", predicate, symbol) {
+		if count >= limit {
+			break
+		}
+		results[item.Fact.Subject] = true
 		count++
 	}
 
@@ -296,15 +357,30 @@ func (o *GraphOrienter) scanWithLimit(ctx context.Context, store *meb.MEBStore, 
 }
 
 // scanWithLimitOutgoing scans for outbound references (what this symbol calls)
-func (o *GraphOrienter) scanWithLimitOutgoing(ctx context.Context, store *meb.MEBStore, symbol string, limit int) map[string]bool {
+// It scans both Global and Window TopicIDs and merges results
+func (o *GraphOrienter) scanWithLimitOutgoing(ctx context.Context, store *meb.MEBStore, symbol string, limit int, projectID string) map[string]bool {
 	results := make(map[string]bool)
-	count := 0
 
-	for fact := range store.ScanContext(ctx, symbol, "calls", "") {
+	globalID := manager.GlobalTopicID(projectID)
+	windowID := manager.WindowTopicID(projectID)
+
+	count := 0
+	for item := range scanFactsWithTopicID(ctx, store, globalID, symbol, "calls", "") {
 		if count >= limit {
 			break
 		}
-		if obj, ok := fact.Object.(string); ok {
+		if obj, ok := item.Fact.Object.(string); ok {
+			results[obj] = true
+		}
+		count++
+	}
+
+	count = 0
+	for item := range scanFactsWithTopicID(ctx, store, windowID, symbol, "calls", "") {
+		if count >= limit {
+			break
+		}
+		if obj, ok := item.Fact.Object.(string); ok {
 			results[obj] = true
 		}
 		count++
@@ -323,22 +399,46 @@ type centralityResult struct {
 
 // computeDegreeCentrality computes centrality scores for a set of symbols
 // Higher scores = more architecturally significant
-func (o *GraphOrienter) computeDegreeCentrality(ctx context.Context, store *meb.MEBStore, symbols []string) map[string]float64 {
+// It scans both Global and Window TopicIDs for complete coverage unless stickyOnlyMode is enabled
+func (o *GraphOrienter) computeDegreeCentrality(ctx context.Context, store *meb.MEBStore, symbols []string, projectID string) map[string]float64 {
 	inDegree := make(map[string]int)
 	outDegree := make(map[string]int)
 
-	for fact := range store.ScanContext(ctx, "", config.PredicateCalls, "") {
-		if obj, ok := fact.Object.(string); ok {
+	globalID := manager.GlobalTopicID(projectID)
+	windowID := manager.WindowTopicID(projectID)
+
+	// Scan calls from both TopicIDs (or Global only if stickyOnlyMode)
+	for item := range scanFactsWithTopicID(ctx, store, globalID, "", config.PredicateCalls, "") {
+		if obj, ok := item.Fact.Object.(string); ok {
 			inDegree[obj]++
 		}
-		outDegree[fact.Subject]++
+		outDegree[item.Fact.Subject]++
 	}
 
-	for fact := range store.ScanContext(ctx, "", config.PredicateImports, "") {
-		if obj, ok := fact.Object.(string); ok {
+	if !o.stickyOnlyMode {
+		for item := range scanFactsWithTopicID(ctx, store, windowID, "", config.PredicateCalls, "") {
+			if obj, ok := item.Fact.Object.(string); ok {
+				inDegree[obj]++
+			}
+			outDegree[item.Fact.Subject]++
+		}
+	}
+
+	// Scan imports from both TopicIDs (or Global only if stickyOnlyMode)
+	for item := range scanFactsWithTopicID(ctx, store, globalID, "", config.PredicateImports, "") {
+		if obj, ok := item.Fact.Object.(string); ok {
 			inDegree[obj]++
 		}
-		outDegree[fact.Subject]++
+		outDegree[item.Fact.Subject]++
+	}
+
+	if !o.stickyOnlyMode {
+		for item := range scanFactsWithTopicID(ctx, store, windowID, "", config.PredicateImports, "") {
+			if obj, ok := item.Fact.Object.(string); ok {
+				inDegree[obj]++
+			}
+			outDegree[item.Fact.Subject]++
+		}
 	}
 
 	symbolSet := make(map[string]bool)
@@ -366,6 +466,11 @@ func (o *GraphOrienter) computeDegreeCentrality(ctx context.Context, store *meb.
 
 		if isInterfacePattern(sym) {
 			boost *= 1.3
+		}
+
+		// Secondary attention filter: boost attention-worthy names
+		if isAttentionWorthyName(sym) {
+			boost *= 1.2
 		}
 
 		score := (in + out) * boost
@@ -399,6 +504,55 @@ func isInterfacePattern(symbol string) bool {
 			return true
 		}
 	}
+	return false
+}
+
+// isAttentionWorthyName returns true if the symbol name matches attention-worthy patterns.
+// Used as a secondary filter in the virtual attention sink to catch symbols that
+// centrality scoring might miss (e.g., security-critical functions by name).
+func isAttentionWorthyName(name string) bool {
+	lower := strings.ToLower(name)
+
+	// Entry point patterns
+	if strings.Contains(lower, "main") || strings.Contains(lower, "init") || strings.Contains(lower, "start") {
+		return true
+	}
+
+	// Event/Callback patterns
+	if strings.Contains(lower, "handler") || strings.HasPrefix(lower, "on_") || strings.HasSuffix(lower, "handler") || strings.HasSuffix(lower, "callback") {
+		return true
+	}
+
+	// Lifecycle patterns
+	if strings.Contains(lower, "setup") || strings.Contains(lower, "teardown") || strings.Contains(lower, "bootstrap") || strings.Contains(lower, "cleanup") {
+		return true
+	}
+
+	// Test patterns
+	if strings.HasSuffix(name, "_test") || strings.HasSuffix(name, "Test") || strings.HasPrefix(name, "Test") || strings.HasSuffix(name, "_bench") || strings.HasSuffix(name, "Benchmark") {
+		return true
+	}
+
+	// Security/Auth patterns
+	if strings.Contains(lower, "auth") || strings.Contains(lower, "login") || strings.Contains(lower, "logout") || strings.Contains(lower, "password") || strings.Contains(lower, "credential") || strings.Contains(lower, "token") || strings.Contains(lower, "session") || strings.Contains(lower, "sanitize") || strings.Contains(lower, "authorize") {
+		return true
+	}
+
+	// Validation patterns
+	if strings.Contains(lower, "validate") || strings.Contains(lower, "verify") || strings.Contains(lower, "check") {
+		return true
+	}
+
+	// CRUD patterns (prefix-based)
+	if strings.HasPrefix(name, "Create") || strings.HasPrefix(name, "Delete") || strings.HasPrefix(name, "Update") || strings.HasPrefix(name, "Get") || strings.HasPrefix(name, "List") || strings.HasPrefix(name, "Put") {
+		return true
+	}
+
+	// Error/Recovery patterns
+	if strings.Contains(lower, "error") || strings.Contains(lower, "retry") || strings.Contains(lower, "fallback") || strings.Contains(lower, "recovery") || strings.Contains(lower, "recover") {
+		return true
+	}
+
 	return false
 }
 

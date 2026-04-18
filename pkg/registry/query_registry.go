@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -134,6 +135,7 @@ func (r *QueryRegistry) LoadQueriesFromGenePool(ctx context.Context, policyPath 
 		Description string
 		Category    string
 		Tier        int
+		Template    string
 	}
 	metaMap := make(map[string]QueryMeta)
 
@@ -168,6 +170,19 @@ func (r *QueryRegistry) LoadQueriesFromGenePool(ctx context.Context, policyPath 
 				if tierInt, err := strconv.Atoi(result["Tier"]); err == nil {
 					meta.Tier = tierInt
 				}
+				metaMap[name] = meta
+			}
+		}
+	}
+
+	// Get templates from metadata
+	templateQuery := `query_metadata(Name, "template", Template)`
+	templateResults, err := r.engine.Query(ctx, []string{}, templateQuery)
+	if err == nil {
+		for _, result := range templateResults {
+			name := result["Name"]
+			if meta, ok := metaMap[name]; ok {
+				meta.Template = result["Template"]
 				metaMap[name] = meta
 			}
 		}
@@ -238,33 +253,21 @@ func sortEntries(entries []os.DirEntry) {
 	})
 }
 
-// buildQueryTemplate builds the Datalog template for a query by examining its structure
+// buildQueryTemplate builds the Datalog template for a query by looking up metadata
 func (r *QueryRegistry) buildQueryTemplate(ctx context.Context, queryName string) (string, error) {
-	// For now, return a simple template based on the query name
-	// The actual Datalog would be extracted from the policy file in a full implementation
-	// This template will be used for parameter substitution
-	switch queryName {
-	case "find_defines":
-		return `triples({FileID}, "defines", Symbol)`, nil
-	case "find_imports":
-		return `triples({FileID}, "imports", Target)`, nil
-	case "find_outbound_calls":
-		return `triples({FileID}, "defines", Symbol), triples(Symbol, "calls", Target)`, nil
-	case "find_inbound_calls":
-		return `triples(Caller, "calls", Symbol), triples({FileID}, "defines", Symbol)`, nil
-	case "smell_circular_direct":
-		return `triples(A, "calls", B), triples(B, "calls", A), A != B`, nil
-	case "smell_imports":
-		return `triples(File, "imports", Pkg)`, nil
-	case "smell_defines":
-		return `triples(File, "defines", Symbol)`, nil
-	case "smell_hub":
-		return `triples(File, "calls", _), triples(Caller, "calls", File), File != Caller`, nil
-	case "smell_layer_violation":
-		return `triples(File, "imports", Target), triples(File, "has_tag", LayerTag), triples(Target, "has_tag", "backend"), LayerTag != "backend"`, nil
-	default:
-		return fmt.Sprintf(`%% Query: %s - Template not yet implemented`, queryName), nil
+	// If engine is nil (e.g., in tests), return error
+	if r.engine == nil {
+		return "", fmt.Errorf("engine not initialized")
 	}
+	// Look up template from metadata instead of switch-case
+	templateQuery := fmt.Sprintf(`query_metadata("%s", "template", T)`, queryName)
+	results, err := r.engine.Query(ctx, []string{}, templateQuery)
+	if err == nil && len(results) > 0 {
+		if template, ok := results[0]["T"]; ok && template != "" {
+			return template, nil
+		}
+	}
+	return fmt.Sprintf("%% Query: %s - Template not yet implemented", queryName), nil
 }
 
 // GetQuery retrieves a query definition by name
@@ -322,8 +325,8 @@ func (r *QueryRegistry) ExecuteQuery(ctx context.Context, name string, params ma
 		}
 	}
 
-	// Build the Datalog query from template
-	query := r.buildQueryFromTemplate(def.Template, params)
+	// Build the Datalog query from template with secure substitution
+	query := r.buildQueryFromTemplateSecure(def.Template, params)
 
 	// Check policy before execution
 	envelope := core.NewEnvelope(map[string]any{
@@ -361,28 +364,49 @@ func (r *QueryRegistry) buildQueryFromTemplate(template string, params map[strin
 	return query
 }
 
-// extractParameters extracts parameters from a query template
+// sanitizeDatalogValue prevents Datalog injection by escaping special characters
+func sanitizeDatalogValue(input string) string {
+	// Escape backslash first, then quotes
+	escaped := strings.ReplaceAll(input, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "'", "\\'")
+	return escaped
+}
+
+// buildQueryFromTemplateSecure substitutes parameters with sanitization
+func (r *QueryRegistry) buildQueryFromTemplateSecure(template string, params map[string]any) string {
+	query := template
+	for key, value := range params {
+		placeholder := fmt.Sprintf("{%s}", key)
+		safeValue := sanitizeDatalogValue(fmt.Sprintf("%v", value))
+		query = strings.ReplaceAll(query, placeholder, safeValue)
+	}
+	return query
+}
+
+// extractParameters extracts parameters from a query template using regex
 func (r *QueryRegistry) extractParameters(template string) []QueryParameter {
-	// Parse template for {parameter} placeholders
-	// This is a simplified implementation
+	return r.extractParametersDynamic(template)
+}
+
+// extractParametersDynamic extracts {param} placeholders from template using regex
+func (r *QueryRegistry) extractParametersDynamic(template string) []QueryParameter {
+	re := regexp.MustCompile(`\{(\w+)\}`)
+	matches := re.FindAllStringSubmatch(template, -1)
+
+	uniqueParams := make(map[string]bool)
 	params := []QueryParameter{}
 
-	// Look for common patterns
-	if strings.Contains(template, "{FileID}") {
-		params = append(params, QueryParameter{
-			Name:     "FileID",
-			Type:     "file",
-			Required: true,
-		})
+	for _, match := range matches {
+		paramName := match[1]
+		if !uniqueParams[paramName] {
+			params = append(params, QueryParameter{
+				Name:     paramName,
+				Required: true,
+				Type:     "string",
+			})
+			uniqueParams[paramName] = true
+		}
 	}
-	if strings.Contains(template, "{Symbol}") {
-		params = append(params, QueryParameter{
-			Name:     "Symbol",
-			Type:     "symbol",
-			Required: true,
-		})
-	}
-
 	return params
 }
 
@@ -413,4 +437,73 @@ func (r *QueryRegistry) ValidateQuery(ctx context.Context, queryName string, par
 	// Check tier-based access control
 	// (This would integrate with session management)
 	return nil
+}
+
+// IsFactSticky checks if a fact should be stored in the Global (Attention Sink) partition
+// by evaluating the is_sticky Datalog rule via the policy engine AND name-based pattern detection.
+// Returns true if the fact is "sticky" (important enough for permanent storage).
+func (r *QueryRegistry) IsFactSticky(ctx context.Context, pred, subj string) bool {
+	// Check Datalog rules first
+	if r.engine != nil {
+		query := fmt.Sprintf("is_sticky('%s', '%s')", pred, subj)
+		results, err := r.engine.Query(ctx, []string{}, query)
+		if err == nil && len(results) > 0 {
+			return true
+		}
+	}
+
+	// Fall back to name-based pattern detection for defines predicates
+	if pred == "defines" {
+		return isAttentionWorthyName(subj)
+	}
+
+	return false
+}
+
+// isAttentionWorthyName returns true if the symbol name matches attention-worthy patterns.
+// These are name-based heuristics for detecting important code elements.
+func isAttentionWorthyName(name string) bool {
+	lower := strings.ToLower(name)
+
+	// Entry point patterns
+	if strings.Contains(lower, "main") || strings.Contains(lower, "init") || strings.Contains(lower, "start") {
+		return true
+	}
+
+	// Event/Callback patterns
+	if strings.Contains(lower, "handler") || strings.HasPrefix(lower, "on_") || strings.HasSuffix(lower, "handler") || strings.HasSuffix(lower, "callback") {
+		return true
+	}
+
+	// Lifecycle patterns
+	if strings.Contains(lower, "setup") || strings.Contains(lower, "teardown") || strings.Contains(lower, "bootstrap") || strings.Contains(lower, "cleanup") {
+		return true
+	}
+
+	// Test patterns
+	if strings.HasSuffix(name, "_test") || strings.HasSuffix(name, "Test") || strings.HasPrefix(name, "Test") || strings.HasSuffix(name, "_bench") || strings.HasSuffix(name, "Benchmark") {
+		return true
+	}
+
+	// Security/Auth patterns
+	if strings.Contains(lower, "auth") || strings.Contains(lower, "login") || strings.Contains(lower, "logout") || strings.Contains(lower, "password") || strings.Contains(lower, "credential") || strings.Contains(lower, "token") || strings.Contains(lower, "session") || strings.Contains(lower, "sanitize") || strings.Contains(lower, "authorize") {
+		return true
+	}
+
+	// Validation patterns
+	if strings.Contains(lower, "validate") || strings.Contains(lower, "verify") || strings.Contains(lower, "check") {
+		return true
+	}
+
+	// CRUD patterns (prefix-based)
+	if strings.HasPrefix(name, "Create") || strings.HasPrefix(name, "Delete") || strings.HasPrefix(name, "Update") || strings.HasPrefix(name, "Get") || strings.HasPrefix(name, "List") || strings.HasPrefix(name, "Put") {
+		return true
+	}
+
+	// Error/Recovery patterns
+	if strings.Contains(lower, "error") || strings.Contains(lower, "retry") || strings.Contains(lower, "fallback") || strings.Contains(lower, "recovery") || strings.Contains(lower, "recover") {
+		return true
+	}
+
+	return false
 }

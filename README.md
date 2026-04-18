@@ -112,7 +112,7 @@ The following features are planned for future releases:
 | Feature | Status | Description |
 |---------|--------|-------------|
 | Generate Integration Tests | 🔴 TODO | AI-powered integration test generation |
-| Architecture Smell Detection | 🔴 TODO | Detect god files, circular deps, hub anomalies |
+| Architecture Smell Detection | ✅ DONE | Detect circular deps, hub anomalies, layer violations via Datalog |
 | Automated Code Review | 🟡 TODO | PR analysis for bugs and security issues |
 | Dependency Migration Advisor | 🟡 TODO | Impact analysis for library upgrades |
 | Incident Debugging Assistant | 🟡 TODO | Trace errors to source code locations |
@@ -308,6 +308,25 @@ export LOW_MEM=true                # Low-memory mode
 | `handled_by` | Route is handled by function |
 | `exposes_model` | API handler exposes data contract |
 
+### Architecture Smell Detection Queries
+
+GCA includes pre-defined Datalog queries for detecting architectural problems:
+
+| Smell | Query Template | Severity |
+|-------|----------------|----------|
+| Circular Dependencies | `triples(A, "calls", B), triples(B, "calls", A), A != B` | High |
+| Hub Anomaly | `triples(File, "calls", _), triples(Caller, "calls", File), File != Caller` | Medium |
+| Layer Violation | `triples(File, "imports", Target), triples(File, "has_tag", LayerTag), triples(Target, "has_tag", "backend"), LayerTag != "backend"` | High |
+| Files with Imports | `triples(File, "imports", Pkg)` | Low |
+| Files with Definitions | `triples(File, "defines", Symbol)` | Low |
+
+Execute via `/api/v1/query`:
+```bash
+curl -X POST "http://localhost:8080/api/v1/query?project=myproject" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"smell_circular_direct"}'
+```
+
 ## Performance
 
 ### Benchmarks
@@ -381,8 +400,17 @@ LOW_MEM=true ./gca ingest ./my-project ./data/my-project
 ## Testing
 
 ```bash
+# Run all tests
 go test ./...
+
+# Run tests with coverage
 go test -cover ./...
+
+# Run tests for specific packages
+go test ./pkg/server/... ./pkg/service/... ./pkg/registry/...
+
+# Run tests excluding slow integration tests (uses real data)
+go test ./pkg/server/... -run "^Test[^H]"
 ```
 
 ## Built With
