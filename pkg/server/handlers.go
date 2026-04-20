@@ -9,6 +9,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/duynguyendang/gca/pkg/logger"
+	mebpkg "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/service/ai"
 	"github.com/gin-gonic/gin"
 )
@@ -1064,4 +1065,187 @@ func (s *Server) handleAsk(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// HealthSummary represents the health summary response.
+type HealthSummary struct {
+	ProjectID     string        `json:"project_id"`
+	Summary       HealthDetails `json:"summary"`
+	TotalSmells   int           `json:"total_smells"`
+	TotalHubs     int           `json:"total_hubs"`
+	TotalEntrypoints int        `json:"total_entry_points"`
+}
+
+// HealthDetails contains categorized health information.
+type HealthDetails struct {
+	CircularDeps  []SmellEntry  `json:"circular_dependencies,omitempty"`
+	GodFiles      []SmellEntry  `json:"god_files,omitempty"`
+	LayerViolations []SmellEntry `json:"layer_violations,omitempty"`
+	Hubs          []HubEntry    `json:"hubs,omitempty"`
+	Entrypoints   []string      `json:"entry_points,omitempty"`
+}
+
+// SmellEntry represents a detected smell.
+type SmellEntry struct {
+	File   string `json:"file"`
+	Smell  string `json:"smell"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// HubEntry represents a hub file.
+type HubEntry struct {
+	File   string `json:"file"`
+	Score  int    `json:"score"`
+}
+
+// handleHealthSummary returns a health summary from the Analytical Store.
+// Query parameters:
+//   - project: project ID to query
+//
+// Response: JSON health summary with smells, hubs, and entry points.
+func (s *Server) handleHealthSummary(c *gin.Context) {
+	projectID := c.Query("project")
+	if projectID == "" {
+		projects, err := s.graphService.ListProjects()
+		if err == nil && len(projects) > 0 {
+			projectID = projects[0].ID
+		}
+	}
+
+	if projectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing project parameter"})
+		return
+	}
+
+	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Flat smells list for frontend compatibility
+	type Smell struct {
+		File      string `json:"file"`
+		SmellType string `json:"smell_type"`
+		Severity  string `json:"severity"`
+	}
+
+	summary := HealthDetails{}
+	var smells []Smell
+	totalSmells := 0
+	totalHubs := 0
+	totalEntrypoints := 0
+
+	// Query for smells
+	smellQuery := `triples(Subject, "has_smell", Object)`
+	smellResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, smellQuery)
+	if err == nil {
+		for _, r := range smellResults {
+			subject, _ := r["Subject"].(string)
+			object, _ := r["Object"].(string)
+			if subject == "" || object == "" {
+				continue
+			}
+
+			var severity string
+			var smellType string
+
+			if strings.HasPrefix(object, "circular_dependency:") {
+				summary.CircularDeps = append(summary.CircularDeps, SmellEntry{
+					File:   subject,
+					Smell:  "circular_dependency",
+					Detail: strings.TrimPrefix(object, "circular_dependency:"),
+				})
+				smellType = "Circular Dependency"
+				severity = "High"
+				totalSmells++
+			} else if strings.HasPrefix(object, "god_file:") {
+				summary.GodFiles = append(summary.GodFiles, SmellEntry{
+					File:   subject,
+					Smell:  "god_file",
+					Detail: strings.TrimPrefix(object, "god_file:"),
+				})
+				smellType = "God File"
+				severity = "Medium"
+				totalSmells++
+			} else if strings.HasPrefix(object, "layer_violation:") {
+				summary.LayerViolations = append(summary.LayerViolations, SmellEntry{
+					File:   subject,
+					Smell:  "layer_violation",
+					Detail: strings.TrimPrefix(object, "layer_violation:"),
+				})
+				smellType = "Layer Violation"
+				severity = "Medium"
+				totalSmells++
+			} else {
+				summary.GodFiles = append(summary.GodFiles, SmellEntry{
+					File:  subject,
+					Smell: object,
+				})
+				smellType = object
+				severity = "Low"
+				totalSmells++
+			}
+
+			smells = append(smells, Smell{
+				File:      subject,
+				SmellType: smellType,
+				Severity:  severity,
+			})
+		}
+	}
+
+	// Query for hub scores
+	hubQuery := `triples(Subject, "has_hub_score", Score)`
+	hubResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, hubQuery)
+	if err == nil {
+		for _, r := range hubResults {
+			subject, _ := r["Subject"].(string)
+			scoreStr, _ := r["Score"].(string)
+			if subject == "" {
+				continue
+			}
+			score := 0
+			if s, err := strconv.Atoi(scoreStr); err == nil {
+				score = s
+			}
+			summary.Hubs = append(summary.Hubs, HubEntry{
+				File:  subject,
+				Score: score,
+			})
+			totalHubs++
+		}
+	}
+
+	// Query for entry points
+	entryQuery := `triples(Subject, "is_entry_point", "true")`
+	entryResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, entryQuery)
+	if err == nil {
+		for _, r := range entryResults {
+			subject, _ := r["Subject"].(string)
+			if subject != "" {
+				summary.Entrypoints = append(summary.Entrypoints, subject)
+				totalEntrypoints++
+			}
+		}
+	}
+
+	// Calculate overall score (0-100)
+	// Start with 100 and deduct for issues found
+	overallScore := 100
+	// Deduct 5 points per smell, 2 points per hub, 1 point per entry point (capped at 0)
+	overallScore -= totalSmells * 5
+	overallScore -= totalHubs * 2
+	overallScore -= totalEntrypoints
+	if overallScore < 0 {
+		overallScore = 0
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"overall_score":    overallScore,
+		"total_smells":     totalSmells,
+		"total_hubs":       totalHubs,
+		"total_entry_points": totalEntrypoints,
+		"smells":           smells,
+	})
 }

@@ -24,7 +24,7 @@ func main() {
 	fmt.Printf("Testing SPO index with project: %s (data dir: %s)\n", projectID, dataDir)
 
 	// Create store manager
-	sm := manager.NewStoreManager(dataDir, manager.MemoryProfile{}, false)
+	sm := manager.NewStoreManager(dataDir, manager.MemoryProfileDefault, false)
 
 	// Get store (this should set topicID)
 	store, err := sm.GetStore(projectID)

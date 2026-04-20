@@ -462,6 +462,46 @@ func matchesConstraints(result map[string]any, constraints []datalog.Atom) bool 
 					}
 				}
 			}
+		case "gt":
+			if len(atom.Args) >= 2 {
+				varName := atom.Args[0]
+				constraintVal := atom.Args[1]
+				if val, ok := result[varName]; ok {
+					if !compareGT(val, constraintVal) {
+						return false
+					}
+				}
+			}
+		case "gte":
+			if len(atom.Args) >= 2 {
+				varName := atom.Args[0]
+				constraintVal := atom.Args[1]
+				if val, ok := result[varName]; ok {
+					if !compareGTE(val, constraintVal) {
+						return false
+					}
+				}
+			}
+		case "lt":
+			if len(atom.Args) >= 2 {
+				varName := atom.Args[0]
+				constraintVal := atom.Args[1]
+				if val, ok := result[varName]; ok {
+					if !compareLT(val, constraintVal) {
+						return false
+					}
+				}
+			}
+		case "lte":
+			if len(atom.Args) >= 2 {
+				varName := atom.Args[0]
+				constraintVal := atom.Args[1]
+				if val, ok := result[varName]; ok {
+					if !compareLTE(val, constraintVal) {
+						return false
+					}
+				}
+			}
 		}
 	}
 	return true
@@ -482,4 +522,68 @@ func resolveArg(arg string) string {
 		return ""
 	}
 	return arg
+}
+
+// compareGT compares two values, treating them as numbers when possible.
+func compareGT(val interface{}, constraintStr string) bool {
+	valNum, valOk := toFloat64(val)
+	constraintNum, constraintOk := toFloat64(constraintStr)
+	if valOk && constraintOk {
+		return valNum > constraintNum
+	}
+	// Fall back to string comparison
+	return fmt.Sprintf("%v", val) > constraintStr
+}
+
+// compareGTE compares two values, treating them as numbers when possible.
+func compareGTE(val interface{}, constraintStr string) bool {
+	valNum, valOk := toFloat64(val)
+	constraintNum, constraintOk := toFloat64(constraintStr)
+	if valOk && constraintOk {
+		return valNum >= constraintNum
+	}
+	return fmt.Sprintf("%v", val) >= constraintStr
+}
+
+// compareLT compares two values, treating them as numbers when possible.
+func compareLT(val interface{}, constraintStr string) bool {
+	valNum, valOk := toFloat64(val)
+	constraintNum, constraintOk := toFloat64(constraintStr)
+	if valOk && constraintOk {
+		return valNum < constraintNum
+	}
+	return fmt.Sprintf("%v", val) < constraintStr
+}
+
+// compareLTE compares two values, treating them as numbers when possible.
+func compareLTE(val interface{}, constraintStr string) bool {
+	valNum, valOk := toFloat64(val)
+	constraintNum, constraintOk := toFloat64(constraintStr)
+	if valOk && constraintOk {
+		return valNum <= constraintNum
+	}
+	return fmt.Sprintf("%v", val) <= constraintStr
+}
+
+// toFloat64 converts a value to float64 if possible.
+func toFloat64(v interface{}) (float64, bool) {
+	switch val := v.(type) {
+	case int:
+		return float64(val), true
+	case int64:
+		return float64(val), true
+	case int32:
+		return float64(val), true
+	case float64:
+		return val, true
+	case float32:
+		return float64(val), true
+	case string:
+		var f float64
+		_, err := fmt.Sscanf(val, "%f", &f)
+		if err == nil {
+			return f, true
+		}
+	}
+	return 0, false
 }

@@ -59,6 +59,37 @@ func Parse(query string) ([]Atom, error) {
 			continue
 		}
 
+		// Handle comparison operators: A > B, A >= B, A < B, A <= B
+		for _, comp := range []struct {
+			op      string
+			predicate string
+		}{
+			{">=", "gte"},
+			{"<=", "lte"},
+			{">", "gt"},
+			{"<", "lt"},
+		} {
+			if strings.Contains(raw, comp.op) {
+				parts := strings.SplitN(raw, comp.op, 2)
+				if len(parts) == 2 {
+					lhs := strings.TrimSpace(parts[0])
+					rhs := strings.TrimSpace(parts[1])
+					parsedAtoms = append(parsedAtoms, Atom{
+						Predicate: comp.predicate,
+						Args:      []string{lhs, rhs},
+					})
+					break
+				}
+			}
+		}
+		// If we successfully parsed a comparison, continue to next atom
+		if len(parsedAtoms) > 0 && parsedAtoms[len(parsedAtoms)-1].Predicate == "gt" ||
+			len(parsedAtoms) > 0 && parsedAtoms[len(parsedAtoms)-1].Predicate == "gte" ||
+			len(parsedAtoms) > 0 && parsedAtoms[len(parsedAtoms)-1].Predicate == "lt" ||
+			len(parsedAtoms) > 0 && parsedAtoms[len(parsedAtoms)-1].Predicate == "lte" {
+			continue
+		}
+
 		// Standard atom: Predicate(Args...)
 		pred, args, err := parseAtomString(raw)
 		if err != nil {
