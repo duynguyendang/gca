@@ -513,3 +513,46 @@ func buildLinksFromPath(path []string) []map[string]string {
 	}
 	return links
 }
+
+// formatResultsForLLM formats query results into a readable string for LLM prompts.
+func formatResultsForLLM(results interface{}) string {
+	if results == nil {
+		return "No results"
+	}
+
+	switch r := results.(type) {
+	case []map[string]any:
+		if len(r) == 0 {
+			return "No results"
+		}
+		var lines []string
+		for i, row := range r {
+			if i >= 10 {
+				lines = append(lines, fmt.Sprintf("... and %d more results", len(r)-10))
+				break
+			}
+			var parts []string
+			for _, v := range row {
+				if str, ok := v.(string); ok && str != "" {
+					parts = append(parts, str)
+				}
+			}
+			if len(parts) > 0 {
+				lines = append(lines, strings.Join(parts, ", "))
+			}
+		}
+		return strings.Join(lines, "\n")
+
+	case map[string]interface{}:
+		if nodes, ok := r["nodes"].([]interface{}); ok {
+			return fmt.Sprintf("%d nodes found", len(nodes))
+		}
+		if links, ok := r["links"].([]interface{}); ok {
+			return fmt.Sprintf("%d links found", len(links))
+		}
+		return "Complex result structure"
+
+	default:
+		return fmt.Sprintf("%v", results)
+	}
+}

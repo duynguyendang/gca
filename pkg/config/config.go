@@ -37,7 +37,7 @@ const (
 
 // Query result cache settings
 const (
-	QueryCacheEnabled      = true
+	QueryCacheEnabled      = false // Disabled: cache key doesn't include TopicID
 	QueryCacheTTL          = 5 * time.Minute
 	QueryCacheMaxSize      = 1000
 	QueryResultLimit       = 1000 // Default limit for query results

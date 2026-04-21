@@ -183,6 +183,9 @@ func (s *Server) setupRoutes() {
 		s.queryService.AddRoute(s.router)
 		logger.Info("Query service routes registered")
 	}
+
+	// Health Summary endpoint
+	s.router.GET("/api/v1/health/summary", s.handleHealthSummary)
 }
 
 // AI Handler

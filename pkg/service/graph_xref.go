@@ -16,8 +16,6 @@ func (s *GraphService) GetCallers(ctx context.Context, projectID, symbolID strin
 		return nil, err
 	}
 
-	symbolID = symbolID
-
 	resolver := ingest.NewSymbolResolver(store)
 	cg, err := resolver.BuildCallGraph(store)
 	if err != nil {
@@ -39,8 +37,6 @@ func (s *GraphService) GetCallees(ctx context.Context, projectID, symbolID strin
 	if err != nil {
 		return nil, err
 	}
-
-	symbolID = symbolID
 
 	resolver := ingest.NewSymbolResolver(store)
 	cg, err := resolver.BuildCallGraph(store)

@@ -28,6 +28,7 @@ import (
 
 type ProjectStoreManager interface {
 	GetStore(projectID string) (*meb.MEBStore, error)
+	GetAnalyticalStore(projectID string) (*meb.MEBStore, error)
 }
 
 type AIService struct {
@@ -182,6 +183,113 @@ func (s *AIService) GenerateText(ctx context.Context, prompt string) (string, er
 	}
 
 	return resp.Text(), nil
+}
+
+// GenerateTextWithContext generates text with diagnostic context injected from the Analytical Store.
+// This implements the "Virtual Attention Sink" pattern for O(1) LLM context building.
+func (s *AIService) GenerateTextWithContext(ctx context.Context, projectID, prompt string) (string, error) {
+	// Build diagnostic context from Analytical Store (O(1) lookup)
+	diagnosticCtx, err := s.BuildDiagnosticContext(ctx, projectID)
+	if err != nil {
+		logger.Warn("Failed to build diagnostic context, using prompt without context", "error", err)
+		return s.GenerateText(ctx, prompt)
+	}
+
+	// Inject diagnostic context into prompt
+	enrichedPrompt := diagnosticCtx + "\n" + prompt
+
+	logger.Debug("Sending Prompt with Diagnostic Context", "provider", s.provider, "context_len", len(diagnosticCtx))
+
+	resp, err := genkit.Generate(ctx, s.g,
+		ai.WithModelName(s.defaultModel),
+		ai.WithPrompt(enrichedPrompt),
+	)
+	if err != nil {
+		logger.Error("LLM Request Failed", "prompt", enrichedPrompt, "error", err)
+		return "", err
+	}
+
+	return resp.Text(), nil
+}
+
+// BuildDiagnosticContext builds a diagnostic context string from the Analytical Store.
+// This provides O(1) lookup of pre-computed architectural insights.
+func (s *AIService) BuildDiagnosticContext(ctx context.Context, projectID string) (string, error) {
+	if projectID == "" {
+		return "", fmt.Errorf("projectID is required")
+	}
+
+	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get analytical store: %w", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("=== DIAGNOSTIC CONTEXT ===\n")
+	sb.WriteString(fmt.Sprintf("Project: %s\n", projectID))
+
+	// Query for entry points
+	entryQuery := `triples(Subject, "is_entry_point", "true")`
+	entryResults, err := gcamdb.Query(ctx, analyticalStore, entryQuery)
+	if err == nil && len(entryResults) > 0 {
+		sb.WriteString("Entry Points:\n")
+		count := 0
+		for _, r := range entryResults {
+			if subject, ok := r["Subject"].(string); ok && subject != "" && count < 10 {
+				sb.WriteString(fmt.Sprintf("- %s\n", subject))
+				count++
+			}
+		}
+		if len(entryResults) > 10 {
+			sb.WriteString(fmt.Sprintf("- ... and %d more\n", len(entryResults)-10))
+		}
+	}
+
+	// Query for hub files
+	hubQuery := `triples(Subject, "has_hub_score", Score)`
+	hubResults, err := gcamdb.Query(ctx, analyticalStore, hubQuery)
+	if err == nil && len(hubResults) > 0 {
+		sb.WriteString("Hub Files (high connectivity):\n")
+		count := 0
+		for _, r := range hubResults {
+			subject, _ := r["Subject"].(string)
+			scoreStr, _ := r["Score"].(string)
+			if subject != "" && count < 5 {
+				sb.WriteString(fmt.Sprintf("- %s (score: %s)\n", subject, scoreStr))
+				count++
+			}
+		}
+		if len(hubResults) > 5 {
+			sb.WriteString(fmt.Sprintf("- ... and %d more\n", len(hubResults)-5))
+		}
+	}
+
+	// Query for smells
+	smellQuery := `triples(Subject, "has_smell", Object)`
+	smellResults, err := gcamdb.Query(ctx, analyticalStore, smellQuery)
+	if err == nil && len(smellResults) > 0 {
+		sb.WriteString("Architectural Issues:\n")
+		count := 0
+		for _, r := range smellResults {
+			subject, _ := r["Subject"].(string)
+			object, _ := r["Object"].(string)
+			if subject != "" && object != "" && count < 10 {
+				smellType := object
+				if idx := strings.Index(object, ":"); idx > 0 {
+					smellType = object[:idx]
+				}
+				sb.WriteString(fmt.Sprintf("- %s (%s)\n", subject, smellType))
+				count++
+			}
+		}
+		if len(smellResults) > 10 {
+			sb.WriteString(fmt.Sprintf("- ... and %d more issues\n", len(smellResults)-10))
+		}
+	}
+
+	sb.WriteString("=============================\n")
+
+	return sb.String(), nil
 }
 
 // cacheResponse caches an AI response for a given query
@@ -1022,9 +1130,38 @@ func (s *AIService) HandleAsk(ctx context.Context, req AskRequest) (*AskResponse
 		return resp, nil
 	}
 
-	// Call AI synthesis (the slow part)
-	synthResult, err := SynthesizeAnswer(ctx, intentResult.Intent, req.Query, resp.Query, results, store)
-	if err == nil {
+	// For intents that benefit from architectural context, use LLM with diagnostic context
+	// This implements the "Virtual Attention Sink" pattern
+	useContextIntents := map[Intent]bool{
+		IntentChat:        true,
+		IntentFind:        true,
+		IntentSummarize:   true,
+		IntentExplain:    true,
+		IntentRefactor:   true,
+		IntentSecurity:    true,
+		IntentPerformance: true,
+	}
+
+	var synthResult *SynthesisResult
+	if useContextIntents[intentResult.Intent] {
+		// Use LLM with diagnostic context injection
+		llmPrompt := fmt.Sprintf("Based on the following query results for project %s:\n\nQuery: %s\nResults: %v\n\nUser Question: %s\n\nPlease provide a concise summary of the architectural health and any problematic files.",
+			req.ProjectID, resp.Query, formatResultsForLLM(results), req.Query)
+		answer, err := s.GenerateTextWithContext(ctx, req.ProjectID, llmPrompt)
+		if err == nil {
+			synthResult = &SynthesisResult{
+				Answer:  answer,
+				Summary: fmt.Sprintf("Found %v", results),
+			}
+		}
+	}
+
+	// Fallback to heuristic synthesis if LLM with context failed or not applicable
+	if synthResult == nil {
+		synthResult, _ = SynthesizeAnswer(ctx, intentResult.Intent, req.Query, resp.Query, results, store)
+	}
+
+	if synthResult != nil {
 		resp.Answer = synthResult.Answer
 		resp.Summary = synthResult.Summary
 		// Cache the successful response

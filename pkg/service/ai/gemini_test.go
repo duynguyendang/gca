@@ -22,6 +22,11 @@ func (m *MockManager) GetStore(projectID string) (*meb.MEBStore, error) {
 	return args.Get(0).(*meb.MEBStore), args.Error(1)
 }
 
+func (m *MockManager) GetAnalyticalStore(projectID string) (*meb.MEBStore, error) {
+	args := m.Called(projectID)
+	return args.Get(0).(*meb.MEBStore), args.Error(1)
+}
+
 func TestHandleRequestPerformance(t *testing.T) {
 	// Setup Temp Store
 	dir := t.TempDir()
