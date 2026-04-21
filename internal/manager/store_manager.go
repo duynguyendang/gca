@@ -124,6 +124,8 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 
 	// Check if exists in LRU (under lock for thread safety)
 	if s, ok := sm.projects.Get(projectID); ok {
+		// Reset to GlobalTopicID to ensure correct partition for source queries
+		s.SetTopicID(GlobalTopicID(projectID))
 		return s, nil
 	}
 
@@ -226,6 +228,9 @@ func (sm *StoreManager) ListProjects() ([]ProjectMetadata, error) {
 
 // CloseAll closes all open stores.
 func (sm *StoreManager) CloseAll() {
+	if sm.ephemeral != nil {
+		sm.ephemeral.Close()
+	}
 	sm.projects.Purge()
 }
 

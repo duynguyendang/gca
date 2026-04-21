@@ -55,22 +55,29 @@ func NewAnalyzer(sm StoreManagerInterface, ts TemplateStoreInterface) *Analyzer 
 }
 
 // RunStaticAnalysis executes the full static analysis pipeline:
-// 1. Compute centrality and entry points -> Analytical Store
-// 2. Execute smell detection templates -> Analytical Store
+// 1. Clear old analytical data
+// 2. Compute centrality and entry points -> Analytical Store
+// 3. Execute smell detection templates -> Analytical Store
 func (a *Analyzer) RunStaticAnalysis(ctx context.Context, projectID string) error {
 	log.Printf("Starting static analysis for project: %s", projectID)
 
-	// Step 1: Compute centrality and entry points
+	// Step 1: Clear old analytical data to prevent stale smells from previous ingests
+	if err := a.clearAnalyticalData(ctx, projectID); err != nil {
+		log.Printf("Warning: failed to clear old analytical data: %v", err)
+		// Continue anyway - don't block analysis if clear fails
+	}
+
+	// Step 2: Compute centrality and entry points
 	if err := a.computeCentrality(ctx, projectID); err != nil {
 		log.Printf("Warning: centrality computation failed: %v", err)
 	}
 
-	// Step 2: Detect smells using hardcoded queries
+	// Step 3: Detect smells using hardcoded queries
 	if err := a.detectSmells(ctx, projectID); err != nil {
 		log.Printf("Warning: smell detection failed: %v", err)
 	}
 
-	// Step 3: Execute template-based queries if template store is available
+	// Step 4: Execute template-based queries if template store is available
 	if a.templateStore != nil {
 		if err := a.executeTemplateQueries(ctx, projectID); err != nil {
 			log.Printf("Warning: template query execution failed: %v", err)
@@ -78,6 +85,55 @@ func (a *Analyzer) RunStaticAnalysis(ctx context.Context, projectID string) erro
 	}
 
 	log.Printf("Static analysis completed for project: %s", projectID)
+	return nil
+}
+
+// clearAnalyticalData removes old smells, hub scores, entry points, and centrality data
+// from the analytical store to prevent stale data from previous ingests
+func (a *Analyzer) clearAnalyticalData(ctx context.Context, projectID string) error {
+	analyticalStore, err := a.storeManager.GetAnalyticalStore(projectID)
+	if err != nil {
+		return fmt.Errorf("failed to get analytical store: %w", err)
+	}
+
+	// Clear predicates that are written by the analyzer
+	predicatesToClear := []string{
+		"has_smell",
+		"has_hub_score",
+		"is_entry_point",
+		"has_centrality",
+	}
+
+	clearedCount := 0
+	for _, pred := range predicatesToClear {
+		log.Printf("Clearing %s facts for project %s...", pred, projectID)
+		
+		// Collect all facts to delete first (avoid iterator invalidation during deletion)
+		var factsToDelete []meb.Fact
+		for fact, err := range analyticalStore.ScanContext(ctx, "", pred, "") {
+			if err != nil {
+				log.Printf("Warning: error scanning %s facts: %v", pred, err)
+				continue
+			}
+			factsToDelete = append(factsToDelete, fact)
+		}
+		
+		log.Printf("Found %d %s facts to clear", len(factsToDelete), pred)
+
+		// Now delete all collected facts
+		for _, fact := range factsToDelete {
+			if err := analyticalStore.DeleteFactsBySubject(fact.Subject); err != nil {
+				log.Printf("Warning: failed to delete fact for subject %s: %v", fact.Subject, err)
+			} else {
+				clearedCount++
+			}
+		}
+	}
+
+	if clearedCount > 0 {
+		log.Printf("Cleared %d old analytical facts for project: %s", clearedCount, projectID)
+	}
+
 	return nil
 }
 
@@ -149,6 +205,11 @@ func extractString(m map[string]interface{}, key string) string {
 // It runs asynchronously to avoid blocking the ingestion process.
 func (a *Analyzer) RunPostIngestAnalysis(ctx context.Context, projectID string) error {
 	log.Printf("Starting post-ingest analysis for project: %s", projectID)
+
+	// Clear old analytical data first to prevent stale smells from previous ingests
+	if err := a.clearAnalyticalData(ctx, projectID); err != nil {
+		log.Printf("Warning: failed to clear old analytical data: %v", err)
+	}
 
 	// Run centrality computation
 	if err := a.computeCentrality(ctx, projectID); err != nil {

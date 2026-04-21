@@ -1117,12 +1117,6 @@ func (s *Server) handleHealthSummary(c *gin.Context) {
 		return
 	}
 
-	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
 	// Flat smells list for frontend compatibility
 	type Smell struct {
 		File      string `json:"file"`
@@ -1135,6 +1129,13 @@ func (s *Server) handleHealthSummary(c *gin.Context) {
 	totalSmells := 0
 	totalHubs := 0
 	totalEntrypoints := 0
+
+	// Fetch from the Analytical partition where the smells actually live.
+	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
 	// Query for smells
 	smellQuery := `triples(Subject, "has_smell", Object)`
