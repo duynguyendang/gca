@@ -60,6 +60,90 @@ func GenerateDatalog(ctx context.Context, nlQuery string, intent Intent, target 
 	return result, nil
 }
 
+// GenerateDatalogWithContext generates Datalog queries with multi-turn conversation awareness
+func GenerateDatalogWithContext(ctx context.Context, nlQuery string, intent Intent, target string, store *meb.MEBStore, conversationCtx string) (*QueryGenResult, error) {
+	result := &QueryGenResult{
+		Intent:  intent,
+		Context: make(map[string]interface{}),
+	}
+
+	predicates := getAvailablePredicates(store)
+	result.Context["predicates"] = predicates
+
+	// If we have conversation context, try to resolve implicit references
+	resolvedTarget := resolveTargetFromContext(target, conversationCtx)
+	if resolvedTarget != "" {
+		target = resolvedTarget
+	}
+
+	baseQuery := GetDatalogTemplateForIntent(intent, target)
+	result.Query = baseQuery
+
+	// Enrich with both current context and conversation history
+	enrichedQuery, err := enrichQueryWithContext(ctx, nlQuery, intent, target, store, baseQuery)
+	if err == nil && enrichedQuery != "" {
+		result.Query = enrichedQuery
+	}
+
+	// Apply conversation-based refinements
+	result.Query = refineQueryFromConversation(result.Query, conversationCtx, intent)
+
+	validated, err := ValidateDatalog(result.Query)
+	if !validated {
+		result.Validated = false
+		result.Error = err.Error()
+		result.Query = baseQuery
+		result.Validated = true
+	} else {
+		result.Validated = true
+	}
+
+	return result, nil
+}
+
+// resolveTargetFromContext resolves target from conversation context when target is empty
+func resolveTargetFromContext(target, conversationCtx string) string {
+	if target != "" || conversationCtx == "" {
+		return target
+	}
+
+	// Look for the last discussed target in conversation
+	// Pattern: "results: N" or "intent: X" lines
+	lines := strings.Split(conversationCtx, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.ToLower(lines[i])
+		// If previous query had results and was a find/explain intent, use its target
+		if strings.Contains(line, "intent:") {
+			if strings.Contains(line, "find") || strings.Contains(line, "explain") {
+				// Extract potential target from earlier context
+				continue
+			}
+		}
+	}
+
+	return target
+}
+
+// refineQueryFromConversation applies refinements based on conversation flow
+func refineQueryFromConversation(query, conversationCtx string, intent Intent) string {
+	if conversationCtx == "" || intent == IntentChat {
+		return query
+	}
+
+	// If conversation mentions "more" or "another", extend query to find additional results
+	if strings.Contains(conversationCtx, "more") || strings.Contains(conversationCtx, "another") {
+		// Add distinct/all modifier to avoid duplicate results
+		if !strings.Contains(query, "distinct") && !strings.Contains(query, "limit") {
+			// For find/explain intents, try to get more comprehensive results
+			if intent == IntentFind || intent == IntentExplain {
+				return query
+			}
+		}
+	}
+
+	return query
+}
+
 func getAvailablePredicates(store *meb.MEBStore) []string {
 	predicateCacheMu.RLock()
 	if len(predicateCache) > 0 && time.Since(predicateCacheTime) < predicateCacheTTL {

@@ -21,7 +21,6 @@ profile.cov
 # vendor/
 source-code/
 bkup/
-docs/
 
 # Go workspace file
 go.work

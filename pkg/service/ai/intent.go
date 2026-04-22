@@ -1,6 +1,8 @@
 package ai
 
 import (
+	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -25,7 +27,43 @@ type IntentResult struct {
 	Confidence float64
 	Target     string
 	Extracted  map[string]string
+	Features   IntentFeatures
 }
+
+type IntentFeatures struct {
+	HasQuestionWord   bool
+	HasSymbol          bool
+	QueryLength        int
+	StructuralScore    float64
+	DomainSpecificity   float64
+	CoOccurrenceBonus  float64
+}
+
+// intentPatternWithFeatures extends basic pattern with metadata for scoring
+type intentPatternWithFeatures struct {
+	intent            Intent
+	patterns          []string
+	confidence        float64
+	specificityWeight float64 // 0-1, higher = more specific intent indicator
+	domainIndicators  []string
+}
+
+// strongIntentIndicators are keywords that strongly indicate a specific intent
+var strongIntentIndicators = map[Intent][]string{
+	IntentSecurity:    {"sql injection", "xss", "csrf", "authentication", "authorization", "sql-inject", "sanitiz", "vulnerabilit", "audit"},
+	IntentRefactor:    {"refactor", "technical debt", "code smell", "cyclic complexity", "coupling"},
+	IntentTestGen:     {"unit test", "integration test", "test coverage", "write test", "generate test", "jest", "pytest", "go test"},
+	IntentPerformance:  {"performance", "bottleneck", "optimize", "memory leak", "cpu", "latency", "slow query"},
+}
+
+// questionWords that indicate interrogative intent
+var questionWords = []string{"who", "what", "where", "when", "why", "how", "which", "whose", "whom"}
+
+// structuralIndicators for computing structural score
+var structuralIndicators = []string{"?", "how do", "how does", "how can", "what is", "what are", "show me", "find all", "list"}
+
+// symbolPattern matches common symbol formats (Package.Type, file/path, CamelCase)
+var symbolPattern = regexp.MustCompile(`([A-Z][a-zA-Z0-9]*\.[A-Z][a-zA-Z0-9]*|[a-zA-Z0-9_]+/[a-zA-Z0-9_./]+|[A-Z][a-z]+[A-Z][a-zA-Z0-9]*)`)
 
 var intentPatterns = []struct {
 	intent     Intent
@@ -170,18 +208,41 @@ var intentPatterns = []struct {
 }
 
 func ClassifyIntent(query string) IntentResult {
-	query = strings.ToLower(query)
+	queryLower := strings.ToLower(query)
+	features := extractIntentFeatures(query, queryLower)
+
 	bestResult := IntentResult{
 		Intent:     IntentChat,
 		Confidence: 0.3,
 		Extracted:  make(map[string]string),
+		Features:   features,
 	}
 
+	// Phase 1: Strong domain-specific indicators (highest priority)
+	score := checkStrongIntentIndicators(queryLower, strongIntentIndicators)
+	if score.Confidence > 0 {
+		bestResult.Intent = score.Intent
+		bestResult.Confidence = score.Confidence
+		return bestResult
+	}
+
+	// Phase 2: Pattern matching with contextual boosting
 	for _, ip := range intentPatterns {
 		for _, pattern := range ip.patterns {
 			matches := findSubstringMatch(query, pattern)
 			if matches != nil {
 				confidence := ip.confidence
+
+				// Boost confidence if structural indicators present
+				if features.StructuralScore > 0 {
+					confidence += features.StructuralScore * 0.1
+				}
+
+				// Boost if query length is appropriate for the intent
+				if features.QueryLength > 10 && features.QueryLength < 100 {
+					confidence += 0.05
+				}
+
 				if len(matches) > 1 && matches[1] != "" {
 					confidence += 0.1
 					bestResult.Target = matches[1]
@@ -201,12 +262,363 @@ func ClassifyIntent(query string) IntentResult {
 		}
 	}
 
+	// Phase 3: Symbol-based resolution boost
+	if features.HasSymbol && features.QueryLength < 50 {
+		bestResult.Confidence += 0.1
+		if bestResult.Intent == IntentChat {
+			bestResult.Intent = IntentFind
+		}
+	}
+
+	// Phase 4: Question word bonus
+	if features.HasQuestionWord {
+		if bestResult.Intent == IntentChat && features.QueryLength < 80 {
+			bestResult.Confidence = min(bestResult.Confidence+0.15, 0.85)
+		}
+	}
+
+	// Phase 5: Co-occurrence bonus for intent switching based on context
+	if features.CoOccurrenceBonus > 0 {
+		bestResult.Confidence += features.CoOccurrenceBonus
+	}
+
+	// Fallback threshold
 	if bestResult.Confidence < 0.5 {
 		bestResult.Intent = IntentChat
-		bestResult.Confidence = 0.5
+		bestResult.Confidence = max(0.5, bestResult.Confidence)
 	}
 
 	return bestResult
+}
+
+func extractIntentFeatures(query, queryLower string) IntentFeatures {
+	f := IntentFeatures{
+		QueryLength: len(query),
+	}
+
+	// Check for question words
+	for _, qw := range questionWords {
+		if strings.HasPrefix(queryLower, qw) || strings.Contains(queryLower, " "+qw+" ") {
+			f.HasQuestionWord = true
+			break
+		}
+	}
+
+	// Check for symbols
+	if symbolPattern.MatchString(query) {
+		f.HasSymbol = true
+	}
+
+	// Structural score: count structural indicators
+	structuralMatches := 0
+	for _, indicator := range structuralIndicators {
+		if strings.Contains(queryLower, indicator) {
+			structuralMatches++
+		}
+	}
+	f.StructuralScore = float64(structuralMatches) / float64(len(structuralIndicators))
+
+	// Domain specificity: shorter queries with technical terms = higher specificity
+	technicalTerms := 0
+	technicalCount := map[string]int{
+		"function": 1, "method": 1, "class": 1, "interface": 1,
+		"api": 1, "endpoint": 1, "route": 1, "handler": 1,
+		"module": 1, "package": 1, "struct": 1, "enum": 1,
+		"database": 1, "query": 1, "cache": 1, "middleware": 1,
+	}
+	for term, weight := range technicalCount {
+		if strings.Contains(queryLower, term) {
+			technicalTerms += weight
+		}
+	}
+	f.DomainSpecificity = float64(technicalTerms) / max(float64(f.QueryLength)/50.0, 1.0)
+
+	return f
+}
+
+func checkStrongIntentIndicators(query string, indicators map[Intent][]string) IntentResult {
+	// Security check (highest priority for security-related queries)
+	securityTerms := 0
+	for _, term := range indicators[IntentSecurity] {
+		if strings.Contains(query, term) {
+			securityTerms++
+		}
+	}
+	if securityTerms >= 2 {
+		return IntentResult{
+			Intent:     IntentSecurity,
+			Confidence: 0.95,
+			Extracted:  map[string]string{"security_terms": query},
+		}
+	}
+	if securityTerms == 1 {
+		return IntentResult{
+			Intent:     IntentSecurity,
+			Confidence: 0.85,
+			Extracted:  map[string]string{"security_term": query},
+		}
+	}
+
+	// Refactor check
+	refactorTerms := 0
+	for _, term := range indicators[IntentRefactor] {
+		if strings.Contains(query, term) {
+			refactorTerms++
+		}
+	}
+	if refactorTerms >= 1 {
+		return IntentResult{
+			Intent:     IntentRefactor,
+			Confidence: 0.90,
+			Extracted:  map[string]string{"refactor_terms": query},
+		}
+	}
+
+	// TestGen check
+	testTerms := 0
+	for _, term := range indicators[IntentTestGen] {
+		if strings.Contains(query, term) {
+			testTerms++
+		}
+	}
+	if testTerms >= 2 {
+		return IntentResult{
+			Intent:     IntentTestGen,
+			Confidence: 0.93,
+			Extracted:  map[string]string{"test_terms": query},
+		}
+	}
+	if testTerms == 1 && (strings.Contains(query, "test") || strings.Contains(query, "coverage")) {
+		return IntentResult{
+			Intent:     IntentTestGen,
+			Confidence: 0.88,
+		}
+	}
+
+	// Performance check
+	perfTerms := 0
+	for _, term := range indicators[IntentPerformance] {
+		if strings.Contains(query, term) {
+			perfTerms++
+		}
+	}
+	if perfTerms >= 2 {
+		return IntentResult{
+			Intent:     IntentPerformance,
+			Confidence: 0.92,
+		}
+	}
+	if perfTerms == 1 {
+		return IntentResult{
+			Intent:     IntentPerformance,
+			Confidence: 0.85,
+		}
+	}
+
+	return IntentResult{Confidence: -1}
+}
+
+func min(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// ClassifyIntentWithContext classifies intent while considering conversation history
+func ClassifyIntentWithContext(query string, history []ConversationTurn) IntentResult {
+	// Base classification
+	result := ClassifyIntent(query)
+
+	// Apply context-based refinements from conversation history
+	if len(history) > 0 {
+		result = refineFromHistory(result, query, history)
+	}
+
+	return result
+}
+
+// refineFromHistory applies contextual refinements based on conversation flow
+func refineFromHistory(result IntentResult, query string, history []ConversationTurn) IntentResult {
+	lastTurn := history[len(history)-1]
+
+	// If user is following up (short query with pronouns), maintain context
+	if isFollowUp(query) {
+		// Boost confidence if we're continuing in same intent
+		if string(result.Intent) == lastTurn.Intent {
+			result.Confidence = min(result.Confidence+0.15, 0.95)
+		}
+
+		// Detect pronoun references to previous targets
+		if pronounRef := detectPronounReference(query); pronounRef != "" {
+			result.Target = pronounRef
+			result.Extracted["pronoun_target"] = pronounRef
+			result.Confidence += 0.1
+		}
+	}
+
+	// Context continuity bonus: if we're doing sequential exploration
+	if len(history) >= 2 {
+		sequentialBonus := calculateSequentialBonus(result.Intent, history)
+		result.Confidence += sequentialBonus
+		result.Features.CoOccurrenceBonus = sequentialBonus
+	}
+
+	// Intent transition detection: user moving from explain to find
+	if canInferTransition(result.Intent, query, history) {
+		result.Intent = IntentFind
+		result.Confidence = 0.75
+	}
+
+	return result
+}
+
+// isFollowUp detects if the query is a follow-up (short with contextual references)
+func isFollowUp(query string) bool {
+	shortFollowUp := []string{"it", "that", "them", "this", "there", "why", "how", "what", "and then", "also", "another", "more", "else"}
+	queryLower := strings.ToLower(query)
+	trimmed := strings.TrimSpace(query)
+
+	// Short queries that likely reference previous context
+	if len(trimmed) < 30 {
+		for _, phrase := range shortFollowUp {
+			if strings.HasPrefix(queryLower, phrase) {
+				return true
+			}
+		}
+	}
+
+	// Check for implicit follow-up patterns
+	followUpPatterns := []string{
+		`^(and|but|so|then)\s+`,
+		`^(why|how|what)\s+`,
+		`^show\s+(me\s+)?(more|others?|another)`,
+		`^(just|only)\s+(one|more|a\s+few)`,
+	}
+	for _, pattern := range followUpPatterns {
+		if regexp.MustCompile(pattern).MatchString(queryLower) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// detectPronounReference resolves pronouns to their antecedent from history
+func detectPronounReference(query string) string {
+	queryLower := strings.ToLower(query)
+
+	// Pattern: query starts with pronoun or demonstrative
+	pronounPatterns := []string{
+		`^(it|this|that|them|those)\s+(is|was|are|were|can|does|doesn|should|would)`,
+		`^(it|this|that)\s+(call|use|invoke|have|has|contain)`,
+		`^(what|where)\s+(is|are|was)\s+(it|this|that)`,
+	}
+
+	for _, pattern := range pronounPatterns {
+		if regexp.MustCompile(pattern).MatchString(queryLower) {
+			return "previous_target"
+		}
+	}
+
+	return ""
+}
+
+// calculateSequentialBonus detects if the current query continues a pattern
+func calculateSequentialBonus(current Intent, history []ConversationTurn) float64 {
+	if len(history) < 2 {
+		return 0
+	}
+
+	// Count consecutive same-intent queries
+	sameIntentCount := 0
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Intent == string(current) {
+			sameIntentCount++
+		} else {
+			break
+		}
+	}
+
+	// Sequential exploration bonus
+	if sameIntentCount >= 2 {
+		return 0.1 * float64(sameIntentCount)
+	}
+
+	// Complementary intent bonus (e.g., explain -> find)
+	prev := Intent(history[len(history)-1].Intent)
+	if isComplementaryIntent(prev, current) {
+		return 0.08
+	}
+
+	return 0
+}
+
+// isComplementaryIntent detects natural intent transitions
+func isComplementaryIntent(prev, curr Intent) bool {
+	transitions := map[Intent][]Intent{
+		IntentExplain:   {IntentFind, IntentWhoCalls, IntentWhatCalls},
+		IntentSummarize: {IntentFind, IntentExplain},
+		IntentFind:     {IntentExplain, IntentWhoCalls},
+		IntentWhoCalls: {IntentFind, IntentExplain},
+	}
+
+	if candidates, ok := transitions[prev]; ok {
+		for _, c := range candidates {
+			if c == curr {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// canInferTransition detects when user intent shifts based on query patterns
+func canInferTransition(current Intent, query string, history []ConversationTurn) bool {
+	queryLower := strings.ToLower(query)
+
+	// "show me where" after "explain" -> likely wants to find
+	if current == IntentExplain && strings.Contains(queryLower, "where") {
+		return true
+	}
+
+	// "list all" after "what is" -> switch to find
+	if current == IntentExplain && strings.Contains(queryLower, "list all") {
+		return true
+	}
+
+	return false
+}
+
+// buildConversationContext creates a context summary for query generation
+func buildConversationContext(history []ConversationTurn) string {
+	if len(history) == 0 {
+		return ""
+	}
+
+	var ctx strings.Builder
+	ctx.WriteString("Previous conversation:\n")
+
+	// Show last 3 turns max
+	start := 0
+	if len(history) > 3 {
+		start = len(history) - 3
+	}
+
+	for i := start; i < len(history); i++ {
+		turn := history[i]
+		ctx.WriteString(fmt.Sprintf("- Q%d: %s (intent: %s, results: %d)\n",
+			i+1, turn.UserInput, turn.Intent, turn.ResultCount))
+	}
+
+	return ctx.String()
 }
 
 func findSubstringMatch(s, pattern string) []string {
