@@ -186,6 +186,7 @@ func (s *Server) setupRoutes() {
 
 	// Health Summary endpoint
 	s.router.GET("/api/v1/health/summary", s.handleHealthSummary)
+	s.router.GET("/api/v1/health/summary/v2", s.handleHealthSummaryV2)
 }
 
 // AI Handler

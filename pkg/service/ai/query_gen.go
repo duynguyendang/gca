@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -52,7 +53,6 @@ func GenerateDatalog(ctx context.Context, nlQuery string, intent Intent, target 
 		result.Validated = false
 		result.Error = err.Error()
 		result.Query = baseQuery
-		result.Validated = true
 	} else {
 		result.Validated = true
 	}
@@ -93,7 +93,6 @@ func GenerateDatalogWithContext(ctx context.Context, nlQuery string, intent Inte
 		result.Validated = false
 		result.Error = err.Error()
 		result.Query = baseQuery
-		result.Validated = true
 	} else {
 		result.Validated = true
 	}
@@ -107,16 +106,49 @@ func resolveTargetFromContext(target, conversationCtx string) string {
 		return target
 	}
 
-	// Look for the last discussed target in conversation
-	// Pattern: "results: N" or "intent: X" lines
+	// Look for the last discussed target in conversation history
+	// Conversation format from buildConversationContext:
+	// "- Q1: <user input> (intent: <intent>, results: <count>)"
 	lines := strings.Split(conversationCtx, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.ToLower(lines[i])
-		// If previous query had results and was a find/explain intent, use its target
-		if strings.Contains(line, "intent:") {
-			if strings.Contains(line, "find") || strings.Contains(line, "explain") {
-				// Extract potential target from earlier context
-				continue
+		line := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(line, "- Q") {
+			continue
+		}
+
+		// Extract intent from the parenthetical: (intent: <intent>, results: N)
+		intentStart := strings.Index(line, "(intent:")
+		if intentStart < 0 {
+			continue
+		}
+		intentEnd := intentStart + strings.Index(line[intentStart+1:], ",")
+		if intentEnd < 0 {
+			continue
+		}
+		intentVal := strings.TrimSpace(line[intentStart+8 : intentEnd])
+
+		// Only use find/explain intents as they reference a target
+		if intentVal != "find" && intentVal != "explain" && intentVal != "what_calls" && intentVal != "who_calls" {
+			continue
+		}
+
+		// Extract the user query portion: "- Q1: <query> (intent:"
+		queryStart := strings.Index(line, ": ")
+		intentParen := strings.Index(line, " (intent:")
+		if queryStart < 0 || intentParen < 0 {
+			continue
+		}
+		query := line[queryStart+2 : intentParen]
+
+		// Look for file/symbol patterns in the query (e.g., "auth.go", "service/auth", "AuthService")
+		targetPatterns := []string{
+			`[a-zA-Z0-9_/]+\.go\b`,
+			`[A-Z][a-zA-Z0-9]+Service`,
+			`[a-z][a-zA-Z0-9]+/[a-z][a-zA-Z0-9]+`,
+		}
+		for _, pattern := range targetPatterns {
+			if match := regexp.MustCompile(pattern).FindString(query); match != "" {
+				return match
 			}
 		}
 	}
@@ -130,18 +162,63 @@ func refineQueryFromConversation(query, conversationCtx string, intent Intent) s
 		return query
 	}
 
-	// If conversation mentions "more" or "another", extend query to find additional results
-	if strings.Contains(conversationCtx, "more") || strings.Contains(conversationCtx, "another") {
-		// Add distinct/all modifier to avoid duplicate results
+	historyLower := strings.ToLower(conversationCtx)
+
+	// If user asks for "more" or "another", add distinct modifier to avoid duplicate results
+	if strings.Contains(historyLower, "more") || strings.Contains(historyLower, "another") {
 		if !strings.Contains(query, "distinct") && !strings.Contains(query, "limit") {
-			// For find/explain intents, try to get more comprehensive results
 			if intent == IntentFind || intent == IntentExplain {
-				return query
+				// Append distinct to existing predicates to deduplicate
+				if strings.HasSuffix(query, ").") {
+					query = strings.TrimSuffix(query, ")") + ", distinct)"
+				} else if strings.HasSuffix(query, ")") {
+					query = query[:len(query)-1] + ", distinct)"
+				}
+			}
+		}
+	}
+
+	// If conversation shows counting behavior (e.g., "how many", "count", "total"),
+	// add aggregation hint to the query
+	if strings.Contains(historyLower, "how many") || strings.Contains(historyLower, "count") || strings.Contains(historyLower, "total") {
+		if intent == IntentExplain || intent == IntentSummarize {
+			if !strings.Contains(query, "findall") && !strings.Contains(query, "list.length") {
+				// Wrap query to also return count
+				query = fmt.Sprintf("findall(X, %s, L), list.length(L, Count)", query)
+			}
+		}
+	}
+
+	// If user is following up on a specific file/module, broaden scope to include related symbols
+	if strings.Contains(historyLower, "related") || strings.Contains(historyLower, "everything about") {
+		if intent == IntentFind && !strings.Contains(query, "references") {
+			// Extend to also include references predicate
+			if strings.Contains(query, "triples(") {
+				parts := strings.Split(query, ",")
+				if len(parts) >= 1 {
+					base := strings.TrimSpace(parts[0])
+					query = base + fmt.Sprintf(", triples(?s, \"references\", %s)", extractTargetFromQuery(base))
+				}
 			}
 		}
 	}
 
 	return query
+}
+
+// extractTargetFromQuery pulls a symbol ID out of a triples predicate for use in extensions
+func extractTargetFromQuery(query string) string {
+	// Extract the quoted target from patterns like: triples("foo.go", "calls", ?x)
+	re := regexp.MustCompile(`triples\([^,]+,\s*"[^"]+",\s*"?([^")]+)"?\)`)
+	if match := re.FindStringSubmatch(query); len(match) > 1 {
+		return match[1]
+	}
+	// Fallback: extract first quoted string
+	re2 := regexp.MustCompile(`"([^"]+)"`)
+	if matches := re2.FindAllStringSubmatch(query, -1); len(matches) > 0 {
+		return matches[0][1]
+	}
+	return "?"
 }
 
 func getAvailablePredicates(store *meb.MEBStore) []string {

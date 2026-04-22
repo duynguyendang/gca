@@ -14,18 +14,16 @@ query_metadata("smell_unsanitized_db_access", "remediation", "If no sanitizer ex
 direct_call(A, B) :- triples(A, "calls", B).
 
 % Recursive predicate: transitive reachability WITHOUT hitting a sanitizer
-reach_without_sanitizer(A, C) :-
+% Depth bound of 10 prevents runaway recursion on large cyclic graphs
+reach_without_sanitizer(A, C, Depth) :-
+    Depth < 10,
     direct_call(A, B),
     not triples(A, "has_tag", "sanitizer"),
-    reach_without_sanitizer(B, C).
-
-reach_without_sanitizer(A, B) :-
-    direct_call(A, B),
-    not triples(A, "has_tag", "sanitizer"),
-    not triples(B, "has_tag", "database"). % B is not DB, so continue path
+    NextDepth is Depth + 1,
+    reach_without_sanitizer(B, C, NextDepth).
 
 % Termination: reached a database node without a sanitizer on the path
-reach_without_sanitizer(A, B) :-
+reach_without_sanitizer(A, B, _Depth) :-
     direct_call(A, B),
     not triples(A, "has_tag", "sanitizer"),
     triples(B, "has_tag", "database").
@@ -35,19 +33,19 @@ reach_without_sanitizer(A, B) :-
 query("smell_unsanitized_db_access", API, DB, Path) :-
     triples(API, "has_tag", "public_api"),
     triples(DB, "has_tag", "database"),
-    reach_without_sanitizer(API, DB),
+    reach_without_sanitizer(API, DB, 0),
     Path = string(API, " -> ", DB).
 
 % Variant: just the file-level pair (no path tracing)
 query("smell_unsanitized_db_access_pair", API, DB) :-
     triples(API, "has_tag", "public_api"),
     triples(DB, "has_tag", "database"),
-    reach_without_sanitizer(API, DB).
+    reach_without_sanitizer(API, DB, 0).
 
 % Count unsafe APIs (how many public APIs reach DB without sanitizer)
 query("smell_unsanitized_db_access_count", API, Count) :-
     triples(API, "has_tag", "public_api"),
-    findall(DB, (triples(DB, "has_tag", "database"), reach_without_sanitizer(API, DB)), DBs),
+    findall(DB, (triples(DB, "has_tag", "database"), reach_without_sanitizer(API, DB, 0)), DBs),
     list.length(DBs, Count),
     Count > 0.
 

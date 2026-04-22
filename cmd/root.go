@@ -94,8 +94,12 @@ func createBaseContext() (context.Context, context.CancelFunc) {
 }
 
 // createStore creates a new MEB store with appropriate configuration
-func createStore(readOnly bool, dataPath string) (*meb.MEBStore, error) {
-	cfg := store.DefaultConfig(dataPath)
+func createStore(readOnly bool, dataPath string, projectName string) (*meb.MEBStore, error) {
+	storePath := dataPath
+	if projectName != "" {
+		storePath = filepath.Join(dataPath, projectName)
+	}
+	cfg := store.DefaultConfig(storePath)
 	cfg.SyncWrites = true
 
 	if lowMem {
@@ -107,9 +111,9 @@ func createStore(readOnly bool, dataPath string) (*meb.MEBStore, error) {
 
 	if readOnly {
 		cfg.ReadOnly = true
-		fmt.Printf("Running in READ-ONLY mode. Data directory: %s\n", dataPath)
+		fmt.Printf("Running in READ-ONLY mode. Data directory: %s\n", storePath)
 	} else {
-		fmt.Printf("Running in INGESTION mode.\nSource: %s\nData: %s\n", sourceDir, dataDir)
+		fmt.Printf("Running in INGESTION mode.\nSource: %s\nData: %s\n", sourceDir, storePath)
 	}
 
 	return meb.NewMEBStore(cfg)

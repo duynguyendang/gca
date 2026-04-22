@@ -54,15 +54,17 @@ Arguments:
 		ctx, cancel := createBaseContext()
 		defer cancel()
 
+		// Run ingestion
+		projectName := getProjectName(sourcePath)
+
 		// Create store in write mode
-		s, err := createStore(false, dataPath)
+		s, err := createStore(false, dataPath, projectName)
 		if err != nil {
 			return fmt.Errorf("failed to create MEB store: %w", err)
 		}
 		defer s.Close()
 
 		// Run ingestion
-		projectName := getProjectName(dataPath)
 		errChan := make(chan error, 1)
 
 		go func() {

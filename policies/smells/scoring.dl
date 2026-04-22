@@ -25,13 +25,6 @@ file_smell_penalty(File, SmellType, Weight) :-
     triples(File, "has_smell", SmellType),
     smell_weight(SmellType, Weight).
 
-file_smell_penalty(File, "hub_anomaly", 4) :-
-    triples(File, "has_hub_score", ScoreStr),
-    numeric(ScoreStr, Score),
-    Score > 5,
-    % Only apply hub smell if the file also has a high hub score
-    Score >= 10.
-
 % === Section 4: Health Debt Per File ===
 % Sums all smell penalties + hub penalty for each file.
 health_debt(File, TotalDebt) :-
