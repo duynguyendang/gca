@@ -308,8 +308,9 @@ func (s *Server) handleFiles(c *gin.Context) {
 		// Sanitize the prefix
 		prefix = SanitizeString(prefix)
 
-		// Check for path traversal attempts
-		if strings.Contains(prefix, "..") || strings.Contains(prefix, "\\") {
+		// Check for path traversal attempts - normalize path separators
+		normalized := strings.ReplaceAll(prefix, "\\", "/")
+		if strings.Contains(normalized, "..") {
 			handleError(c, errors.NewAppError(http.StatusBadRequest, "Invalid prefix format", nil))
 			return
 		}

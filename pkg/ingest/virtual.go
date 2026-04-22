@@ -11,7 +11,43 @@ import (
 	"github.com/duynguyendang/meb"
 )
 
+// getTagConfig returns the active tagging rules for this project.
+// Falls back to default rules if no project-specific config is available.
+func getTagConfig() *config.ProjectTagConfig {
+	// Future: load from gca.yaml per project via LoadTagRulesFromYAML
+	rules := config.DefaultTagRules()
+	return &config.ProjectTagConfig{Rules: rules}
+}
+
+// shouldInjectTag checks if a file already has the given tag.
+func shouldInjectTag(s *meb.MEBStore, fileID, tag string) bool {
+	for fact, err := range s.Scan(fileID, config.PredicateHasTag, tag) {
+		if err != nil {
+			continue
+		}
+		_ = fact
+		return false // already tagged
+	}
+	return true
+}
+
+// configDrivenTagMatcher iterates over the regex rules and injects matching tags.
+func configDrivenTagMatcher(s *meb.MEBStore, fileID string, tagCfg *config.ProjectTagConfig) {
+	if strings.Contains(fileID, ":") {
+		return // Skip symbol-level IDs, only tag files
+	}
+
+	for _, tag := range tagCfg.MatchingTags(fileID) {
+		if shouldInjectTag(s, fileID, tag) {
+			s.AddFact(meb.Fact{Subject: fileID, Predicate: config.PredicateHasTag, Object: tag})
+			logger.Debug("Config-driven tag injection", "file", fileID, "tag", tag)
+		}
+	}
+}
+
 func EnhanceVirtualTriples(s *meb.MEBStore) error {
+	tagCfg := getTagConfig()
+
 	feSet := make(map[string]bool)
 	beSet := make(map[string]bool)
 
@@ -86,6 +122,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		}
 	}
 
+	// Route detection via regex
 	routeRegex := regexp.MustCompile(`\.(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\(\s*"([^"]+)"\s*,\s*([^,\)]+)`)
 
 	for id := range beSet {
@@ -239,7 +276,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 		if strings.Contains(id, ":") {
 			continue
 		}
-		base := strings.TrimSuffix(filepath.Base(id), filepath.Ext(id))
+		base := strings.TrimSuffix(common.ExtractSymbolName(id), filepath.Ext(id))
 		for fact, err := range s.Scan(id, config.PredicateDefines, "") {
 			if err != nil {
 				continue
@@ -248,10 +285,18 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 			if !ok {
 				continue
 			}
-			if strings.EqualFold(filepath.Base(strings.Split(sID, ":")[1]), base) {
+			if strings.EqualFold(common.ExtractSymbolName(sID), base) {
 				s.AddFact(meb.Fact{Subject: string(id), Predicate: config.PredicateExports, Object: sID})
 			}
 		}
+	}
+
+	logger.Info("Injecting architectural tags for security smell detection")
+	for id := range beSet {
+		configDrivenTagMatcher(s, id, tagCfg)
+	}
+	for id := range feSet {
+		configDrivenTagMatcher(s, id, tagCfg)
 	}
 
 	return nil

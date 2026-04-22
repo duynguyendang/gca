@@ -99,6 +99,13 @@ const (
 	RoleUtility      = "utility"
 )
 
+// Architectural tag constants for security smell detection
+const (
+	TagPublicAPI  = "public_api"
+	TagSanitizer = "sanitizer"
+	TagDatabase  = "database"
+)
+
 // Additional predicates
 const (
 	PredicateName       = "name"

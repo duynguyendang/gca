@@ -1048,11 +1048,21 @@ func (s *AIService) HandleRequestOODA(ctx context.Context, req AIRequest) (strin
 }
 
 type AskRequest struct {
-	ProjectID string `json:"project_id"`
-	Query     string `json:"query"`
-	SymbolID  string `json:"symbol_id,omitempty"`
-	Depth     int    `json:"depth,omitempty"`
-	Context   string `json:"context,omitempty"`
+	ProjectID          string            `json:"project_id"`
+	Query              string            `json:"query"`
+	SymbolID           string            `json:"symbol_id,omitempty"`
+	Depth              int               `json:"depth,omitempty"`
+	Context            string            `json:"context,omitempty"`
+	ConversationHistory []ConversationTurn `json:"conversation_history,omitempty"`
+}
+
+type ConversationTurn struct {
+	UserInput    string `json:"user_input"`
+	Intent       string `json:"intent"`
+	DatalogQuery string `json:"datalog_query"`
+	ResultCount  int    `json:"result_count"`
+	Summary      string `json:"summary"`
+	Timestamp    int64  `json:"timestamp"`
 }
 
 type AskResponse struct {
@@ -1085,7 +1095,8 @@ func (s *AIService) HandleAsk(ctx context.Context, req AskRequest) (*AskResponse
 		return resp, fmt.Errorf("failed to get store: %w", err)
 	}
 
-	intentResult := ClassifyIntent(req.Query)
+	// Classify intent with multi-turn context awareness
+	intentResult := ClassifyIntentWithContext(req.Query, req.ConversationHistory)
 	resp.Intent = string(intentResult.Intent)
 	resp.Confidence = intentResult.Confidence
 
@@ -1094,7 +1105,9 @@ func (s *AIService) HandleAsk(ctx context.Context, req AskRequest) (*AskResponse
 		target = req.SymbolID
 	}
 
-	queryResult, err := GenerateDatalog(ctx, req.Query, intentResult.Intent, target, store)
+	// Build conversation context for query generation
+	conversationContext := buildConversationContext(req.ConversationHistory)
+	queryResult, err := GenerateDatalogWithContext(ctx, req.Query, intentResult.Intent, target, store, conversationContext)
 	if err != nil {
 		resp.Query = queryResult.Query
 		resp.Error = fmt.Sprintf("query generation failed: %v", err)
