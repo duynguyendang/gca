@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/meb"
@@ -336,117 +337,30 @@ Answer concisely and accurately based on the code provided.`, contextBuilder.Str
 }
 
 func formatNodesWithCode(data interface{}, limit int) string {
-	if data == nil {
-		return ""
-	}
-	list, ok := data.([]interface{})
-	if !ok {
-		return ""
-	}
-	var sb strings.Builder
-	sb.WriteString("## Query Results:\n\n")
-	for i, item := range list {
-		if i >= limit {
-			break
-		}
-		if m, ok := item.(map[string]interface{}); ok {
-			id, _ := m["id"].(string)
-			name, _ := m["name"].(string)
-			kind, _ := m["kind"].(string)
-			code, _ := m["code"].(string)
-
-			sb.WriteString(fmt.Sprintf("### %d. %s\n", i+1, id))
-			if name != "" && name != id {
-				sb.WriteString(fmt.Sprintf("Name: %s\n", name))
-			}
-			if kind != "" {
-				sb.WriteString(fmt.Sprintf("Type: %s\n", kind))
-			}
-			if code != "" {
-				sb.WriteString(fmt.Sprintf("```\n%s\n```\n", code))
-			}
-			sb.WriteString("\n")
-		}
-	}
-	return sb.String()
+	return common.FormatNodesWithCode(data, limit)
 }
 
 func formatNodesSimple(data interface{}, limit int) string {
-	if data == nil {
-		return ""
-	}
-	list, ok := data.([]interface{})
-	if !ok {
-		return ""
-	}
-	var sb strings.Builder
-	for i, item := range list {
-		if i >= limit {
-			break
-		}
-		if m, ok := item.(map[string]interface{}); ok {
-			name, _ := m["name"].(string)
-			kind, _ := m["kind"].(string)
-			sb.WriteString(fmt.Sprintf("- %s (%s)\n", name, kind))
-		}
-	}
-	return sb.String()
+	return common.FormatNodesSimple(data, limit)
 }
 
 func formatPredicatesList(data interface{}) string {
-	if str, ok := data.(string); ok {
-		return str
-	}
-	list, ok := data.([]interface{})
-	if !ok {
-		return ""
-	}
-	var sb strings.Builder
-	for _, item := range list {
-		if predicate, ok := item.(string); ok {
-			sb.WriteString(fmt.Sprintf("- `%s`\n", predicate))
-		}
-	}
-	return sb.String()
+	return common.FormatPredicatesList(data)
 }
 
 func formatNodeList(data interface{}) string {
-	if data == nil {
-		return ""
-	}
-	if str, ok := data.(string); ok {
-		return str
-	}
-	list, ok := data.([]interface{})
-	if !ok {
-		return ""
-	}
-	var sb strings.Builder
-	for _, item := range list {
-		if m, ok := item.(map[string]interface{}); ok {
-			name, _ := m["name"].(string)
-			kind, _ := m["kind"].(string)
-			id, _ := m["id"].(string)
-			sb.WriteString(fmt.Sprintf("- %s (Kind: %s, ID: %s)\n", name, kind, id))
-		}
-	}
-	return sb.String()
+	return common.FormatNodeList(data)
 }
 
 func formatGraphResults(data interface{}, key string) string {
-	if data == nil {
-		return ""
-	}
 	m, ok := data.(map[string]interface{})
 	if !ok {
 		return ""
 	}
-
 	list, ok := m[key].([]interface{})
 	if !ok {
 		return ""
 	}
-
 	var sb strings.Builder
 	if key == "nodes" {
 		for i, item := range list {
@@ -470,66 +384,19 @@ func formatGraphResults(data interface{}, key string) string {
 			}
 		}
 	}
-
 	return sb.String()
 }
 
 func extractNodeNames(data interface{}) string {
-	if data == nil {
-		return ""
-	}
-	list, ok := data.([]interface{})
-	if !ok {
-		return ""
-	}
-	names := make([]string, 0, len(list))
-	for _, item := range list {
-		if m, ok := item.(map[string]interface{}); ok {
-			if name, ok := m["name"].(string); ok {
-				names = append(names, name)
-			}
-		}
-	}
-	return strings.Join(names, ", ")
+	return common.ExtractNodeNames(data)
 }
 
 func extractStringList(data interface{}, limit int) string {
-	if data == nil {
-		return ""
-	}
-	list, ok := data.([]interface{})
-	if !ok {
-		return ""
-	}
-	items := make([]string, 0)
-	for i, item := range list {
-		if i >= limit {
-			break
-		}
-		if str, ok := item.(string); ok {
-			items = append(items, str)
-		}
-	}
-	return strings.Join(items, "\n")
+	return common.ExtractStringList(data, limit)
 }
 
 func extractPathString(data interface{}) string {
-	if data == nil {
-		return ""
-	}
-	list, ok := data.([]interface{})
-	if !ok {
-		return ""
-	}
-	names := make([]string, 0)
-	for _, item := range list {
-		if m, ok := item.(map[string]interface{}); ok {
-			if name, ok := m["name"].(string); ok {
-				names = append(names, name)
-			}
-		}
-	}
-	return strings.Join(names, " -> ")
+	return common.ExtractPathString(data)
 }
 
 func appendSymbolContext(ctx context.Context, store *meb.MEBStore, symbolID string, sb *strings.Builder) error {

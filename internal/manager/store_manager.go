@@ -86,20 +86,27 @@ type StoreManager struct {
 
 // NewStoreManager creates a new StoreManager.
 func NewStoreManager(baseDir string, profile MemoryProfile, readOnly bool) *StoreManager {
-	// Create LRU cache with eviction callback to close stores
-	// Note: All access to this cache must be protected by StoreManager.mu
-	cache, _ := lru.NewWithEvict[string, *meb.MEBStore](MaxOpenStores, func(key string, value *meb.MEBStore) {
-		_ = value.Close()
-	})
-
-	return &StoreManager{
+	sm := &StoreManager{
 		baseDir:       baseDir,
-		projects:      cache,
 		profile:       profile,
 		readOnly:      readOnly,
 		telemetrySink: telemetry.NewLoggerSink(),
 		ephemeral:     ephemeral.NewEphemeralStore(0), // default 30-min TTL
 	}
+
+	// Create LRU cache with eviction callback to close stores
+	// The eviction callback closes stores when they're evicted from the LRU.
+	// Since the cache is only accessed via GetStore() which holds sm.mu,
+	// and eviction happens when the cache is at capacity, the callback
+	// running means no active operation is in progress on that specific store.
+	cache, _ := lru.NewWithEvict[string, *meb.MEBStore](MaxOpenStores, func(key string, value *meb.MEBStore) {
+		sm.mu.Lock()
+		defer sm.mu.Unlock()
+		_ = value.Close()
+	})
+	sm.projects = cache
+
+	return sm
 }
 
 // SetEphemeralStore sets the EphemeralStore (for testing or custom configuration).

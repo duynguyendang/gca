@@ -384,7 +384,10 @@ func (ms *MCPServer) handleGetClusters(ctx context.Context, request mcp.CallTool
 				continue
 			}
 			src := fact.Subject
-			dst := fact.Object.(string)
+			dst, ok := fact.Object.(string)
+			if !ok {
+				continue
+			}
 
 			if !nodeSet[src] {
 				nodes = append(nodes, service.GraphNode{ID: src})

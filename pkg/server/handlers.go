@@ -1251,3 +1251,134 @@ func (s *Server) handleHealthSummary(c *gin.Context) {
 		"smells":           smells,
 	})
 }
+
+// HealthSummaryV2 is the per-file risk leaderboard format.
+type HealthSummaryV2 struct {
+	OverallScore       int                     `json:"overall_score"`
+	TotalSecurityAlerts int                    `json:"total_security_alerts"`
+	TotalArchDebt      int                     `json:"total_arch_debt"`
+	Files              []FileHealthV2          `json:"files"`
+}
+
+// FileHealthV2 is per-file health data for the risk leaderboard.
+type FileHealthV2 struct {
+	FileName       string   `json:"file_name"`
+	TotalDebtScore int      `json:"total_debt_score"`
+	SecurityIssues int      `json:"security_issues"`
+	ArchSmells     []string `json:"arch_smells"`
+}
+
+// handleHealthSummaryV2 returns the V2 health summary with per-file risk breakdown.
+func (s *Server) handleHealthSummaryV2(c *gin.Context) {
+	projectID := c.Query("project")
+	if projectID == "" {
+		projects, err := s.graphService.ListProjects()
+		if err == nil && len(projects) > 0 {
+			projectID = projects[0].ID
+		}
+	}
+	if projectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing project parameter"})
+		return
+	}
+
+	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Build file -> smells mapping and compute per-file scores.
+	fileSmells := make(map[string][]string)
+	fileHubScore := make(map[string]int)
+
+	// Smells: triples(Subject, "has_smell", Object)
+	smellQuery := `triples(Subject, "has_smell", Object)`
+	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, smellQuery); err == nil {
+		for _, r := range results {
+			subject, _ := r["Subject"].(string)
+			object, _ := r["Object"].(string)
+			if subject == "" || object == "" {
+				continue
+			}
+			fileSmells[subject] = append(fileSmells[subject], object)
+		}
+	}
+
+	// Hub scores: triples(Subject, "has_hub_score", Score)
+	hubQuery := `triples(Subject, "has_hub_score", Score)`
+	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, hubQuery); err == nil {
+		for _, r := range results {
+			subject, _ := r["Subject"].(string)
+			scoreStr, _ := r["Score"].(string)
+			if subject == "" {
+				continue
+			}
+			if score, err := strconv.Atoi(scoreStr); err == nil {
+				fileHubScore[subject] = score
+			}
+		}
+	}
+
+	// Compute per-file debt scores.
+	// Smell weights: circular=10, god_file=5, layer_violation=3, security=8, default=2
+	smellWeight := map[string]int{
+		"circular_dependency": 10,
+		"god_file":            5,
+		"layer_violation":      3,
+		"hub_anomaly":          3,
+		"security_risk":        8,
+	}
+	getWeight := func(smell string) int {
+		for prefix, w := range smellWeight {
+			if strings.HasPrefix(smell, prefix) {
+				return w
+			}
+		}
+		return 2
+	}
+
+	var files []FileHealthV2
+	totalArchDebt := 0
+	totalSecurity := 0
+
+	for file, smells := range fileSmells {
+		debt := 0
+		var archSmells []string
+		secIssues := 0
+
+		for _, s := range smells {
+			debt += getWeight(s)
+			if strings.HasPrefix(s, "security_risk") || strings.HasPrefix(s, "unsanitized") {
+				secIssues++
+				totalSecurity++
+			} else {
+				archSmells = append(archSmells, s)
+			}
+		}
+		if hub, ok := fileHubScore[file]; ok {
+			debt += hub
+		}
+
+		files = append(files, FileHealthV2{
+			FileName:       file,
+			TotalDebtScore: debt,
+			SecurityIssues: secIssues,
+			ArchSmells:     archSmells,
+		})
+		totalArchDebt += debt
+	}
+
+	// Overall score: 100 minus total arch debt (capped at 0)
+	overallScore := 100 - totalArchDebt/10
+	if overallScore < 0 {
+		overallScore = 0
+	}
+
+	c.JSON(http.StatusOK, HealthSummaryV2{
+		OverallScore:        overallScore,
+		TotalSecurityAlerts: totalSecurity,
+		TotalArchDebt:       totalArchDebt,
+		Files:              files,
+	})
+}

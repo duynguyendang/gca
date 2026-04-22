@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/logger"
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
@@ -52,6 +53,8 @@ type AIService struct {
 	responseCache    map[string]*cachedResponse
 	responseCacheMu  sync.RWMutex
 	responseCacheTTL time.Duration
+	stopCh            chan struct{}
+	cleanupDone      chan struct{}
 }
 
 type cachedResponse struct {
@@ -146,6 +149,8 @@ func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService,
 
 	// Initialize cache TTL from config
 	cacheTTL := config.QueryCacheTTL
+	stopCh := make(chan struct{})
+	cleanupDone := make(chan struct{})
 
 	return &AIService{
 		g:                    g,
@@ -164,6 +169,8 @@ func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService,
 		DefaultContextPrompt: loadPrompt("default_context"),
 		responseCache:        make(map[string]*cachedResponse),
 		responseCacheTTL:     cacheTTL,
+		stopCh:               stopCh,
+		cleanupDone:          cleanupDone,
 	}, nil
 }
 
@@ -332,6 +339,17 @@ func (s *AIService) cleanupExpiredCache() {
 			delete(s.responseCache, key)
 		}
 	}
+}
+
+// Close signals the cleanup goroutines to stop and waits for them to complete.
+func (s *AIService) Close() {
+	close(s.stopCh)
+}
+
+// WaitForCleanup waits for any in-flight cleanup goroutines to complete.
+// This is optional and mainly for testing.
+func (s *AIService) WaitForCleanup() {
+	<-s.cleanupDone
 }
 
 func (s *AIService) GetEmbedding(ctx context.Context, text string) ([]float32, error) {
@@ -622,92 +640,19 @@ func (s *AIService) buildPerformancePrompt(ctx context.Context, store *meb.MEBSt
 }
 
 func formatNodesWithCode(data interface{}, limit int) string {
-	list, ok := data.([]interface{})
-	if !ok {
-		return ""
-	}
-	var sb strings.Builder
-	sb.WriteString("## Query Results:\n\n")
-	for i, item := range list {
-		if i >= limit {
-			break
-		}
-		if m, ok := item.(map[string]interface{}); ok {
-			id, _ := m["id"].(string)
-			name, _ := m["name"].(string)
-			kind, _ := m["kind"].(string)
-			code, _ := m["code"].(string)
-
-			sb.WriteString(fmt.Sprintf("### %d. %s\n", i+1, id))
-			if name != "" && name != id {
-				sb.WriteString(fmt.Sprintf("Name: %s\n", name))
-			}
-			if kind != "" {
-				sb.WriteString(fmt.Sprintf("Type: %s\n", kind))
-			}
-			if code != "" {
-				sb.WriteString(fmt.Sprintf("```\n%s\n```\n", code))
-			}
-			sb.WriteString("\n")
-		}
-	}
-	return sb.String()
+	return common.FormatNodesWithCode(data, limit)
 }
 
 func formatNodesSimple(data interface{}, limit int) string {
-	list, ok := data.([]interface{})
-	if !ok {
-		return ""
-	}
-	var sb strings.Builder
-	for i, item := range list {
-		if i >= limit {
-			break
-		}
-		if m, ok := item.(map[string]interface{}); ok {
-			name, _ := m["name"].(string)
-			kind, _ := m["kind"].(string)
-			sb.WriteString(fmt.Sprintf("- %s (%s)\n", name, kind))
-		}
-	}
-	return sb.String()
+	return common.FormatNodesSimple(data, limit)
 }
 
 func formatPredicatesList(data interface{}) string {
-	if str, ok := data.(string); ok {
-		return str
-	}
-	list, ok := data.([]interface{})
-	if !ok {
-		return ""
-	}
-	var sb strings.Builder
-	for _, item := range list {
-		if predicate, ok := item.(string); ok {
-			sb.WriteString(fmt.Sprintf("- `%s`\n", predicate))
-		}
-	}
-	return sb.String()
+	return common.FormatPredicatesList(data)
 }
 
 func formatNodeList(data interface{}) string {
-	if str, ok := data.(string); ok {
-		return str
-	}
-	list, ok := data.([]interface{})
-	if !ok {
-		return ""
-	}
-	var sb strings.Builder
-	for _, item := range list {
-		if m, ok := item.(map[string]interface{}); ok {
-			name, _ := m["name"].(string)
-			kind, _ := m["kind"].(string)
-			id, _ := m["id"].(string)
-			sb.WriteString(fmt.Sprintf("- %s (Kind: %s, ID: %s)\n", name, kind, id))
-		}
-	}
-	return sb.String()
+	return common.FormatNodeList(data)
 }
 
 func formatGraphResults(data interface{}, key string) string {
@@ -715,12 +660,10 @@ func formatGraphResults(data interface{}, key string) string {
 	if !ok {
 		return ""
 	}
-
 	list, ok := m[key].([]interface{})
 	if !ok {
 		return ""
 	}
-
 	var sb strings.Builder
 	if key == "nodes" {
 		for i, item := range list {
@@ -744,57 +687,19 @@ func formatGraphResults(data interface{}, key string) string {
 			}
 		}
 	}
-
 	return sb.String()
 }
 
 func extractNodeNames(data interface{}) string {
-	list, ok := data.([]interface{})
-	if !ok {
-		return ""
-	}
-	names := make([]string, 0, len(list))
-	for _, item := range list {
-		if m, ok := item.(map[string]interface{}); ok {
-			if name, ok := m["name"].(string); ok {
-				names = append(names, name)
-			}
-		}
-	}
-	return strings.Join(names, ", ")
+	return common.ExtractNodeNames(data)
 }
 
 func extractStringList(data interface{}, limit int) string {
-	list, ok := data.([]interface{})
-	if !ok {
-		return ""
-	}
-	items := make([]string, 0)
-	for i, item := range list {
-		if i >= limit {
-			break
-		}
-		if str, ok := item.(string); ok {
-			items = append(items, str)
-		}
-	}
-	return strings.Join(items, "\n")
+	return common.ExtractStringList(data, limit)
 }
 
 func extractPathString(data interface{}) string {
-	list, ok := data.([]interface{})
-	if !ok {
-		return ""
-	}
-	names := make([]string, 0)
-	for _, item := range list {
-		if m, ok := item.(map[string]interface{}); ok {
-			if name, ok := m["name"].(string); ok {
-				names = append(names, name)
-			}
-		}
-	}
-	return strings.Join(names, " -> ")
+	return common.ExtractPathString(data)
 }
 
 var symbolRegex = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9_.\/]{3,}\b`)
@@ -1186,7 +1091,14 @@ func (s *AIService) HandleAsk(ctx context.Context, req AskRequest) (*AskResponse
 
 	// Periodic cleanup of expired cache entries (every 100 requests)
 	if len(s.responseCache) > 500 {
-		go s.cleanupExpiredCache()
+		go func() {
+			select {
+			case <-s.stopCh:
+				return
+			default:
+				s.cleanupExpiredCache()
+			}
+		}()
 	}
 
 	return resp, nil

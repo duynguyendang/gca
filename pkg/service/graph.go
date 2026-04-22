@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
@@ -180,13 +181,9 @@ func (s *GraphService) GetCentralityRanking(ctx context.Context, projectID strin
 		}
 	}
 
-	for i := 0; i < len(symbols)-1; i++ {
-		for j := i + 1; j < len(symbols); j++ {
-			if symbols[i].score < symbols[j].score {
-				symbols[i], symbols[j] = symbols[j], symbols[i]
-			}
-		}
-	}
+	sort.Slice(symbols, func(i, j int) bool {
+		return symbols[i].score > symbols[j].score
+	})
 
 	if limit <= 0 {
 		limit = 20
