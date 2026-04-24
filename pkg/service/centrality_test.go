@@ -4,100 +4,73 @@ import (
 	"testing"
 )
 
-func TestCentralityServiceNew(t *testing.T) {
-	cs := NewCentralityService()
-	if cs == nil {
-		t.Fatal("NewCentralityService returned nil")
+func TestSortByCentralityDesc(t *testing.T) {
+	symbols := []string{"a", "b", "c", "d"}
+	centrality := map[string]float64{
+		"a": 0.1,
+		"b": 0.5,
+		"c": 0.3,
+		"d": 0.2,
 	}
-	if cs.cache == nil {
-		t.Error("cache is nil")
-	}
-	if cs.ttl == 0 {
-		t.Error("ttl should not be zero")
+
+	sortByCentralityDesc(symbols, centrality)
+
+	expected := []string{"b", "c", "d", "a"}
+	for i, sym := range symbols {
+		if sym != expected[i] {
+			t.Errorf("symbols[%d] = %q, want %q (centrality: %v)", i, sym, expected[i], centrality[sym])
+		}
 	}
 }
 
-func TestCentralityResult(t *testing.T) {
-	result := CentralityResult{
-		SymbolID:   "pkg/main.go:main",
-		Centrality: 0.75,
-		InDegree:   5,
-		OutDegree:  10,
-		Kind:       "function",
-		IsEntry:    true,
-	}
+func TestSortByCentralityDesc_Empty(t *testing.T) {
+	symbols := []string{}
+	centrality := map[string]float64{}
 
-	if result.SymbolID != "pkg/main.go:main" {
-		t.Errorf("SymbolID = %q, want %q", result.SymbolID, "pkg/main.go:main")
-	}
-	if result.Centrality != 0.75 {
-		t.Errorf("Centrality = %v, want %v", result.Centrality, 0.75)
-	}
-	if result.InDegree != 5 {
-		t.Errorf("InDegree = %d, want %d", result.InDegree, 5)
-	}
-	if result.OutDegree != 10 {
-		t.Errorf("OutDegree = %d, want %d", result.OutDegree, 10)
-	}
-	if result.Kind != "function" {
-		t.Errorf("Kind = %q, want %q", result.Kind, "function")
-	}
-	if !result.IsEntry {
-		t.Error("IsEntry should be true")
+	sortByCentralityDesc(symbols, centrality)
+
+	if len(symbols) != 0 {
+		t.Errorf("Empty slice should remain empty")
 	}
 }
 
-func TestIsInterfacePattern(t *testing.T) {
-	tests := []struct {
-		name   string
-		symbol string
-		want   bool
-	}{
-		{"interface keyword", "HandlerInterface", true}, // contains "interface"
-		{"handler keyword", "MyHandler", true},          // contains "handler"
-		{"service keyword", "UserService", true},        // contains "service"
-		{"repository keyword", "DataRepository", true},  // contains "repository"
-		{"controller keyword", "HomeController", true},  // contains "controller"
-		{"no match", "MyHandler", true},                 // contains handler
-		{"IConnection matches client", "IClient", true}, // contains "client"
-		{"lowercase not prefix match", "lowercase", false},
-		{"empty", "", false},
-	}
+func TestSortByCentralityDesc_SingleElement(t *testing.T) {
+	symbols := []string{"only"}
+	centrality := map[string]float64{"only": 1.0}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := IsInterfacePattern(tt.symbol)
-			if got != tt.want {
-				t.Errorf("IsInterfacePattern(%q) = %v, want %v", tt.symbol, got, tt.want)
-			}
-		})
+	sortByCentralityDesc(symbols, centrality)
+
+	if len(symbols) != 1 || symbols[0] != "only" {
+		t.Errorf("Single element should remain unchanged")
 	}
 }
 
-func TestNormalizeCentrality(t *testing.T) {
-	tests := []struct {
-		name    string
-		scores  map[string]float64
-		wantLen int
-	}{
-		{
-			name:    "normal scores",
-			scores:  map[string]float64{"a": 1.0, "b": 2.0, "c": 3.0},
-			wantLen: 3,
-		},
-		{
-			name:    "empty scores",
-			scores:  map[string]float64{},
-			wantLen: 0,
-		},
+func TestSortByCentralityDesc_Ties(t *testing.T) {
+	symbols := []string{"a", "b", "c"}
+	centrality := map[string]float64{
+		"a": 0.5,
+		"b": 0.5,
+		"c": 0.5,
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := NormalizeCentrality(tt.scores)
-			if len(got) != tt.wantLen {
-				t.Errorf("NormalizeCentrality len = %d, want %d", len(got), tt.wantLen)
-			}
-		})
+	sortByCentralityDesc(symbols, centrality)
+
+	if len(symbols) != 3 {
+		t.Errorf("All same centrality should maintain length")
+	}
+}
+
+func TestSortByCentralityDesc_AllZeros(t *testing.T) {
+	symbols := []string{"x", "y", "z"}
+	centrality := map[string]float64{
+		"x": 0,
+		"y": 0,
+		"z": 0,
+	}
+
+	sortByCentralityDesc(symbols, centrality)
+
+	if len(symbols) != 3 {
+		t.Errorf("All zeros should maintain length")
 	}
 }

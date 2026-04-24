@@ -65,6 +65,19 @@ var structuralIndicators = []string{"?", "how do", "how does", "how can", "what 
 // symbolPattern matches common symbol formats (Package.Type, file/path, CamelCase)
 var symbolPattern = regexp.MustCompile(`([A-Z][a-zA-Z0-9]*\.[A-Z][a-zA-Z0-9]*|[a-zA-Z0-9_]+/[a-zA-Z0-9_./]+|[A-Z][a-z]+[A-Z][a-zA-Z0-9]*)`)
 
+var followUpPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^(and|but|so|then)\s+`),
+	regexp.MustCompile(`^(why|how|what)\s+`),
+	regexp.MustCompile(`^show\s+(me\s+)?(more|others?|another)`),
+	regexp.MustCompile(`^(just|only)\s+(one|more|a\s+few)`),
+}
+
+var pronounPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^(it|this|that|them|those)\s+(is|was|are|were|can|does|doesn|should|would)`),
+	regexp.MustCompile(`^(it|this|that)\s+(call|use|invoke|have|has|contain)`),
+	regexp.MustCompile(`^(what|where)\s+(is|are|was)\s+(it|this|that)`),
+}
+
 var intentPatterns = []struct {
 	intent     Intent
 	patterns   []string
@@ -496,14 +509,8 @@ func isFollowUp(query string) bool {
 	}
 
 	// Check for implicit follow-up patterns
-	followUpPatterns := []string{
-		`^(and|but|so|then)\s+`,
-		`^(why|how|what)\s+`,
-		`^show\s+(me\s+)?(more|others?|another)`,
-		`^(just|only)\s+(one|more|a\s+few)`,
-	}
 	for _, pattern := range followUpPatterns {
-		if regexp.MustCompile(pattern).MatchString(queryLower) {
+		if pattern.MatchString(queryLower) {
 			return true
 		}
 	}
@@ -516,14 +523,8 @@ func detectPronounReference(query string) string {
 	queryLower := strings.ToLower(query)
 
 	// Pattern: query starts with pronoun or demonstrative
-	pronounPatterns := []string{
-		`^(it|this|that|them|those)\s+(is|was|are|were|can|does|doesn|should|would)`,
-		`^(it|this|that)\s+(call|use|invoke|have|has|contain)`,
-		`^(what|where)\s+(is|are|was)\s+(it|this|that)`,
-	}
-
 	for _, pattern := range pronounPatterns {
-		if regexp.MustCompile(pattern).MatchString(queryLower) {
+		if pattern.MatchString(queryLower) {
 			return "previous_target"
 		}
 	}

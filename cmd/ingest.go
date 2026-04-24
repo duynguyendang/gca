@@ -37,10 +37,6 @@ Arguments:
 			dataPath = args[1]
 		}
 
-		// Update global for use in createStore
-		sourceDir = sourcePath
-		dataDir = dataPath
-
 		// Check env var for skip embeddings
 		if os.Getenv("SKIP_EMBEDDINGS") == "true" {
 			noEmbed = true
@@ -60,7 +56,7 @@ Arguments:
 		projectName := getProjectName(sourcePath)
 
 		// Create store in write mode
-		s, err := createStore(false, dataPath, projectName)
+		s, err := createStore(false, dataPath, projectName, sourcePath)
 		if err != nil {
 			return fmt.Errorf("failed to create MEB store: %w", err)
 		}

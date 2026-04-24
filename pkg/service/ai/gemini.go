@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -50,11 +51,12 @@ type AIService struct {
 	MultiFilePrompt      *prompts.Prompt
 	DefaultContextPrompt *prompts.Prompt
 
-	// Response caching for AI synthesis
+	// Response caching for AI synthesis (LRU with list for O(1) eviction)
 	responseCache        map[string]*cachedResponse
 	responseCacheMu      sync.RWMutex
 	responseCacheTTL     time.Duration
 	responseCacheMaxSize int
+	responseCacheList    *list.List
 	stopCh               chan struct{}
 	cleanupDone          chan struct{}
 
@@ -68,6 +70,7 @@ type cachedResponse struct {
 	Answer  string
 	Summary string
 	Time    time.Time
+	e       *list.Element
 }
 
 func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService, error) {
@@ -177,6 +180,7 @@ func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService,
 		responseCache:        make(map[string]*cachedResponse),
 		responseCacheTTL:     cacheTTL,
 		responseCacheMaxSize: 1000,
+		responseCacheList:    list.New(),
 		stopCh:               stopCh,
 		cleanupDone:          cleanupDone,
 	}, nil
@@ -348,37 +352,51 @@ func (s *AIService) BuildDiagnosticContext(ctx context.Context, projectID string
 	return sb.String(), nil
 }
 
-// cacheResponse caches an AI response for a given query
+// cacheResponse caches an AI response for a given query (LRU)
 func (s *AIService) cacheResponse(cacheKey string, answer, summary string) {
 	s.responseCacheMu.Lock()
 	defer s.responseCacheMu.Unlock()
 
-	// Enforce max cache size
-	if len(s.responseCache) >= s.responseCacheMaxSize {
-		// Remove oldest entry (simple eviction)
-		for k := range s.responseCache {
-			delete(s.responseCache, k)
-			break
+	// Evict oldest if at capacity
+	if s.responseCacheList.Len() >= s.responseCacheMaxSize {
+		if oldest := s.responseCacheList.Back(); oldest != nil {
+			delete(s.responseCache, oldest.Value.(string))
+			s.responseCacheList.Remove(oldest)
 		}
 	}
 
+	// Add new entry to front of list
+	e := s.responseCacheList.PushFront(cacheKey)
 	s.responseCache[cacheKey] = &cachedResponse{
 		Answer:  answer,
 		Summary: summary,
 		Time:    time.Now(),
+		e:       e,
 	}
 }
 
-// getCachedResponse retrieves a cached response if valid
+// getCachedResponse retrieves a cached response if valid (LRU promotion)
 func (s *AIService) getCachedResponse(cacheKey string) (string, string, bool) {
 	s.responseCacheMu.RLock()
-	defer s.responseCacheMu.RUnlock()
-	if cached, ok := s.responseCache[cacheKey]; ok {
-		if time.Since(cached.Time) < s.responseCacheTTL {
-			return cached.Answer, cached.Summary, true
-		}
+	cached, ok := s.responseCache[cacheKey]
+	s.responseCacheMu.RUnlock()
+
+	if !ok {
+		return "", "", false
 	}
-	return "", "", false
+
+	if time.Since(cached.Time) >= s.responseCacheTTL {
+		return "", "", false
+	}
+
+	// Promote to front (LRU)
+	s.responseCacheMu.Lock()
+	if cached.e != nil {
+		s.responseCacheList.MoveToFront(cached.e)
+	}
+	s.responseCacheMu.Unlock()
+
+	return cached.Answer, cached.Summary, true
 }
 
 // generateCacheKey creates a deterministic cache key from query + results hash
@@ -388,34 +406,30 @@ func (s *AIService) generateCacheKey(query string, intent Intent, results interf
 	return hex.EncodeToString(hash[:])
 }
 
-// cleanupExpiredCache removes expired cache entries and enforces max size
+// cleanupExpiredCache removes expired cache entries and enforces max size (LRU)
 func (s *AIService) cleanupExpiredCache() {
 	s.responseCacheMu.Lock()
 	defer s.responseCacheMu.Unlock()
 	now := time.Now()
 
-	// Remove expired entries
-	for key, cached := range s.responseCache {
+	// Remove expired entries (traverse list from back = oldest)
+	for e := s.responseCacheList.Back(); e != nil; e = e.Prev() {
+		key := e.Value.(string)
+		cached, ok := s.responseCache[key]
+		if !ok {
+			continue
+		}
 		if now.Sub(cached.Time) >= s.responseCacheTTL {
 			delete(s.responseCache, key)
+			s.responseCacheList.Remove(e)
 		}
 	}
 
-	// Enforce max size (remove oldest if still over limit)
-	for len(s.responseCache) > s.responseCacheMaxSize {
-		// Find and remove oldest entry
-		var oldestKey string
-		var oldestTime time.Time
-		first := true
-		for k, v := range s.responseCache {
-			if first || v.Time.Before(oldestTime) {
-				oldestKey = k
-				oldestTime = v.Time
-				first = false
-			}
-		}
-		if oldestKey != "" {
-			delete(s.responseCache, oldestKey)
+	// Enforce max size (remove oldest from back if still over limit)
+	for s.responseCacheList.Len() > s.responseCacheMaxSize {
+		if oldest := s.responseCacheList.Back(); oldest != nil {
+			delete(s.responseCache, oldest.Value.(string))
+			s.responseCacheList.Remove(oldest)
 		} else {
 			break
 		}

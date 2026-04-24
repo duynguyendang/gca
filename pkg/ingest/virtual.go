@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
@@ -12,9 +13,11 @@ import (
 	"github.com/duynguyendang/meb"
 )
 
+var virtualFactMu sync.Mutex
+
 // safeAddFact checks if a fact exists before adding to avoid duplicates on re-run.
 // Returns true if fact was added, false if it already existed.
-func safeAddFact(s *meb.MEBStore, subj, pred string, obj any) bool {
+func safeAddFact(s Store, subj, pred string, obj any) bool {
 	ctx := context.Background()
 	for item, err := range s.ScanContext(ctx, subj, pred, "") {
 		if err != nil {
@@ -30,7 +33,10 @@ func safeAddFact(s *meb.MEBStore, subj, pred string, obj any) bool {
 
 // upsertFact adds a fact, replacing any existing fact with same subject/predicate.
 // For route->handler facts that should be deterministic on re-run.
-func upsertFact(s *meb.MEBStore, subj, pred string, obj any) {
+// Protected by mutex to ensure atomic delete+add operations.
+func upsertFact(s Store, subj, pred string, obj any) {
+	virtualFactMu.Lock()
+	defer virtualFactMu.Unlock()
 	s.DeleteFactsBySubject(subj)
 	s.AddFact(meb.Fact{Subject: subj, Predicate: pred, Object: obj})
 }
@@ -44,7 +50,7 @@ func getTagConfig() *config.ProjectTagConfig {
 }
 
 // shouldInjectTag checks if a file already has the given tag.
-func shouldInjectTag(s *meb.MEBStore, fileID, tag string) bool {
+func shouldInjectTag(s Store, fileID, tag string) bool {
 	for fact, err := range s.Scan(fileID, config.PredicateHasTag, tag) {
 		if err != nil {
 			continue
@@ -56,7 +62,7 @@ func shouldInjectTag(s *meb.MEBStore, fileID, tag string) bool {
 }
 
 // configDrivenTagMatcher iterates over the regex rules and injects matching tags.
-func configDrivenTagMatcher(s *meb.MEBStore, fileID string, tagCfg *config.ProjectTagConfig) {
+func configDrivenTagMatcher(s Store, fileID string, tagCfg *config.ProjectTagConfig) {
 	if strings.Contains(fileID, ":") {
 		return // Skip symbol-level IDs, only tag files
 	}
@@ -69,7 +75,7 @@ func configDrivenTagMatcher(s *meb.MEBStore, fileID string, tagCfg *config.Proje
 	}
 }
 
-func EnhanceVirtualTriples(s *meb.MEBStore) error {
+func EnhanceVirtualTriples(s Store) error {
 	tagCfg := getTagConfig()
 
 	feSet := make(map[string]bool)

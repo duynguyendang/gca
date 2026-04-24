@@ -11,49 +11,7 @@ import (
 )
 
 func (s *GraphService) HydrateShallow(ctx context.Context, store *meb.MEBStore, ids []string) ([]HydratedSymbol, error) {
-	hydrated := make([]HydratedSymbol, 0, len(ids))
-
-	for _, id := range ids {
-		hs := HydratedSymbol{ID: id, Metadata: make(map[string]interface{})}
-
-		for fact, _ := range store.ScanContext(ctx, id, config.PredicateHasKind, "") {
-			if str, ok := fact.Object.(string); ok {
-				hs.Kind = str
-				break
-			}
-		}
-		for fact, _ := range store.ScanContext(ctx, id, config.PredicateHasLanguage, "") {
-			if str, ok := fact.Object.(string); ok {
-				hs.Metadata["language"] = str
-				break
-			}
-		}
-		for fact, _ := range store.ScanContext(ctx, id, config.PredicateStartLine, "") {
-			if num, ok := fact.Object.(int); ok {
-				hs.Metadata["start_line"] = num
-			} else if floatNum, ok := fact.Object.(float64); ok {
-				hs.Metadata["start_line"] = int(floatNum)
-			} else if strNum, ok := fact.Object.(string); ok {
-				if parsed, err := strconv.Atoi(strNum); err == nil {
-					hs.Metadata["start_line"] = parsed
-				}
-			}
-		}
-		for fact, _ := range store.ScanContext(ctx, id, config.PredicateEndLine, "") {
-			if num, ok := fact.Object.(int); ok {
-				hs.Metadata["end_line"] = num
-			} else if floatNum, ok := fact.Object.(float64); ok {
-				hs.Metadata["end_line"] = int(floatNum)
-			} else if strNum, ok := fact.Object.(string); ok {
-				if parsed, err := strconv.Atoi(strNum); err == nil {
-					hs.Metadata["end_line"] = parsed
-				}
-			}
-		}
-
-		hydrated = append(hydrated, hs)
-	}
-	return hydrated, nil
+	return s.HydrateShallowBatch(ctx, store, ids)
 }
 
 func (s *GraphService) HydrateShallowBatch(ctx context.Context, store *meb.MEBStore, ids []string) ([]HydratedSymbol, error) {

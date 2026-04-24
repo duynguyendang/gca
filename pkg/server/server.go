@@ -338,11 +338,13 @@ func CORSMiddleware() gin.HandlerFunc {
 
 		// Check if origin is allowed
 		allowed := false
+		usesWildcard := false
 		for _, allowedOrigin := range config.AllowOrigins {
 			if allowedOrigin == "*" {
-				// Wildcard is only allowed in development
-				if os.Getenv("GIN_MODE") != "release" {
+				// Wildcard is only allowed in development AND requires AllowCredentials=false
+				if os.Getenv("GIN_MODE") != "release" && !config.AllowCredentials {
 					allowed = true
+					usesWildcard = true
 					break
 				}
 			} else if strings.EqualFold(allowedOrigin, origin) {
@@ -352,7 +354,11 @@ func CORSMiddleware() gin.HandlerFunc {
 		}
 
 		if allowed {
-			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+			if usesWildcard {
+				c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+			} else {
+				c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+			}
 		}
 
 		// Set other CORS headers
