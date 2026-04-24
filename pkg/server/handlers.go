@@ -1138,63 +1138,85 @@ func (s *Server) handleHealthSummary(c *gin.Context) {
 		return
 	}
 
-	// Query for smells
-	smellQuery := `triples(Subject, "has_smell", Object)`
-	smellResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, smellQuery)
-	if err == nil {
-		for _, r := range smellResults {
-			subject, _ := r["Subject"].(string)
-			object, _ := r["Object"].(string)
-			if subject == "" || object == "" {
-				continue
+	// Query for smells - read structured facts from analytical store
+	type smellResult struct {
+		Subject   string
+		SmellType string
+		Severity  string
+		Category  string
+	}
+
+	var smellResults []smellResult
+
+	// Query has_smell_type facts
+	typeQuery := `triples(Subject, "has_smell_type", Type)`
+	if typeResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, typeQuery); err == nil {
+		for _, r := range typeResults {
+			if subject, ok := r["Subject"].(string); ok {
+				if smellType, ok := r["Type"].(string); ok {
+					smellResults = append(smellResults, smellResult{
+						Subject:   subject,
+						SmellType: smellType,
+					})
+				}
 			}
-
-			var severity string
-			var smellType string
-
-			if strings.HasPrefix(object, "circular_dependency:") {
-				summary.CircularDeps = append(summary.CircularDeps, SmellEntry{
-					File:   subject,
-					Smell:  "circular_dependency",
-					Detail: strings.TrimPrefix(object, "circular_dependency:"),
-				})
-				smellType = "Circular Dependency"
-				severity = "High"
-				totalSmells++
-			} else if strings.HasPrefix(object, "god_file:") {
-				summary.GodFiles = append(summary.GodFiles, SmellEntry{
-					File:   subject,
-					Smell:  "god_file",
-					Detail: strings.TrimPrefix(object, "god_file:"),
-				})
-				smellType = "God File"
-				severity = "Medium"
-				totalSmells++
-			} else if strings.HasPrefix(object, "layer_violation:") {
-				summary.LayerViolations = append(summary.LayerViolations, SmellEntry{
-					File:   subject,
-					Smell:  "layer_violation",
-					Detail: strings.TrimPrefix(object, "layer_violation:"),
-				})
-				smellType = "Layer Violation"
-				severity = "Medium"
-				totalSmells++
-			} else {
-				summary.GodFiles = append(summary.GodFiles, SmellEntry{
-					File:  subject,
-					Smell: object,
-				})
-				smellType = object
-				severity = "Low"
-				totalSmells++
-			}
-
-			smells = append(smells, Smell{
-				File:      subject,
-				SmellType: smellType,
-				Severity:  severity,
-			})
 		}
+	}
+
+	// Query has_smell_severity facts to get severity
+	severityQuery := `triples(Subject, "has_smell_severity", Severity)`
+	if sevResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, severityQuery); err == nil {
+		severityMap := make(map[string]string)
+		for _, r := range sevResults {
+			if subject, ok := r["Subject"].(string); ok {
+				if severity, ok := r["Severity"].(string); ok {
+					severityMap[subject] = severity
+				}
+			}
+		}
+		for i := range smellResults {
+			if sev, ok := severityMap[smellResults[i].Subject]; ok {
+				smellResults[i].Severity = sev
+			}
+		}
+	}
+
+	// Categorize smells and build response
+	for _, sr := range smellResults {
+		totalSmells++
+
+		var entry SmellEntry
+		var smellLabel string
+
+		switch sr.SmellType {
+		case "circular_dependency":
+			entry = SmellEntry{File: sr.Subject, Smell: "circular_dependency"}
+			summary.CircularDeps = append(summary.CircularDeps, entry)
+			smellLabel = "Circular Dependency"
+		case "god_file":
+			entry = SmellEntry{File: sr.Subject, Smell: "god_file"}
+			summary.GodFiles = append(summary.GodFiles, entry)
+			smellLabel = "God File"
+		case "layer_violation":
+			entry = SmellEntry{File: sr.Subject, Smell: "layer_violation"}
+			summary.LayerViolations = append(summary.LayerViolations, entry)
+			smellLabel = "Layer Violation"
+		default:
+			entry = SmellEntry{File: sr.Subject, Smell: sr.SmellType}
+			summary.GodFiles = append(summary.GodFiles, entry)
+			smellLabel = sr.SmellType
+		}
+
+		severity := sr.Severity
+		if severity == "" {
+			severity = "Medium"
+		}
+
+		smells = append(smells, Smell{
+			File:      sr.Subject,
+			SmellType: smellLabel,
+			Severity:  severity,
+		})
 	}
 
 	// Query for hub scores

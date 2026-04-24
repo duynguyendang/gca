@@ -6,6 +6,8 @@ query_metadata("smell_hub", "category", "smell").
 query_metadata("smell_hub", "tier", "1").
 query_metadata("smell_hub", "severity", "medium").
 query_metadata("smell_hub", "smell_type", "hub_anomaly").
+query_metadata("smell_hub", "Predicate", "has_smell_type").
+query_metadata("smell_hub", "template", `triples(File, "calls", _), triples(_, "calls", File), File != _`).
 
 query("smell_hub", File, Out, In) :-
     (

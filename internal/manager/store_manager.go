@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -136,7 +137,8 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 		return s, nil
 	}
 
-	projectDir := filepath.Join(sm.baseDir, projectID)
+	projectDir := getActualProjectDir(sm.baseDir, projectID)
+
 	if _, err := os.Stat(projectDir); os.IsNotExist(err) {
 		return nil, fmt.Errorf("project not found: %s", projectID)
 	}
@@ -185,6 +187,118 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 	return s, nil
 }
 
+// hasBadgerDir checks if a directory contains a badger database subdirectory.
+func hasBadgerDir(dir string) bool {
+	badgerPath := filepath.Join(dir, "badger")
+	info, err := os.Stat(badgerPath)
+	return err == nil && info.IsDir()
+}
+
+// findNestedBadgerDir looks for a nested directory containing a badger database.
+// This handles the case where project name equals source folder name, creating
+// a structure like: baseDir/projectName/projectName/badger
+func findNestedBadgerDir(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			nestedPath := filepath.Join(dir, entry.Name(), "badger")
+			if info, err := os.Stat(nestedPath); err == nil && info.IsDir() {
+				return filepath.Join(dir, entry.Name())
+			}
+		}
+	}
+	return ""
+}
+
+// getActualProjectDir resolves the actual project directory, handling nested cases.
+func getActualProjectDir(baseDir, projectID string) string {
+	projectDir := filepath.Join(baseDir, projectID)
+
+	// Check if this project directory itself has badger (normal case)
+	if hasBadgerDir(projectDir) {
+		// Check if there's a nested directory with the same name (strong indicator of nested structure)
+		if isNestedProjectDir(projectDir) {
+			nestedPath := filepath.Join(projectDir, projectID)
+			if hasBadgerDir(nestedPath) {
+				return nestedPath
+			}
+		}
+		return projectDir
+	}
+
+	// No badger at projectDir level, look for nested
+	nested := findNestedBadgerDir(projectDir)
+	if nested != "" {
+		return nested
+	}
+
+	// Fallback to original projectDir even without badger check
+	// This allows error messages to report the correct path
+	return projectDir
+}
+
+// isNestedProjectDir checks if a project directory contains a subdirectory with the same name.
+// This happens when: ./gca ingest /tmp/smell-test ./data/smell-test
+// resulting in ./data/smell-test/smell-test/ structure where the project dir name equals subdir name.
+func isNestedProjectDir(projectDir string) bool {
+	parentName := filepath.Base(projectDir)
+	nestedPath := filepath.Join(projectDir, parentName)
+	info, err := os.Stat(nestedPath)
+	return err == nil && info.IsDir()
+}
+
+// isRetryableError checks if an error indicates a transient failure that may succeed on retry
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	retryableErrors := []string{
+		"database is locked",
+		"checkpoint",
+		"read-only transaction",
+		"resource temporarily unavailable",
+		"connection refused",
+		"timeout",
+	}
+	for _, pattern := range retryableErrors {
+		if strings.Contains(errStr, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// GetStoreWithRetry retrieves a store with exponential backoff retry on transient failures
+func (sm *StoreManager) GetStoreWithRetry(projectID string, maxRetries int) (*meb.MEBStore, error) {
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		store, err := sm.GetStore(projectID)
+		if err == nil {
+			return store, nil
+		}
+		lastErr = err
+
+		if !isRetryableError(err) {
+			return nil, err
+		}
+
+		if attempt < maxRetries {
+			backoff := time.Duration(1<<attempt) * 100 * time.Millisecond
+			if backoff > 2*time.Second {
+				backoff = 2 * time.Second
+			}
+			log.Printf("Retryable error for project %s (attempt %d/%d): %v, retrying in %v",
+				projectID, attempt+1, maxRetries+1, err, backoff)
+			time.Sleep(backoff)
+		}
+	}
+	return nil, lastErr
+}
+
 // ListProjects returns a list of available projects.
 func (sm *StoreManager) ListProjects() ([]ProjectMetadata, error) {
 	sm.mu.Lock()
@@ -205,12 +319,20 @@ func (sm *StoreManager) ListProjects() ([]ProjectMetadata, error) {
 	for _, entry := range entries {
 		if entry.IsDir() {
 			id := entry.Name()
+
+			// Skip directories that are just nested project structures
+			// (when project name equals folder name, like smell-test/smell-test)
+			actualDir := getActualProjectDir(sm.baseDir, id)
+			if !hasBadgerDir(actualDir) {
+				continue
+			}
+
 			meta := ProjectMetadata{
 				ID:   id,
 				Name: id,
 			}
 
-			metaPath := filepath.Join(sm.baseDir, id, "metadata.json")
+			metaPath := filepath.Join(actualDir, "metadata.json")
 			if data, err := os.ReadFile(metaPath); err == nil {
 				var jsonMeta ProjectMetadata
 				if err := json.Unmarshal(data, &jsonMeta); err == nil {

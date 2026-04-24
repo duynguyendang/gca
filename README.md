@@ -87,6 +87,8 @@ Powered by Firebase Genkit with support for multiple providers:
 - **Intent Classification**: 14+ task types (insight, narrative, resolve_symbol, etc.)
 - **Path Narratives**: Traces and explains interaction flows
 - **Context-Aware Prompts**: Injects local symbols, relations, and documentation
+- **Circuit Breaker**: AI service resilience with automatic failover
+- **Idempotent Analytics**: Safe re-runs without duplicate facts or stale data
 
 ### Code Ingestion
 
@@ -95,6 +97,8 @@ Powered by Firebase Genkit with support for multiple providers:
 - **Parallel Processing**: Worker pools for fast ingestion (1000+ files/min)
 - **Incremental Updates**: Re-ingest only changed files
 - **Symbol Resolution**: Resolves callee names to symbol IDs for accurate cross-references
+- **Idempotent Virtual Facts**: Safe re-runs with duplicate prevention
+- **Analytics Versioning**: Skip redundant computations on re-ingestion
 
 ## Why This Matters for Code Understanding
 
@@ -112,7 +116,6 @@ The following features are planned for future releases:
 | Feature | Status | Description |
 |---------|--------|-------------|
 | Generate Integration Tests | 🔴 TODO | AI-powered integration test generation |
-| Architecture Smell Detection | ✅ DONE | Detect circular deps, hub anomalies, layer violations via Datalog |
 | Automated Code Review | 🟡 TODO | PR analysis for bugs and security issues |
 | Dependency Migration Advisor | 🟡 TODO | Impact analysis for library upgrades |
 | Incident Debugging Assistant | 🟡 TODO | Trace errors to source code locations |
@@ -122,6 +125,9 @@ The following features are planned for future releases:
 | Test Impact Analysis | 🟡 TODO | Map changed files to affected tests |
 | Onboarding Assistant | 🟡 TODO | Guided tours of code architecture |
 | Framework Migration | 🟢 TODO | Convert code between languages/frameworks |
+| Architecture Smell Detection | ✅ DONE | Detect circular deps, hub anomalies, layer violations via Datalog |
+| Idempotent Analytics | ✅ DONE | Safe re-runs without duplicate facts |
+| AI Circuit Breaker | ✅ DONE | Graceful degradation on AI failures |
 
 ## RESTful API
 

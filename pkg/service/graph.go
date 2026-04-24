@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/common/errors"
@@ -51,9 +52,20 @@ func (s *GraphService) ListProjects() ([]manager.ProjectMetadata, error) {
 	return s.manager.ListProjects()
 }
 
+// ensureTimeout ensures the context has a timeout, wrapping if necessary
+func ensureTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 // ExportGraph executes a query and transforms the results into a D3 graph JSON.
 // It also optionally hydrates the nodes with source code.
 func (s *GraphService) ExportGraph(ctx context.Context, projectID, query string, hydrate bool, lazy bool) (*export.D3Graph, error) {
+	ctx, cancel := ensureTimeout(ctx, config.QueryTimeout)
+	defer cancel()
+
 	store, err := s.getStore(projectID)
 	if err != nil {
 		return nil, err
@@ -100,6 +112,9 @@ func (s *GraphService) getStore(projectID string) (*meb.MEBStore, error) {
 
 // GetCentralityRanking returns symbols ranked by their graph centrality
 func (s *GraphService) GetCentralityRanking(ctx context.Context, projectID string, limit int) ([]CentralityResult, error) {
+	ctx, cancel := ensureTimeout(ctx, config.QueryTimeout)
+	defer cancel()
+
 	store, err := s.getStore(projectID)
 	if err != nil {
 		return nil, err

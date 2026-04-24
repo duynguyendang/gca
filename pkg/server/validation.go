@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/config"
@@ -427,12 +428,106 @@ func IsValidQueryPattern(query string) bool {
 	return count == 0
 }
 
+// Middleware constructors for reusable validation chains
+
+// RequireProjectID returns a middleware that validates project_id query param
+func RequireProjectID() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		projectID := c.Query("project")
+		if err := ValidateProjectID(projectID); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+// RequireSymbolID returns a middleware that validates symbol_id query param
+func RequireSymbolID() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		symbolID := c.Query("symbol_id")
+		if err := ValidateSymbolID(symbolID); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+// ValidateQueryParam returns a middleware that validates query param
+func ValidateQueryParam(maxLen int) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		query := c.Query("query")
+		if query == "" {
+			c.Next()
+			return
+		}
+		if err := ValidateQuery(query, maxLen); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+// ValidatePagination returns a middleware for limit/offset validation
+func ValidatePagination(defaultLimit, maxLimit int) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if limitStr := c.Query("limit"); limitStr != "" {
+			limit, err := strconv.Atoi(limitStr)
+			if err != nil || limit <= 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be a positive integer"})
+				c.Abort()
+				return
+			}
+			if limit > maxLimit {
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("limit exceeds maximum of %d", maxLimit)})
+				c.Abort()
+				return
+			}
+		}
+		if offsetStr := c.Query("offset"); offsetStr != "" {
+			offset, err := strconv.Atoi(offsetStr)
+			if err != nil || offset < 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "offset must be a non-negative integer"})
+				c.Abort()
+				return
+			}
+		}
+		c.Next()
+	}
+}
+
+// RequireJSONBody returns a middleware that ensures JSON body is present
+func RequireJSONBody(dst interface{}) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request.Body == nil || c.Request.ContentLength == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "request body is required"})
+			c.Abort()
+			return
+		}
+		if err := c.ShouldBindJSON(dst); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid JSON body: %v", err)})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 // ValidateQuery validates a query string
-func ValidateQuery(query string) error {
+func ValidateQuery(query string, maxLen ...int) error {
 	if query == "" {
 		return &ValidationError{Field: "query", Message: "is required"}
 	}
-	if len(query) > config.MaxQueryLength {
+	limit := config.MaxQueryLength
+	if len(maxLen) > 0 {
+		limit = maxLen[0]
+	}
+	if len(query) > limit {
 		return &ValidationError{Field: "query", Message: "exceeds maximum length"}
 	}
 	return nil

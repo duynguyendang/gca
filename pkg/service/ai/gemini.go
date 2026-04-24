@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/duynguyendang/gca/pkg/common"
@@ -55,6 +56,11 @@ type AIService struct {
 	responseCacheTTL time.Duration
 	stopCh            chan struct{}
 	cleanupDone      chan struct{}
+
+	// Circuit breaker for AI service resilience
+	circuitFailures   atomic.Int32
+	circuitOpen       atomic.Bool
+	circuitLastFailure atomic.Int64
 }
 
 type cachedResponse struct {
@@ -174,7 +180,46 @@ func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService,
 	}, nil
 }
 
+const (
+	circuitFailureThreshold = 5
+	circuitOpenDuration     = 30 * time.Second
+)
+
+func (s *AIService) isCircuitOpen() bool {
+	if !s.circuitOpen.Load() {
+		return false
+	}
+	lastFailure := s.circuitLastFailure.Load()
+	if time.Since(time.Unix(lastFailure, 0)) > circuitOpenDuration {
+		s.circuitOpen.Store(false)
+		return false
+	}
+	return true
+}
+
+func (s *AIService) recordFailure() {
+	s.circuitFailures.Add(1)
+	s.circuitLastFailure.Store(time.Now().Unix())
+	if s.circuitFailures.Load() >= circuitFailureThreshold {
+		s.circuitOpen.Store(true)
+		logger.Warn("AI circuit breaker opened", "failures", s.circuitFailures.Load())
+	}
+}
+
+func (s *AIService) recordSuccess() {
+	s.circuitFailures.Store(0)
+	s.circuitOpen.Store(false)
+}
+
+func (s *AIService) shouldFailFast() bool {
+	return s.isCircuitOpen()
+}
+
 func (s *AIService) GenerateText(ctx context.Context, prompt string) (string, error) {
+	if s.shouldFailFast() {
+		return "", fmt.Errorf("AI service circuit breaker is open, failing fast to prevent cascading failures")
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
@@ -185,10 +230,12 @@ func (s *AIService) GenerateText(ctx context.Context, prompt string) (string, er
 		ai.WithPrompt(prompt),
 	)
 	if err != nil {
+		s.recordFailure()
 		logger.Error("LLM Request Failed", "prompt", prompt, "error", err)
 		return "", err
 	}
 
+	s.recordSuccess()
 	return resp.Text(), nil
 }
 

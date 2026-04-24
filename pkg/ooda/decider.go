@@ -29,6 +29,9 @@ type GraphDecider struct {
 	SmartSearchPrompt    *prompts.Prompt
 	MultiFilePrompt      *prompts.Prompt
 	DefaultContextPrompt *prompts.Prompt
+	InsightPrompt        *prompts.Prompt
+	SummaryPrompt        *prompts.Prompt
+	NarrativePrompt      *prompts.Prompt
 }
 
 func NewGraphDecider(storeManager StoreManager, promptLoader PromptLoader) *GraphDecider {
@@ -51,6 +54,9 @@ func NewGraphDecider(storeManager StoreManager, promptLoader PromptLoader) *Grap
 	d.SmartSearchPrompt = loadPrompt("smart_search.prompt")
 	d.MultiFilePrompt = loadPrompt("multi_file.prompt")
 	d.DefaultContextPrompt = loadPrompt("default_context.prompt")
+	d.InsightPrompt = loadPrompt("insight.prompt")
+	d.SummaryPrompt = loadPrompt("summary.prompt")
+	d.NarrativePrompt = loadPrompt("narrative.prompt")
 
 	return d
 }
@@ -145,6 +151,15 @@ func (d *GraphDecider) buildInsightPrompt(ctx context.Context, store *meb.MEBSto
 		return "", fmt.Errorf("no symbol ID available for insight task")
 	}
 
+	var contextBuilder strings.Builder
+	appendSymbolContext(ctx, store, symbolID, &contextBuilder)
+
+	if d.InsightPrompt != nil {
+		return d.InsightPrompt.Execute(map[string]interface{}{
+			"SymbolID": symbolID,
+			"Context":  contextBuilder.String(),
+		})
+	}
 	return fmt.Sprintf("Analyze the architectural role of component %s. Provide a comprehensive analysis including role, interactions, and design patterns.", symbolID), nil
 }
 
@@ -175,11 +190,23 @@ func (d *GraphDecider) buildSummaryPrompt(ctx context.Context, store *meb.MEBSto
 	if query == "" {
 		query = frame.SymbolID
 	}
+	if d.SummaryPrompt != nil {
+		return d.SummaryPrompt.Execute(map[string]interface{}{
+			"Query":   query,
+			"Symbols": nodes,
+		})
+	}
 	return fmt.Sprintf("Provide a 2-3 sentence architectural summary for file \"%s\".\nSymbols:\n%s", query, nodes), nil
 }
 
 func (d *GraphDecider) buildNarrativePrompt(ctx context.Context, store *meb.MEBStore, frame *GCAFrame) (string, error) {
 	names := extractNodeNames(frame.Data)
+	if d.NarrativePrompt != nil {
+		return d.NarrativePrompt.Execute(map[string]interface{}{
+			"Components": names,
+			"Query":       frame.Input,
+		})
+	}
 	return fmt.Sprintf("Explain the high-level logic flow for these components: %s. Keep it concise.", names), nil
 }
 
