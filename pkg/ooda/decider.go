@@ -204,7 +204,7 @@ func (d *GraphDecider) buildNarrativePrompt(ctx context.Context, store *meb.MEBS
 	if d.NarrativePrompt != nil {
 		return d.NarrativePrompt.Execute(map[string]interface{}{
 			"Components": names,
-			"Query":       frame.Input,
+			"Query":      frame.Input,
 		})
 	}
 	return fmt.Sprintf("Explain the high-level logic flow for these components: %s. Keep it concise.", names), nil

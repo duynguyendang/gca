@@ -99,8 +99,8 @@ func ParseSmellResult(r Result) (*SmellResult, error) {
 	}
 
 	result := &SmellResult{
-		Subject: subject,
-		Object:  object,
+		Subject:  subject,
+		Object:   object,
 		Severity: "Low",
 	}
 

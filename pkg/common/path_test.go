@@ -6,9 +6,9 @@ import (
 
 func TestExtractBaseName(t *testing.T) {
 	tests := []struct {
-		name  string
-		path  string
-		want  string
+		name string
+		path string
+		want string
 	}{
 		{name: "simple file", path: "foo.go", want: "foo.go"},
 		{name: "nested path", path: "pkg/server/handlers.go", want: "handlers.go"},
@@ -29,9 +29,9 @@ func TestExtractBaseName(t *testing.T) {
 
 func TestExtractDir(t *testing.T) {
 	tests := []struct {
-		name  string
-		path  string
-		want  string
+		name string
+		path string
+		want string
 	}{
 		{name: "nested path", path: "pkg/server/handlers.go", want: "pkg/server"},
 		{name: "file in root", path: "handlers.go", want: ""},
@@ -51,9 +51,9 @@ func TestExtractDir(t *testing.T) {
 
 func TestQuotePath(t *testing.T) {
 	tests := []struct {
-		name  string
-		path  string
-		want  string
+		name string
+		path string
+		want string
 	}{
 		{name: "simple path", path: "foo.go", want: "\"foo.go\""},
 		{name: "nested path", path: "pkg/server/handlers.go", want: "\"pkg/server/handlers.go\""},
@@ -72,10 +72,10 @@ func TestQuotePath(t *testing.T) {
 
 func TestJoinProjectPath(t *testing.T) {
 	tests := []struct {
-		name      string
-		project   string
-		relPath   string
-		want      string
+		name    string
+		project string
+		relPath string
+		want    string
 	}{
 		{name: "normal join", project: "myproject", relPath: "pkg/server", want: "myproject/pkg/server"},
 		{name: "empty project", project: "", relPath: "pkg/server", want: "pkg/server"},

@@ -121,9 +121,9 @@ func (m *mockVerifier) Verify(ctx context.Context, frame *GCAFrame) error {
 }
 
 type mockActor struct {
-	err            error
-	capturedPhase  Phase
-	capturedInput  string
+	err           error
+	capturedPhase Phase
+	capturedInput string
 }
 
 func (m *mockActor) Act(ctx context.Context, frame *GCAFrame) error {
@@ -330,7 +330,7 @@ func TestIntentClassifier_Classify(t *testing.T) {
 
 	tests := []struct {
 		input string
-		want GCATask
+		want  GCATask
 	}{
 		{"analyze the code", TaskInsight},
 		{"show me an insight", TaskInsight},
@@ -361,18 +361,18 @@ func TestIntentClassifier_Classify(t *testing.T) {
 
 func TestExtractPotentialSymbols(t *testing.T) {
 	tests := []struct {
-		name  string
-		query string
+		name    string
+		query   string
 		wantLen int
 	}{
 		{
-			name:  "empty query",
-			query: "",
+			name:    "empty query",
+			query:   "",
 			wantLen: 0,
 		},
 		{
-			name:  "only short words",
-			query: "the and but or",
+			name:    "only short words",
+			query:   "the and but or",
 			wantLen: 0,
 		},
 	}

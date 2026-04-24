@@ -220,9 +220,9 @@ func TestValidationMiddleware(t *testing.T) {
 
 func TestContainsSQLInjection(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		want    bool
+		name  string
+		input string
+		want  bool
 	}{
 		{"safe normal query", "triples(A,B,C)", false},
 		{"safe with word union", "union_select(A,B)", false}, // not uppercase UNION
@@ -251,9 +251,9 @@ func TestContainsSQLInjection(t *testing.T) {
 
 func TestContainsXSS(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		want    bool
+		name  string
+		input string
+		want  bool
 	}{
 		{"safe normal", "triples(A,B,C)", false},
 		{"dangerous script", "<script>alert(1)</script>", true},
@@ -279,9 +279,9 @@ func TestContainsXSS(t *testing.T) {
 
 func TestIsValidQueryPattern(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		want    bool
+		name  string
+		input string
+		want  bool
 	}{
 		{"valid with parens", "triples(A,B,C)", true},
 		{"valid complex", "triples(A,\"calls\",B), triples(B,\"calls\",A)", true},
@@ -420,9 +420,9 @@ func TestValidateCursor(t *testing.T) {
 
 func TestValidateClusters(t *testing.T) {
 	tests := []struct {
-		name    string
+		name     string
 		clusters int
-		wantErr bool
+		wantErr  bool
 	}{
 		{"valid positive", 5, false},
 		{"valid one", 1, false},
@@ -463,9 +463,9 @@ func TestValidateIDs(t *testing.T) {
 
 func TestValidateEmbedding(t *testing.T) {
 	tests := []struct {
-		name       string
-		embedding  []float32
-		wantErr    bool
+		name      string
+		embedding []float32
+		wantErr   bool
 	}{
 		{"valid embedding", []float32{0.1, 0.2, 0.3}, false},
 		{"empty embedding", []float32{}, true},

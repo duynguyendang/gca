@@ -32,11 +32,11 @@ type IntentResult struct {
 
 type IntentFeatures struct {
 	HasQuestionWord   bool
-	HasSymbol          bool
-	QueryLength        int
-	StructuralScore    float64
-	DomainSpecificity   float64
-	CoOccurrenceBonus  float64
+	HasSymbol         bool
+	QueryLength       int
+	StructuralScore   float64
+	DomainSpecificity float64
+	CoOccurrenceBonus float64
 }
 
 // intentPatternWithFeatures extends basic pattern with metadata for scoring
@@ -53,7 +53,7 @@ var strongIntentIndicators = map[Intent][]string{
 	IntentSecurity:    {"sql injection", "xss", "csrf", "authentication", "authorization", "sql-inject", "sanitiz", "vulnerabilit", "audit"},
 	IntentRefactor:    {"refactor", "technical debt", "code smell", "cyclic complexity", "coupling"},
 	IntentTestGen:     {"unit test", "integration test", "test coverage", "write test", "generate test", "jest", "pytest", "go test"},
-	IntentPerformance:  {"performance", "bottleneck", "optimize", "memory leak", "cpu", "latency", "slow query"},
+	IntentPerformance: {"performance", "bottleneck", "optimize", "memory leak", "cpu", "latency", "slow query"},
 }
 
 // questionWords that indicate interrogative intent
@@ -566,8 +566,8 @@ func isComplementaryIntent(prev, curr Intent) bool {
 	transitions := map[Intent][]Intent{
 		IntentExplain:   {IntentFind, IntentWhoCalls, IntentWhatCalls},
 		IntentSummarize: {IntentFind, IntentExplain},
-		IntentFind:     {IntentExplain, IntentWhoCalls},
-		IntentWhoCalls: {IntentFind, IntentExplain},
+		IntentFind:      {IntentExplain, IntentWhoCalls},
+		IntentWhoCalls:  {IntentFind, IntentExplain},
 	}
 
 	if candidates, ok := transitions[prev]; ok {

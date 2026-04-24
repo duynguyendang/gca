@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/gin-gonic/gin"
 )
@@ -435,7 +436,7 @@ func RequireProjectID() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		projectID := c.Query("project")
 		if err := ValidateProjectID(projectID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
 			c.Abort()
 			return
 		}
@@ -448,7 +449,7 @@ func RequireSymbolID() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		symbolID := c.Query("symbol_id")
 		if err := ValidateSymbolID(symbolID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid symbol ID", err))
 			c.Abort()
 			return
 		}
@@ -465,7 +466,7 @@ func ValidateQueryParam(maxLen int) gin.HandlerFunc {
 			return
 		}
 		if err := ValidateQuery(query, maxLen); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid query", err))
 			c.Abort()
 			return
 		}

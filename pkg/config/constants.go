@@ -101,7 +101,7 @@ const (
 
 // Architectural tag constants for security smell detection
 const (
-	TagPublicAPI  = "public_api"
+	TagPublicAPI = "public_api"
 	TagSanitizer = "sanitizer"
 	TagDatabase  = "database"
 )
@@ -120,13 +120,13 @@ const (
 
 // Additional predicates for pathfinder and virtual relations
 const (
-	PredicateCallsAPI      = "calls_api"
-	PredicateHandledBy     = "handled_by"
-	PredicateExports       = "exports"
-	PredicateParentDefines = "parent_defines"
-	PredicateExposesModel  = "exposes_model"
-	PredicateCalledBy      = "called_by"
-	PredicateHasName       = "has_name"
+	PredicateCallsAPI        = "calls_api"
+	PredicateHandledBy       = "handled_by"
+	PredicateExports         = "exports"
+	PredicateParentDefines   = "parent_defines"
+	PredicateExposesModel    = "exposes_model"
+	PredicateCalledBy        = "called_by"
+	PredicateHasName         = "has_name"
 	PredicateHasSecurityRisk = "has_security_risk"
 )
 
@@ -144,7 +144,7 @@ const (
 
 // Virtual Attention Sink configuration
 const (
-	VirtualAttentionThreshold = 0.05 // Minimum centrality score (0-1) to include symbol
-	MaxAttentionSymbols       = 8    // Maximum symbols to include in prompt context
+	VirtualAttentionThreshold = 0.05  // Minimum centrality score (0-1) to include symbol
+	MaxAttentionSymbols       = 8     // Maximum symbols to include in prompt context
 	StickyOnlyMode            = false // If true, query only GlobalTopicID (skip Window)
 )

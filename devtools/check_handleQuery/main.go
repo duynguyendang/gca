@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
-	
+
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/store"
 )
@@ -15,7 +15,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer s.Close()
-	
+
 	// Check what defines facts look like for handlers.go
 	fmt.Println("=== defines facts for handlers.go ===")
 	count := 0
@@ -25,7 +25,7 @@ func main() {
 		}
 		symID, _ := fact.Object.(string)
 		fmt.Printf("  defines: %s\n", symID)
-		
+
 		// Check has_name for this symbol
 		for hn, hnErr := range s.Scan(symID, "has_name", "") {
 			if hnErr != nil {
@@ -33,7 +33,7 @@ func main() {
 			}
 			fmt.Printf("    -> has_name: %v\n", hn.Object)
 		}
-		
+
 		count++
 		if count >= 5 {
 			fmt.Println("  ... (truncated)")

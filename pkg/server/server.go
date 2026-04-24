@@ -9,6 +9,7 @@ import (
 
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/agent"
+	"github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/gca/pkg/registry"
@@ -194,7 +195,7 @@ func (s *Server) handleAIAsk(c *gin.Context) {
 	var req ai.AIRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid request body", err))
 		return
 	}
 
@@ -210,14 +211,14 @@ func (s *Server) handleAIAsk(c *gin.Context) {
 
 	// Validate ProjectID
 	if err := ValidateProjectID(req.ProjectID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
 		return
 	}
 
 	// Validate and sanitize Query
 	if req.Query != "" {
 		if err := ValidateQuery(req.Query); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid query", err))
 			return
 		}
 		req.Query = SanitizeString(req.Query)
@@ -232,14 +233,14 @@ func (s *Server) handleAIAsk(c *gin.Context) {
 		answer, err = s.aiService.HandleRequestOODA(c.Request.Context(), req)
 		if err != nil {
 			logger.Error("AI OODA Error", "error", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			handleError(c, errors.NewAppError(http.StatusInternalServerError, "AI request failed", err))
 			return
 		}
 	} else {
 		answer, err = s.aiService.HandleRequest(c.Request.Context(), req)
 		if err != nil {
 			logger.Error("AI Error", "error", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			handleError(c, errors.NewAppError(http.StatusInternalServerError, "AI request failed", err))
 			return
 		}
 	}
@@ -252,7 +253,7 @@ func (s *Server) handleAgentExecute(c *gin.Context) {
 	var req agent.AgentRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid request body", err))
 		return
 	}
 
@@ -268,20 +269,20 @@ func (s *Server) handleAgentExecute(c *gin.Context) {
 
 	// Validate ProjectID
 	if err := ValidateProjectID(req.ProjectID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
 		return
 	}
 
 	// Validate and sanitize Query
 	if err := ValidateQuery(req.Query); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid query", err))
 		return
 	}
 	req.Query = SanitizeString(req.Query)
 
 	store, err := s.manager.GetStore(req.ProjectID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "project not found: " + req.ProjectID})
+		handleError(c, errors.NewAppError(http.StatusNotFound, "project not found", err))
 		return
 	}
 
@@ -304,7 +305,7 @@ func (s *Server) handleAgentExecute(c *gin.Context) {
 	session, err := orch.Run(ctx, req.ProjectID, req.Query, predicateNames)
 	if err != nil {
 		logger.Error("Agent Execute failed", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		handleError(c, errors.NewAppError(http.StatusInternalServerError, "agent execution failed", err))
 		return
 	}
 

@@ -361,7 +361,7 @@ func (ts *TemplateStore) ListTemplates(ctx context.Context, projectID, category 
 
 	for _, r := range results {
 		id := r["ID"]
-		
+
 		// Keep entry with non-empty body if we already saw this id
 		if existingIdx, ok := seen[id]; ok {
 			if r["Body"] != "" && templates[existingIdx].Body == "" {

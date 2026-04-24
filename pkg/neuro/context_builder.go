@@ -11,11 +11,11 @@ import (
 
 // DiagnosticContext represents the parsed diagnostic context from Analytical Store.
 type DiagnosticContext struct {
-	EntryPoints     []string
-	HubFiles        []HubFile
-	SmellFlags      []SmellFlag
-	QueryTemplates  []QueryTemplate
-	TopSymbols      []string
+	EntryPoints    []string
+	HubFiles       []HubFile
+	SmellFlags     []SmellFlag
+	QueryTemplates []QueryTemplate
+	TopSymbols     []string
 }
 
 // HubFile represents a file with hub characteristics.

@@ -16,20 +16,20 @@ import (
 var ErrSessionExpired = errors.New("session expired")
 
 const (
-	defaultSessionTTL    = 30 * time.Minute
-	maxSessions          = 100
-	sweepInterval        = 5 * time.Minute
-	topicIDMask          = 0xFFFFFF
-	topicIDEphemeralBit  = 0x400000 // ephemeral sessions use bit 22 (distinct from analytical 0x800000)
+	defaultSessionTTL   = 30 * time.Minute
+	maxSessions         = 100
+	sweepInterval       = 5 * time.Minute
+	topicIDMask         = 0xFFFFFF
+	topicIDEphemeralBit = 0x400000 // ephemeral sessions use bit 22 (distinct from analytical 0x800000)
 )
 
 // EphemeralStore manages RAM-only sessions for transient facts (PR diffs, active incidents).
 type EphemeralStore struct {
-	mu             sync.RWMutex
-	sessions       map[string]*Session
-	defaultTTL     time.Duration
-	stopCh         chan struct{}
-	telemetrySink  meb.TelemetrySink
+	mu            sync.RWMutex
+	sessions      map[string]*Session
+	defaultTTL    time.Duration
+	stopCh        chan struct{}
+	telemetrySink meb.TelemetrySink
 }
 
 // Session represents a temporary RAM-based store for diff facts.
@@ -86,8 +86,8 @@ func (es *EphemeralStore) NewSession(projectID string) (*Session, error) {
 		InMemory:       true,
 		BlockCacheSize: 64 << 20,
 		IndexCacheSize: 64 << 20,
-		Profile:       "Safe-Serving",
-		EnableAutoGC:  false,
+		Profile:        "Safe-Serving",
+		EnableAutoGC:   false,
 	}
 
 	factsStore, err := meb.NewMEBStore(cfg)

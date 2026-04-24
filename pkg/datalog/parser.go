@@ -61,7 +61,7 @@ func Parse(query string) ([]Atom, error) {
 
 		// Handle comparison operators: A > B, A >= B, A < B, A <= B
 		for _, comp := range []struct {
-			op      string
+			op        string
 			predicate string
 		}{
 			{">=", "gte"},

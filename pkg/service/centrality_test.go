@@ -53,12 +53,12 @@ func TestIsInterfacePattern(t *testing.T) {
 		symbol string
 		want   bool
 	}{
-		{"interface keyword", "HandlerInterface", true},  // contains "interface"
-		{"handler keyword", "MyHandler", true},            // contains "handler"
-		{"service keyword", "UserService", true},         // contains "service"
+		{"interface keyword", "HandlerInterface", true}, // contains "interface"
+		{"handler keyword", "MyHandler", true},          // contains "handler"
+		{"service keyword", "UserService", true},        // contains "service"
 		{"repository keyword", "DataRepository", true},  // contains "repository"
-		{"controller keyword", "HomeController", true},    // contains "controller"
-		{"no match", "MyHandler", true},                  // contains handler
+		{"controller keyword", "HomeController", true},  // contains "controller"
+		{"no match", "MyHandler", true},                 // contains handler
 		{"IConnection matches client", "IClient", true}, // contains "client"
 		{"lowercase not prefix match", "lowercase", false},
 		{"empty", "", false},
@@ -76,18 +76,18 @@ func TestIsInterfacePattern(t *testing.T) {
 
 func TestNormalizeCentrality(t *testing.T) {
 	tests := []struct {
-		name   string
-		scores map[string]float64
+		name    string
+		scores  map[string]float64
 		wantLen int
 	}{
 		{
-			name:   "normal scores",
-			scores: map[string]float64{"a": 1.0, "b": 2.0, "c": 3.0},
+			name:    "normal scores",
+			scores:  map[string]float64{"a": 1.0, "b": 2.0, "c": 3.0},
 			wantLen: 3,
 		},
 		{
-			name:   "empty scores",
-			scores: map[string]float64{},
+			name:    "empty scores",
+			scores:  map[string]float64{},
 			wantLen: 0,
 		},
 	}

@@ -144,9 +144,9 @@ func TestProjectTagConfig_HasTag(t *testing.T) {
 	}
 
 	tests := []struct {
-		path    string
-		tag     string
-		want    bool
+		path string
+		tag  string
+		want bool
 	}{
 		{"foo_handler.go", "api", true},
 		{"foo_handler.go", "db", false},

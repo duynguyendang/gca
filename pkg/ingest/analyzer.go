@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	CurrentAnalyticsVersion = "2.0"
+	CurrentAnalyticsVersion   = "2.0"
 	AnalyticsVersionPredicate = "analytics_version"
 )
 

@@ -51,15 +51,16 @@ type AIService struct {
 	DefaultContextPrompt *prompts.Prompt
 
 	// Response caching for AI synthesis
-	responseCache    map[string]*cachedResponse
-	responseCacheMu  sync.RWMutex
-	responseCacheTTL time.Duration
-	stopCh            chan struct{}
-	cleanupDone      chan struct{}
+	responseCache        map[string]*cachedResponse
+	responseCacheMu      sync.RWMutex
+	responseCacheTTL     time.Duration
+	responseCacheMaxSize int
+	stopCh               chan struct{}
+	cleanupDone          chan struct{}
 
 	// Circuit breaker for AI service resilience
-	circuitFailures   atomic.Int32
-	circuitOpen       atomic.Bool
+	circuitFailures    atomic.Int32
+	circuitOpen        atomic.Bool
 	circuitLastFailure atomic.Int64
 }
 
@@ -175,6 +176,7 @@ func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService,
 		DefaultContextPrompt: loadPrompt("default_context"),
 		responseCache:        make(map[string]*cachedResponse),
 		responseCacheTTL:     cacheTTL,
+		responseCacheMaxSize: 1000,
 		stopCh:               stopCh,
 		cleanupDone:          cleanupDone,
 	}, nil
@@ -350,6 +352,16 @@ func (s *AIService) BuildDiagnosticContext(ctx context.Context, projectID string
 func (s *AIService) cacheResponse(cacheKey string, answer, summary string) {
 	s.responseCacheMu.Lock()
 	defer s.responseCacheMu.Unlock()
+
+	// Enforce max cache size
+	if len(s.responseCache) >= s.responseCacheMaxSize {
+		// Remove oldest entry (simple eviction)
+		for k := range s.responseCache {
+			delete(s.responseCache, k)
+			break
+		}
+	}
+
 	s.responseCache[cacheKey] = &cachedResponse{
 		Answer:  answer,
 		Summary: summary,
@@ -376,14 +388,36 @@ func (s *AIService) generateCacheKey(query string, intent Intent, results interf
 	return hex.EncodeToString(hash[:])
 }
 
-// cleanupExpiredCache removes expired cache entries
+// cleanupExpiredCache removes expired cache entries and enforces max size
 func (s *AIService) cleanupExpiredCache() {
 	s.responseCacheMu.Lock()
 	defer s.responseCacheMu.Unlock()
 	now := time.Now()
+
+	// Remove expired entries
 	for key, cached := range s.responseCache {
 		if now.Sub(cached.Time) >= s.responseCacheTTL {
 			delete(s.responseCache, key)
+		}
+	}
+
+	// Enforce max size (remove oldest if still over limit)
+	for len(s.responseCache) > s.responseCacheMaxSize {
+		// Find and remove oldest entry
+		var oldestKey string
+		var oldestTime time.Time
+		first := true
+		for k, v := range s.responseCache {
+			if first || v.Time.Before(oldestTime) {
+				oldestKey = k
+				oldestTime = v.Time
+				first = false
+			}
+		}
+		if oldestKey != "" {
+			delete(s.responseCache, oldestKey)
+		} else {
+			break
 		}
 	}
 }
@@ -1000,11 +1034,11 @@ func (s *AIService) HandleRequestOODA(ctx context.Context, req AIRequest) (strin
 }
 
 type AskRequest struct {
-	ProjectID          string            `json:"project_id"`
-	Query              string            `json:"query"`
-	SymbolID           string            `json:"symbol_id,omitempty"`
-	Depth              int               `json:"depth,omitempty"`
-	Context            string            `json:"context,omitempty"`
+	ProjectID           string             `json:"project_id"`
+	Query               string             `json:"query"`
+	SymbolID            string             `json:"symbol_id,omitempty"`
+	Depth               int                `json:"depth,omitempty"`
+	Context             string             `json:"context,omitempty"`
 	ConversationHistory []ConversationTurn `json:"conversation_history,omitempty"`
 }
 
@@ -1101,8 +1135,8 @@ func (s *AIService) HandleAsk(ctx context.Context, req AskRequest) (*AskResponse
 		IntentChat:        true,
 		IntentFind:        true,
 		IntentSummarize:   true,
-		IntentExplain:    true,
-		IntentRefactor:   true,
+		IntentExplain:     true,
+		IntentRefactor:    true,
 		IntentSecurity:    true,
 		IntentPerformance: true,
 	}

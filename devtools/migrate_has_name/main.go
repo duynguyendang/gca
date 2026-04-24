@@ -33,48 +33,48 @@ func main() {
 	// Find all defines facts and create has_name facts from them
 	// defines: file.go:FuncName defines file.go:FuncName
 	// We need to extract the short name from the symbol ID
-	
+
 	hasNameFacts := make([]meb.Fact, 0)
-	
+
 	fmt.Println("\nScanning for symbols to add has_name facts...")
-	
+
 	// Scan all type facts to find symbols
 	typeCount := 0
 	for fact, err := range s.Scan("", config.PredicateType, "") {
 		if err != nil {
 			continue
 		}
-		
+
 		symbolID := fact.Subject
 		symType, _ := fact.Object.(string)
-		
+
 		// Extract short name from symbol ID
 		// Symbol IDs are like "file.go:FuncName" or "file.go:Type.Method"
 		shortName := extractShortName(symbolID)
 		if shortName == "" {
 			continue
 		}
-		
+
 		hasNameFacts = append(hasNameFacts, meb.Fact{
 			Subject:   symbolID,
 			Predicate: config.PredicateHasName,
 			Object:    shortName,
 		})
-		
+
 		typeCount++
 		if typeCount <= 5 {
 			fmt.Printf("  %s (type=%s) -> has_name: %s\n", symbolID, symType, shortName)
 		}
 	}
-	
+
 	fmt.Printf("\nFound %d symbols to migrate\n", typeCount)
 	fmt.Printf("Creating %d has_name facts...\n", len(hasNameFacts))
-	
+
 	if len(hasNameFacts) == 0 {
 		fmt.Println("No facts to add, exiting")
 		return
 	}
-	
+
 	// Add facts in batches
 	batchSize := 1000
 	for i := 0; i < len(hasNameFacts); i += batchSize {
@@ -82,7 +82,7 @@ func main() {
 		if end > len(hasNameFacts) {
 			end = len(hasNameFacts)
 		}
-		
+
 		batch := hasNameFacts[i:end]
 		if err := s.AddFactBatch(batch); err != nil {
 			log.Printf("Error adding batch %d-%d: %v", i, end, err)
@@ -90,10 +90,10 @@ func main() {
 		}
 		fmt.Printf("  Added batch %d-%d (%d facts)\n", i, end, len(batch))
 	}
-	
+
 	fmt.Printf("\nMigration complete!\n")
 	fmt.Printf("Total facts after migration: %d\n", s.Count())
-	
+
 	// Verify
 	fmt.Println("\nVerifying has_name facts...")
 	verifyCount := 0
@@ -113,7 +113,7 @@ func extractShortName(symbolID string) string {
 	// Find the last ':' or '.'
 	lastColon := -1
 	lastDot := -1
-	
+
 	for i := len(symbolID) - 1; i >= 0; i-- {
 		if symbolID[i] == ':' {
 			lastColon = i
@@ -123,15 +123,15 @@ func extractShortName(symbolID string) string {
 			lastDot = i
 		}
 	}
-	
+
 	if lastColon != -1 {
 		return symbolID[lastColon+1:]
 	}
-	
+
 	if lastDot != -1 {
 		// For methods like "file.go:Type.Method", get "Method"
 		return symbolID[lastDot+1:]
 	}
-	
+
 	return symbolID
 }

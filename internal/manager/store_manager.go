@@ -56,20 +56,20 @@ const (
 
 // TopicID constants for store partitioning.
 const (
-	topicIDMask           = 0xFFFFFF // 24-bit mask
-	topicIDHighBit        = 0x800000 // high bit set = Analytical partition
-	topicIDAnalyticalBit  = 0x800000 // alias for clarity
-	topicIDGlobalMask     = 0x7FFFFF // high bit clear = Source/Global partition
+	topicIDMask          = 0xFFFFFF // 24-bit mask
+	topicIDHighBit       = 0x800000 // high bit set = Analytical partition
+	topicIDAnalyticalBit = 0x800000 // alias for clarity
+	topicIDGlobalMask    = 0x7FFFFF // high bit clear = Source/Global partition
 )
 
 // Memory constants.
 const (
 	MemoryProfileDefault MemoryProfile = "default"
 	MemoryProfileLow     MemoryProfile = "low"
-	MaxOpenStores                     = 10
-	ProjectListTTL                    = 1 * time.Minute
-	DefaultMaxFacts                   = 5_000_000 // 5M facts retention limit
-	WindowMaxFacts                    = 500_000   // 500K facts window limit
+	MaxOpenStores                      = 10
+	ProjectListTTL                     = 1 * time.Minute
+	DefaultMaxFacts                    = 5_000_000 // 5M facts retention limit
+	WindowMaxFacts                     = 500_000   // 500K facts window limit
 )
 
 // StoreManager manages multiple MEBStore instances.
@@ -483,8 +483,8 @@ func (sm *StoreManager) GetAnalyticalStore(projectID string) (*meb.MEBStore, err
 
 // StorePair holds both store references for federated queries.
 type StorePair struct {
-	Source      *meb.MEBStore
-	Analytical  *meb.MEBStore
+	Source     *meb.MEBStore
+	Analytical *meb.MEBStore
 }
 
 // GetBothStores returns both stores for federated cross-store queries.

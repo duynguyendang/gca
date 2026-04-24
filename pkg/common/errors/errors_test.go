@@ -216,9 +216,9 @@ func TestWrapErrorf_Nil(t *testing.T) {
 
 func TestIsNotFound(t *testing.T) {
 	tests := []struct {
-		name  string
-		err   error
-		want  bool
+		name string
+		err  error
+		want bool
 	}{
 		{name: "ErrNotFound", err: ErrNotFound, want: true},
 		{name: "ErrGraphNotFound", err: ErrGraphNotFound, want: true},
@@ -238,9 +238,9 @@ func TestIsNotFound(t *testing.T) {
 
 func TestIsInvalidInput(t *testing.T) {
 	tests := []struct {
-		name  string
-		err   error
-		want  bool
+		name string
+		err  error
+		want bool
 	}{
 		{name: "ErrInvalidInput", err: ErrInvalidInput, want: true},
 		{name: "ErrGraphInvalidQuery", err: ErrGraphInvalidQuery, want: true},
@@ -272,9 +272,9 @@ func TestIsInternal(t *testing.T) {
 
 func TestIsTimeout(t *testing.T) {
 	tests := []struct {
-		name  string
-		err   error
-		want  bool
+		name string
+		err  error
+		want bool
 	}{
 		{name: "ErrTimeout", err: ErrTimeout, want: true},
 		{name: "ErrQueryTimeout", err: ErrQueryTimeout, want: true},
@@ -292,9 +292,9 @@ func TestIsTimeout(t *testing.T) {
 
 func TestIsServiceUnavailable(t *testing.T) {
 	tests := []struct {
-		name  string
-		err   error
-		want  bool
+		name string
+		err  error
+		want bool
 	}{
 		{name: "ErrServiceUnavailable", err: ErrServiceUnavailable, want: true},
 		{name: "ErrStoreUnavailable", err: ErrStoreUnavailable, want: true},
@@ -309,4 +309,3 @@ func TestIsServiceUnavailable(t *testing.T) {
 		})
 	}
 }
-

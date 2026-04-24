@@ -20,7 +20,7 @@ type ProjectTagConfig struct {
 func DefaultTagRules() []TagRule {
 	return []TagRule{
 		{
-			Tag:     TagPublicAPI,
+			Tag: TagPublicAPI,
 			Pattern: regexp.MustCompile(`^(api|controllers|routers|handlers)/|` +
 				`^(cmd|cmd/api|internal/api|internal/handlers)/|` +
 				`.*_handler\.go$|` +
@@ -29,14 +29,14 @@ func DefaultTagRules() []TagRule {
 			Weight: 10,
 		},
 		{
-			Tag:    TagSanitizer,
+			Tag: TagSanitizer,
 			Pattern: regexp.MustCompile(`^(middleware|security|auth)/|` +
 				`^(internal/middleware|internal/security)/|` +
 				`.*_(middleware|auth|sanitizer|validator|guard)\.go$`),
 			Weight: 0, // Sanitizers reduce risk, not add it
 		},
 		{
-			Tag:    TagDatabase,
+			Tag: TagDatabase,
 			Pattern: regexp.MustCompile(`^(db|repository|models|dal|data)/|` +
 				`^(internal/dal|internal/repo|internal/persistence)/|` +
 				`.*_(repository|dao|db|store|query)\.go$|` +

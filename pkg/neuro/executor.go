@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/duynguyendang/gca/internal/manager"
-	"github.com/duynguyendang/gca/pkg/registry"
 	mebpkg "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/registry"
 	"github.com/duynguyendang/gca/pkg/service/ai"
 )
 
@@ -18,7 +18,7 @@ var IntentToTemplate = map[ai.Intent][]string{
 		"smell_hub_anomaly",
 		"smell_layer_violation",
 	},
-	ai.IntentWhoCalls:    {"query_who_calls"},
+	ai.IntentWhoCalls:   {"query_who_calls"},
 	ai.IntentWhatCalls:  {"query_what_calls"},
 	ai.IntentHowReaches: {"query_reachability"},
 	ai.IntentSecurity: {
@@ -38,8 +38,8 @@ var IntentToTemplate = map[ai.Intent][]string{
 // NeuroSymbolicExecutor orchestrates the OODA loop using diagnostic context
 // and template store for grounded AI responses.
 type NeuroSymbolicExecutor struct {
-	storeManager  *manager.StoreManager
-	templateStore *registry.TemplateStore
+	storeManager   *manager.StoreManager
+	templateStore  *registry.TemplateStore
 	contextBuilder *ContextBuilder
 }
 
@@ -47,19 +47,19 @@ type NeuroSymbolicExecutor struct {
 func NewNeuroSymbolicExecutor(storeManager *manager.StoreManager, templateStore *registry.TemplateStore) *NeuroSymbolicExecutor {
 	return &NeuroSymbolicExecutor{
 		storeManager:   storeManager,
-		templateStore:   templateStore,
+		templateStore:  templateStore,
 		contextBuilder: NewContextBuilder(storeManager),
 	}
 }
 
 // ExecuteResult represents the result of a neuro-symbolic execution.
 type ExecuteResult struct {
-	DiagnosticContext string                 // The diagnostic context used
-	Intent           ai.Intent              // Classified intent
-	TemplateID       string                 // Selected template ID
-	Query            string                 // Parameterized query
-	Results          []map[string]string   // Query execution results
-	Answer           string                 // Final synthesized answer
+	DiagnosticContext string              // The diagnostic context used
+	Intent            ai.Intent           // Classified intent
+	TemplateID        string              // Selected template ID
+	Query             string              // Parameterized query
+	Results           []map[string]string // Query execution results
+	Answer            string              // Final synthesized answer
 }
 
 // Execute implements the Neuro-Symbolic pattern:

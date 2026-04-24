@@ -241,14 +241,14 @@ func TestParsePlanResponse(t *testing.T) {
 			wantErr:   false,
 		},
 		{
-			name:      "invalid JSON",
-			input:     `not json at all`,
-			wantErr:   true,
+			name:    "invalid JSON",
+			input:   `not json at all`,
+			wantErr: true,
 		},
 		{
-			name:      "empty string",
-			input:     ``,
-			wantErr:   true,
+			name:    "empty string",
+			input:   ``,
+			wantErr: true,
 		},
 	}
 
