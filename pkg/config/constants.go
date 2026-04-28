@@ -148,3 +148,16 @@ const (
 	MaxAttentionSymbols       = 8     // Maximum symbols to include in prompt context
 	StickyOnlyMode            = false // If true, query only GlobalTopicID (skip Window)
 )
+
+// SkippedDirectories lists directory names excluded from filesystem walks during ingestion.
+var SkippedDirectories = []string{"node_modules", ".git", "dist", "build", ".next"}
+
+// IsSkippedDir returns true if the directory name should be skipped during walks.
+func IsSkippedDir(name string) bool {
+	for _, d := range SkippedDirectories {
+		if name == d {
+			return true
+		}
+	}
+	return false
+}

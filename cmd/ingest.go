@@ -18,6 +18,8 @@ var _ context.Context // Explicitly reference context package type
 var incremental bool
 var noEmbed bool
 var reEmbed bool
+var fromCommit string
+var toCommit string
 
 // ingestCmd represents the ingest command
 var ingestCmd = &cobra.Command{
@@ -46,6 +48,8 @@ Arguments:
 		opts := &ingest.IngestOptions{
 			SkipEmbeddings: noEmbed,
 			ReEmbed:        reEmbed,
+			FromCommit:     fromCommit,
+			ToCommit:       toCommit,
 		}
 
 		// Create context with signal handling
@@ -77,12 +81,16 @@ Arguments:
 		select {
 		case <-ctx.Done():
 			fmt.Println("Ingestion interrupted, closing store...")
-			s.Close()
+			if closeErr := s.Close(); closeErr != nil {
+				log.Printf("Warning: failed to close store: %v", closeErr)
+			}
 			return ctx.Err()
 		case err := <-errChan:
 			if err != nil {
 				log.Printf("Ingestion failed: %v", err)
-				s.Close()
+				if closeErr := s.Close(); closeErr != nil {
+					log.Printf("Warning: failed to close store: %v", closeErr)
+				}
 				return err
 			}
 
@@ -125,4 +133,6 @@ func init() {
 	ingestCmd.Flags().BoolVarP(&incremental, "incremental", "i", false, "Enable incremental ingestion (only process changed files)")
 	ingestCmd.Flags().BoolVarP(&noEmbed, "no-embed", "e", false, "Skip embedding generation during ingestion")
 	ingestCmd.Flags().BoolVar(&reEmbed, "re-embed", false, "Regenerate embeddings for all symbols from source code")
+	ingestCmd.Flags().StringVar(&fromCommit, "from-commit", "", "Start commit for git-based incremental ingestion")
+	ingestCmd.Flags().StringVar(&toCommit, "to-commit", "", "End commit for git-based incremental (default: working tree)")
 }

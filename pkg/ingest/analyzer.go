@@ -3,9 +3,9 @@ package ingest
 import (
 	"context"
 	"fmt"
-	"log"
 
 	mebpkg "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 )
 
@@ -65,17 +65,17 @@ func NewAnalyzer(sm StoreManagerInterface, ts TemplateStoreInterface) *Analyzer 
 // 2. Compute centrality and entry points using Datalog rules
 // 3. Execute templates from TemplateStore
 func (a *Analyzer) RunStaticAnalysis(ctx context.Context, projectID string) error {
-	log.Printf("Starting static analysis for project: %s", projectID)
+	logger.Info("Starting static analysis", "project", projectID)
 
 	if err := a.clearAnalyticalData(ctx, projectID); err != nil {
-		log.Printf("Warning: failed to clear old analytical data: %v", err)
+		logger.Warn("Failed to clear old analytical data", "error", err)
 	}
 
 	if err := a.executeRulesFromTemplates(ctx, projectID); err != nil {
-		log.Printf("Warning: template rule execution failed: %v", err)
+		logger.Warn("Template rule execution failed", "error", err)
 	}
 
-	log.Printf("Static analysis completed for project: %s", projectID)
+	logger.Info("Static analysis completed", "project", projectID)
 	return nil
 }
 
@@ -93,7 +93,7 @@ func (a *Analyzer) executeRulesFromTemplates(ctx context.Context, projectID stri
 	}
 
 	if len(templates) == 0 {
-		log.Printf("No templates found in TemplateStore")
+		logger.Info("No templates found in TemplateStore")
 		return nil
 	}
 
@@ -116,22 +116,22 @@ func (a *Analyzer) executeRulesFromTemplates(ctx context.Context, projectID stri
 
 		results, err := mebpkg.Query(ctx, sourceStore, tmpl.Body)
 		if err != nil {
-			log.Printf("Warning: template %s query failed: %v", tmpl.ID, err)
+			logger.Warn("Template query failed", "template", tmpl.ID, "error", err)
 			continue
 		}
 
-		log.Printf("Template %s returned %d results", tmpl.ID, len(results))
+		logger.Debug("Template returned results", "template", tmpl.ID, "count", len(results))
 
 		for _, r := range results {
 			if err := a.emitFactFromTemplate(analyticalStore, r, tmpl); err != nil {
-				log.Printf("Warning: failed to emit fact for template %s: %v", tmpl.ID, err)
+				logger.Warn("Failed to emit fact for template", "template", tmpl.ID, "error", err)
 			} else {
 				totalResults++
 			}
 		}
 	}
 
-	log.Printf("Template rule execution complete: %d facts emitted from %d templates", totalResults, len(templates))
+	logger.Info("Template rule execution complete", "facts", totalResults, "templates", len(templates))
 	return nil
 }
 
@@ -197,30 +197,30 @@ func (a *Analyzer) clearAnalyticalData(ctx context.Context, projectID string) er
 	}
 
 	for _, pred := range predicatesToClear {
-		log.Printf("Clearing %s facts for project %s...", pred, projectID)
+		logger.Info("Clearing facts", "predicate", pred, "project", projectID)
 
 		subjectsToDelete := make(map[string]bool)
 		for fact, err := range analyticalStore.ScanContext(ctx, "", pred, "") {
 			if err != nil {
-				log.Printf("Warning: error scanning %s facts: %v", pred, err)
+				logger.Warn("Error scanning facts", "predicate", pred, "error", err)
 				continue
 			}
 			subjectsToDelete[fact.Subject] = true
 		}
 
-		log.Printf("Found %d unique subjects with %s facts to clear", len(subjectsToDelete), pred)
+		logger.Info("Found subjects to clear", "count", len(subjectsToDelete), "predicate", pred)
 
 		clearedCount := 0
 		for subject := range subjectsToDelete {
 			if err := analyticalStore.DeleteFactsBySubject(subject); err != nil {
-				log.Printf("Warning: failed to delete facts for subject %s: %v", subject, err)
+				logger.Warn("Failed to delete facts for subject", "subject", subject, "error", err)
 			} else {
 				clearedCount++
 			}
 		}
 
 		if clearedCount > 0 {
-			log.Printf("Cleared %d %s facts for project: %s", clearedCount, pred, projectID)
+			logger.Info("Cleared facts", "count", clearedCount, "predicate", pred, "project", projectID)
 		}
 	}
 
@@ -257,7 +257,7 @@ func (a *Analyzer) executeTemplateQueries(ctx context.Context, projectID string)
 		// Execute template query against source store
 		results, err := mebpkg.Query(ctx, sourceStore, tmpl.Body)
 		if err != nil {
-			log.Printf("Warning: template query %s failed: %v", tmpl.ID, err)
+			logger.Warn("Template query failed", "template", tmpl.ID, "error", err)
 			continue
 		}
 
@@ -274,7 +274,7 @@ func (a *Analyzer) executeTemplateQueries(ctx context.Context, projectID string)
 				Object:    tmpl.ID + ":" + tmpl.Category,
 			}
 			if err := analyticalStore.AddFact(fact); err != nil {
-				log.Printf("Warning: failed to add smell fact: %v", err)
+				logger.Warn("Failed to add smell fact", "error", err)
 			}
 		}
 	}
@@ -321,7 +321,7 @@ func (a *Analyzer) setAnalyticsVersion(analyticalStore *meb.MEBStore) error {
 // Checks analytics version to skip redundant computations.
 // All analysis is template-driven via TemplateStore - no hardcoded rules.
 func (a *Analyzer) RunPostIngestAnalysis(ctx context.Context, projectID string) error {
-	log.Printf("Starting post-ingest analysis for project: %s", projectID)
+	logger.Info("Starting post-ingest analysis", "project", projectID)
 
 	analyticalStore, err := a.storeManager.GetAnalyticalStore(projectID)
 	if err != nil {
@@ -330,24 +330,23 @@ func (a *Analyzer) RunPostIngestAnalysis(ctx context.Context, projectID string) 
 
 	storedVersion := a.getAnalyticsVersion(analyticalStore)
 	if storedVersion == CurrentAnalyticsVersion {
-		log.Printf("Analytics already up to date (version %s), skipping computation", CurrentAnalyticsVersion)
+		logger.Info("Analytics already up to date, skipping", "version", CurrentAnalyticsVersion)
 		return nil
 	}
 
 	if err := a.clearAnalyticalData(ctx, projectID); err != nil {
-		log.Printf("Warning: failed to clear old analytical data: %v", err)
+		logger.Warn("Failed to clear old analytical data", "error", err)
 	}
 
-	// Execute all rules from templates - this replaces hardcoded computeCentrality and detectSmells
 	if err := a.executeRulesFromTemplates(ctx, projectID); err != nil {
-		log.Printf("Warning: template rule execution failed: %v", err)
+		logger.Warn("Template rule execution failed", "error", err)
 	}
 
 	if err := a.setAnalyticsVersion(analyticalStore); err != nil {
-		log.Printf("Warning: failed to set analytics version: %v", err)
+		logger.Warn("Failed to set analytics version", "error", err)
 	}
 
-	log.Printf("Post-ingest analysis complete for project: %s", projectID)
+	logger.Info("Post-ingest analysis complete", "project", projectID)
 	return nil
 }
 
@@ -355,7 +354,7 @@ func (a *Analyzer) RunPostIngestAnalysis(ctx context.Context, projectID string) 
 func (a *Analyzer) RunPostIngestAnalysisAsync(ctx context.Context, projectID string) {
 	go func() {
 		if err := a.RunPostIngestAnalysis(ctx, projectID); err != nil {
-			log.Printf("Async post-ingest analysis failed: %v", err)
+			logger.Error("Async post-ingest analysis failed", "error", err)
 		}
 	}()
 }
@@ -397,7 +396,7 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 				Object:    fmt.Sprintf("%d", count),
 			}
 			if err := analyticalStore.AddFact(fact); err != nil {
-				log.Printf("Warning: failed to add hub score for %s: %v", file, err)
+				logger.Warn("Failed to add hub score", "file", file, "error", err)
 			}
 		}
 	}
@@ -406,7 +405,7 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 	entryQuery := `triples(File, "defines", Symbol), or(contains(Symbol, "main"), contains(Symbol, "init"))`
 	entryResults, err := mebpkg.Query(ctx, sourceStore, entryQuery)
 	if err != nil {
-		log.Printf("Warning: entry point query failed: %v", err)
+		logger.Warn("Entry point query failed", "error", err)
 	} else {
 		for _, r := range entryResults {
 			if file, ok := r["File"].(string); ok {
@@ -416,7 +415,7 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 					Object:    "true",
 				}
 				if err := analyticalStore.AddFact(fact); err != nil {
-					log.Printf("Warning: failed to add entry point for %s: %v", file, err)
+					logger.Warn("Failed to add entry point", "file", file, "error", err)
 				}
 			}
 		}
@@ -426,7 +425,7 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 	symbolCentralityQuery := `triples(File, "defines", Symbol), triples(Symbol, "calls", Target)`
 	symbolResults, err := mebpkg.Query(ctx, sourceStore, symbolCentralityQuery)
 	if err != nil {
-		log.Printf("Warning: symbol centrality query failed: %v", err)
+		logger.Warn("Symbol centrality query failed", "error", err)
 	} else {
 		// Count calls per symbol
 		symbolCalls := make(map[string]int)
@@ -444,14 +443,13 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 					Object:    fmt.Sprintf("%d", count),
 				}
 				if err := analyticalStore.AddFact(fact); err != nil {
-					log.Printf("Warning: failed to add centrality for %s: %v", symbol, err)
+					logger.Warn("Failed to add centrality", "symbol", symbol, "error", err)
 				}
 			}
 		}
 	}
 
-	log.Printf("Centrality analysis complete: %d hub files, %d entry points",
-		len(callerCounts), len(entryResults))
+	logger.Info("Centrality analysis complete", "hub_files", len(callerCounts), "entry_points", len(entryResults))
 
 	return nil
 }
@@ -483,26 +481,26 @@ func (a *Analyzer) detectSmells(ctx context.Context, projectID string) error {
 
 	for _, tmpl := range templates {
 		if tmpl.Body == "" {
-			log.Printf("Warning: template %s has empty body", tmpl.ID)
+			logger.Warn("Template has empty body", "template", tmpl.ID)
 			continue
 		}
 
 		results, err := mebpkg.Query(ctx, sourceStore, tmpl.Body)
 		if err != nil {
-			log.Printf("Warning: %s query failed: %v", tmpl.ID, err)
+			logger.Warn("Smell query failed", "template", tmpl.ID, "error", err)
 			continue
 		}
 
 		for _, r := range results {
 			if err := a.emitStructuredFact(analyticalStore, r, tmpl.ID, tmpl.Category, tmpl.Severity); err != nil {
-				log.Printf("Warning: failed to emit fact: %v", err)
+				logger.Warn("Failed to emit structured fact", "error", err)
 			} else {
 				smellResults++
 			}
 		}
 	}
 
-	log.Printf("Smell detection complete: %d smells found", smellResults)
+	logger.Info("Smell detection complete", "smells", smellResults)
 	return nil
 }
 

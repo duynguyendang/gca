@@ -20,8 +20,10 @@ import (
 
 // IngestOptions controls embedding behavior during ingestion.
 type IngestOptions struct {
-	SkipEmbeddings bool // Skip all embedding generation
-	ReEmbed        bool // Re-embed ALL symbols (not just has_doc facts)
+	SkipEmbeddings bool   // Skip all embedding generation
+	ReEmbed        bool   // Re-embed ALL symbols (not just has_doc facts)
+	FromCommit     string // Start commit SHA for git-based incremental ingestion
+	ToCommit       string // End commit SHA for git-based incremental (empty = working tree)
 }
 
 type IngestState struct {
@@ -115,7 +117,7 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 			return err
 		}
 		if d.IsDir() {
-			if d.Name() == "node_modules" || d.Name() == ".git" || d.Name() == "dist" || d.Name() == "build" || d.Name() == ".next" {
+			if config.IsSkippedDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -197,7 +199,7 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 			return nil // Continue walking despite error
 		}
 		if d.IsDir() {
-			if d.Name() == "node_modules" || d.Name() == ".git" || d.Name() == "dist" || d.Name() == "build" || d.Name() == ".next" {
+			if config.IsSkippedDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
