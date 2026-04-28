@@ -1,15 +1,45 @@
 package ingest
 
 import (
+	"context"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 )
+
+var virtualFactMu sync.Mutex
+
+// safeAddFact checks if a fact exists before adding to avoid duplicates on re-run.
+// Returns true if fact was added, false if it already existed.
+func safeAddFact(s Store, subj, pred string, obj any) bool {
+	ctx := context.Background()
+	for item, err := range s.ScanContext(ctx, subj, pred, "") {
+		if err != nil {
+			continue
+		}
+		if item.Subject == subj && item.Predicate == pred {
+			return false // already exists
+		}
+	}
+	s.AddFact(meb.Fact{Subject: subj, Predicate: pred, Object: obj})
+	return true
+}
+
+// upsertFact adds a fact, replacing any existing fact with same subject/predicate.
+// For route->handler facts that should be deterministic on re-run.
+// Protected by mutex to ensure atomic delete+add operations.
+func upsertFact(s Store, subj, pred string, obj any) {
+	virtualFactMu.Lock()
+	defer virtualFactMu.Unlock()
+	s.DeleteFactsBySubject(subj)
+	s.AddFact(meb.Fact{Subject: subj, Predicate: pred, Object: obj})
+}
 
 // getTagConfig returns the active tagging rules for this project.
 // Falls back to default rules if no project-specific config is available.
@@ -20,7 +50,7 @@ func getTagConfig() *config.ProjectTagConfig {
 }
 
 // shouldInjectTag checks if a file already has the given tag.
-func shouldInjectTag(s *meb.MEBStore, fileID, tag string) bool {
+func shouldInjectTag(s Store, fileID, tag string) bool {
 	for fact, err := range s.Scan(fileID, config.PredicateHasTag, tag) {
 		if err != nil {
 			continue
@@ -32,7 +62,7 @@ func shouldInjectTag(s *meb.MEBStore, fileID, tag string) bool {
 }
 
 // configDrivenTagMatcher iterates over the regex rules and injects matching tags.
-func configDrivenTagMatcher(s *meb.MEBStore, fileID string, tagCfg *config.ProjectTagConfig) {
+func configDrivenTagMatcher(s Store, fileID string, tagCfg *config.ProjectTagConfig) {
 	if strings.Contains(fileID, ":") {
 		return // Skip symbol-level IDs, only tag files
 	}
@@ -45,7 +75,7 @@ func configDrivenTagMatcher(s *meb.MEBStore, fileID string, tagCfg *config.Proje
 	}
 }
 
-func EnhanceVirtualTriples(s *meb.MEBStore) error {
+func EnhanceVirtualTriples(s Store) error {
 	tagCfg := getTagConfig()
 
 	feSet := make(map[string]bool)
@@ -152,8 +182,8 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 
 			if targetID, ok := symbolLookup[handlerToken]; ok {
 				routeMap[route] = targetID
-				s.AddFact(meb.Fact{Subject: string(route), Predicate: config.PredicateHandledBy, Object: targetID})
-				s.AddFact(meb.Fact{Subject: string(targetID), Predicate: config.PredicateHasRole, Object: config.RoleAPIHandler})
+				upsertFact(s, string(route), config.PredicateHandledBy, targetID)
+				upsertFact(s, string(targetID), config.PredicateHasRole, config.RoleAPIHandler)
 			} else {
 				logger.Warn("Failed to link route to handler", "route", route, "handler", rawHandler, "token", handlerToken)
 			}
@@ -174,9 +204,9 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 			cleanRef = ref[:idx]
 		}
 		if _, exists := routeMap[cleanRef]; exists {
-			s.AddFact(meb.Fact{Subject: string(sID), Predicate: config.PredicateCallsAPI, Object: cleanRef})
 			targetID := routeMap[cleanRef]
-			s.AddFact(meb.Fact{Subject: string(sID), Predicate: config.PredicateCalls, Object: targetID})
+			safeAddFact(s, string(sID), config.PredicateCallsAPI, cleanRef)
+			safeAddFact(s, string(sID), config.PredicateCalls, targetID)
 		}
 	}
 
@@ -243,7 +273,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 			if calledMethods[methodName] {
 				for _, svcID := range svcIDs {
 					if f.ID != svcID {
-						s.AddFact(meb.Fact{Subject: f.ID, Predicate: config.PredicateCalls, Object: svcID})
+						safeAddFact(s, f.ID, config.PredicateCalls, svcID)
 					}
 				}
 			}
@@ -265,7 +295,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 			if strings.Contains(f.Content, modelName) {
 				for _, tID := range targets {
 					if f.ID != tID {
-						s.AddFact(meb.Fact{Subject: f.ID, Predicate: config.PredicateExposesModel, Object: tID})
+						safeAddFact(s, f.ID, config.PredicateExposesModel, tID)
 					}
 				}
 			}
@@ -286,7 +316,7 @@ func EnhanceVirtualTriples(s *meb.MEBStore) error {
 				continue
 			}
 			if strings.EqualFold(common.ExtractSymbolName(sID), base) {
-				s.AddFact(meb.Fact{Subject: string(id), Predicate: config.PredicateExports, Object: sID})
+				safeAddFact(s, string(id), config.PredicateExports, sID)
 			}
 		}
 	}

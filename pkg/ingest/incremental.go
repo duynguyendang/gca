@@ -35,6 +35,15 @@ type FileHash struct {
 
 type FileHashMap map[string]FileHash
 
+// IncrementalState extends FileHashMap with git commit tracking.
+type IncrementalState struct {
+	FileHashes    FileHashMap `json:"file_hashes"`
+	LastCommitSHA string      `json:"last_commit_sha,omitempty"`
+}
+
+// IncrementalStateKey is the storage key for the incremental state.
+const IncrementalStateKey = "gca:incremental_state"
+
 // LoadFileHashes loads the file hash map from the store.
 func LoadFileHashes(s *meb.MEBStore) (FileHashMap, error) {
 	content, err := s.GetContentByKey(HashMapKey)
@@ -49,12 +58,53 @@ func LoadFileHashes(s *meb.MEBStore) (FileHashMap, error) {
 }
 
 // SaveFileHashes persists the file hash map to the store.
+// Deprecated: Use SaveIncrementalState instead.
 func SaveFileHashes(s *meb.MEBStore, hashes FileHashMap) error {
 	data, err := json.Marshal(hashes)
 	if err != nil {
 		return err
 	}
 	return s.AddDocument(HashMapKey, data, nil, nil)
+}
+
+// LoadIncrementalState loads the incremental state from the store.
+// Backward compatible: if old FileHashMap format is found, wraps it.
+func LoadIncrementalState(s *meb.MEBStore) (*IncrementalState, error) {
+	content, err := s.GetContentByKey(IncrementalStateKey)
+	if err != nil {
+		// Try legacy key
+		legacy, legacyErr := s.GetContentByKey(HashMapKey)
+		if legacyErr != nil {
+			return &IncrementalState{FileHashes: make(FileHashMap)}, nil
+		}
+		var hashes FileHashMap
+		if jsonErr := json.Unmarshal(legacy, &hashes); jsonErr != nil {
+			return &IncrementalState{FileHashes: make(FileHashMap)}, jsonErr
+		}
+		return &IncrementalState{FileHashes: hashes}, nil
+	}
+	var state IncrementalState
+	if err := json.Unmarshal(content, &state); err != nil {
+		// Try parsing as plain FileHashMap (backward compat)
+		var hashes FileHashMap
+		if jsonErr := json.Unmarshal(content, &hashes); jsonErr != nil {
+			return &IncrementalState{FileHashes: make(FileHashMap)}, err
+		}
+		return &IncrementalState{FileHashes: hashes}, nil
+	}
+	if state.FileHashes == nil {
+		state.FileHashes = make(FileHashMap)
+	}
+	return &state, nil
+}
+
+// SaveIncrementalState persists the incremental state to the store.
+func SaveIncrementalState(s *meb.MEBStore, state *IncrementalState) error {
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return s.AddDocument(IncrementalStateKey, data, nil, nil)
 }
 
 // computeFileHash calculates SHA256 hash and modification time for a file.
@@ -112,10 +162,11 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 	s.SetTopicID(topicID)
 	logger.Info("Using topic ID for incremental project", "topicID", topicID, "project", projectName)
 
-	existingHashes, err := LoadFileHashes(s)
+	// Load incremental state (replaces LoadFileHashes)
+	incrState, err := LoadIncrementalState(s)
 	if err != nil {
-		logger.Warn("Could not load existing hashes, starting fresh", "error", err)
-		existingHashes = make(FileHashMap)
+		logger.Warn("Could not load incremental state, starting fresh", "error", err)
+		incrState = &IncrementalState{FileHashes: make(FileHashMap)}
 	}
 
 	var embeddingService *EmbeddingService
@@ -138,8 +189,11 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 	metadataPath := filepath.Join(sourceDir, "project.yaml")
 	if _, err := os.Stat(metadataPath); err == nil {
 		logger.Info("Found project metadata", "path", metadataPath)
-		projectMeta, _ = LoadProjectMetadata(metadataPath)
-		if projectMeta != nil {
+		var metaErr error
+		projectMeta, metaErr = LoadProjectMetadata(metadataPath)
+		if metaErr != nil {
+			logger.Warn("Failed to load project metadata, continuing without it", "error", metaErr)
+		} else if projectMeta != nil {
 			s.AddFact(meb.Fact{
 				Subject:   string(projectMeta.Name),
 				Predicate: "type",
@@ -160,60 +214,113 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 		}
 	}
 
-	newHashes := make(FileHashMap)
-	changedFiles := []string{}
-	deletedFiles := []string{}
+	// ── Determine change detection strategy ──
+	var changedFiles []string
+	var deletedFiles []string
+	var newHashes FileHashMap
+	var usedGit bool
+	var currentHeadSHA string
 
-	existingFilePaths := make(map[string]bool)
-	for path := range existingHashes {
-		existingFilePaths[path] = true
+	if IsGitRepo(sourceDir) {
+		fromRef := ""
+		if opts != nil && opts.FromCommit != "" {
+			fromRef = opts.FromCommit
+		} else if incrState.LastCommitSHA != "" {
+			fromRef = incrState.LastCommitSHA
+		}
+
+		if fromRef != "" {
+			var diff *GitDiffResult
+			var diffErr error
+
+			if opts != nil && opts.ToCommit != "" {
+				diff, diffErr = GitDiffBetweenCommits(fromRef, opts.ToCommit, sourceDir)
+			} else {
+				diff, diffErr = GitDiffToWorkingTree(fromRef, sourceDir)
+			}
+
+			if diffErr != nil {
+				logger.Warn("Git diff failed, falling back to hash-based", "error", diffErr)
+			} else {
+				logger.Info("Git diff result",
+					"from", diff.FromCommit,
+					"to", diff.ToCommit,
+					"changed", len(diff.ChangedFiles),
+					"deleted", len(diff.DeletedFiles))
+
+				// Convert relative paths to absolute paths for processFile
+				for _, rel := range diff.ChangedFiles {
+					changedFiles = append(changedFiles, filepath.Join(sourceDir, rel))
+				}
+				deletedFiles = diff.DeletedFiles
+				usedGit = true
+			}
+		}
+
+		// Get current HEAD for storage
+		if head, headErr := GetHEADCommitSHA(sourceDir); headErr == nil {
+			currentHeadSHA = head
+		}
 	}
 
-	err = filepath.WalkDir(sourceDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	// ── HASH-BASED FALLBACK ──
+	if !usedGit {
+		newHashes = make(FileHashMap)
+		existingFilePaths := make(map[string]bool)
+		for path := range incrState.FileHashes {
+			existingFilePaths[path] = true
 		}
-		if d.IsDir() {
-			if d.Name() == "node_modules" || d.Name() == ".git" || d.Name() == "dist" || d.Name() == "build" || d.Name() == ".next" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if isSupportedFile(path) {
-			relPath, _ := filepath.Rel(sourceDir, path)
-			if projectName != "" {
-				relPath = filepath.Join(projectName, relPath)
-			}
 
-			hash, mtime, hashErr := computeFileHash(path)
-			if hashErr != nil {
-				logger.Warn("Could not hash file", "path", path, "error", hashErr)
-				changedFiles = append(changedFiles, path)
+		err = filepath.WalkDir(sourceDir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				if config.IsSkippedDir(d.Name()) {
+					return filepath.SkipDir
+				}
 				return nil
 			}
+			if isSupportedFile(path) {
+				relPath, _ := filepath.Rel(sourceDir, path)
+				if projectName != "" {
+					relPath = filepath.Join(projectName, relPath)
+				}
 
-			newHashes[relPath] = FileHash{Path: relPath, Hash: hash, Mtime: mtime}
-			delete(existingFilePaths, relPath)
+				hash, mtime, hashErr := computeFileHash(path)
+				if hashErr != nil {
+					logger.Warn("Could not hash file", "path", path, "error", hashErr)
+					changedFiles = append(changedFiles, path)
+					return nil
+				}
 
-			existingHash, exists := existingHashes[relPath]
-			if !exists || existingHash.Hash != hash {
-				changedFiles = append(changedFiles, path)
+				newHashes[relPath] = FileHash{Path: relPath, Hash: hash, Mtime: mtime}
+				delete(existingFilePaths, relPath)
+
+				existingHash, exists := incrState.FileHashes[relPath]
+				if !exists || existingHash.Hash != hash {
+					changedFiles = append(changedFiles, path)
+				}
 			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("hash computation failed: %w", err)
 		}
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("hash computation failed: %w", err)
+
+		for path := range existingFilePaths {
+			deletedFiles = append(deletedFiles, path)
+		}
 	}
 
-	for path := range existingFilePaths {
-		deletedFiles = append(deletedFiles, path)
+	mode := "hash"
+	if usedGit {
+		mode = "git"
 	}
-
 	logger.Info("Incremental Ingestion stats",
 		"changed", len(changedFiles),
 		"deleted", len(deletedFiles),
-		"unchanged", len(newHashes)-len(changedFiles))
+		"mode", mode)
 
 	if len(changedFiles) == 0 && len(deletedFiles) == 0 {
 		logger.Info("No changes detected. Skipping processing.")
@@ -238,7 +345,13 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 		}
 
 		state.SymbolTable = make(map[string]string)
-		for path := range newHashes {
+		// Build symbol table from all known files
+		symbolSource := newHashes
+		if usedGit {
+			// In git mode, use stored hashes as the full file list
+			symbolSource = incrState.FileHashes
+		}
+		for path := range symbolSource {
 			if isSupportedFile(path) {
 				fullPath := path
 				if projectName != "" {
@@ -300,8 +413,33 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 		removeDeletedFiles(s, projectName, deletedFiles)
 	}
 
-	if err := SaveFileHashes(s, newHashes); err != nil {
-		logger.Warn("Could not save file hashes", "error", err)
+	// Save state
+	if usedGit {
+		// In git mode, compute hashes for changed files only
+		if newHashes == nil {
+			newHashes = incrState.FileHashes
+		}
+		for _, absPath := range changedFiles {
+			rel, _ := filepath.Rel(sourceDir, absPath)
+			if projectName != "" {
+				rel = filepath.Join(projectName, rel)
+			}
+			if h, m, hashErr := computeFileHash(absPath); hashErr == nil {
+				newHashes[rel] = FileHash{Path: rel, Hash: h, Mtime: m}
+			}
+		}
+		// Remove deleted files from hashes
+		for _, del := range deletedFiles {
+			delete(newHashes, del)
+		}
+	}
+
+	newState := &IncrementalState{
+		FileHashes:    newHashes,
+		LastCommitSHA: currentHeadSHA,
+	}
+	if err := SaveIncrementalState(s, newState); err != nil {
+		logger.Warn("Could not save incremental state", "error", err)
 	}
 
 	EnhanceVirtualTriples(s)

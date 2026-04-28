@@ -1,0 +1,12 @@
+---
+
+temperature: 0.3
+input:
+  schema:
+    Query: string
+    Symbols: string
+---
+Provide a 2-3 sentence architectural summary for file "{{.Query}}".
+
+## Symbols Defined
+{{.Symbols}}

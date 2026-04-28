@@ -202,7 +202,7 @@ type GraphOrienter struct {
 	storeManager        StoreManager
 	maxSymbols          int
 	maxResults          int
-	attentionThreshold   float64
+	attentionThreshold  float64
 	maxAttentionSymbols int
 	stickyOnlyMode      bool
 }

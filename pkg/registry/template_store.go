@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -49,27 +50,46 @@ func (ts *TemplateStore) LoadPolicyFiles(ctx context.Context, dir string) error 
 
 	var templatesLoaded int
 
+	if err := ts.loadTemplatesFromDir(ctx, store, dir, &templatesLoaded); err != nil {
+		return err
+	}
+
+	log.Printf("Loaded %d templates from %s", templatesLoaded, dir)
+	return nil
+}
+
+// loadTemplatesFromDir recursively loads all .dl files from a directory
+func (ts *TemplateStore) loadTemplatesFromDir(ctx context.Context, store *externmeb.MEBStore, dir string, count *int) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("failed to read directory %s: %w", dir, err)
+	}
+
+	sortEntries(entries)
+
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".dl") {
-			continue
-		}
-
 		filePath := filepath.Join(dir, entry.Name())
-		content, err := os.ReadFile(filePath)
-		if err != nil {
-			return fmt.Errorf("failed to read %s: %w", entry.Name(), err)
-		}
-
-		templates, err := ts.parseTemplateFile(string(content))
-		if err != nil {
-			return fmt.Errorf("failed to parse %s: %w", entry.Name(), err)
-		}
-
-		for _, tmpl := range templates {
-			if err := ts.storeTemplate(ctx, store, tmpl); err != nil {
-				return fmt.Errorf("failed to store template %s: %w", tmpl.ID, err)
+		if entry.IsDir() {
+			if err := ts.loadTemplatesFromDir(ctx, store, filePath, count); err != nil {
+				return err
 			}
-			templatesLoaded++
+		} else if strings.HasSuffix(entry.Name(), ".dl") {
+			content, err := os.ReadFile(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to read %s: %w", entry.Name(), err)
+			}
+
+			templates, err := ts.parseTemplateFile(string(content))
+			if err != nil {
+				return fmt.Errorf("failed to parse %s: %w", entry.Name(), err)
+			}
+
+			for _, tmpl := range templates {
+				if err := ts.storeTemplate(ctx, store, tmpl); err != nil {
+					return fmt.Errorf("failed to store template %s: %w", tmpl.ID, err)
+				}
+				(*count)++
+			}
 		}
 	}
 
@@ -81,13 +101,15 @@ func (ts *TemplateStore) parseTemplateFile(content string) ([]*QueryTemplate, er
 	var templates []*QueryTemplate
 
 	// Extract query_metadata entries
-	// Format: query_metadata("name", "key", "value").
-	metaPattern := regexp.MustCompile(`query_metadata\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]*)"\s*\)\s*\.`)
-	metaMatches := metaPattern.FindAllStringSubmatch(content, -1)
+	// Format: query_metadata("name", "key", "value") or query_metadata("name", "key", `backtick_value`)
+	quotePattern := `query_metadata\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]*)"\s*\)\s*\.`
+	backtickPattern := `query_metadata\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*` + "`" + `([^` + "`" + `]*)` + "`" + `\s*\)\s*\.`
 
 	// Group metadata by query name
 	metaMap := make(map[string]map[string]string)
-	for _, match := range metaMatches {
+
+	// Match quoted strings
+	for _, match := range regexp.MustCompile(quotePattern).FindAllStringSubmatch(content, -1) {
 		name := match[1]
 		key := match[2]
 		value := match[3]
@@ -97,10 +119,43 @@ func (ts *TemplateStore) parseTemplateFile(content string) ([]*QueryTemplate, er
 		metaMap[name][key] = value
 	}
 
+	// Match backtick strings
+	for _, match := range regexp.MustCompile(backtickPattern).FindAllStringSubmatch(content, -1) {
+		name := match[1]
+		key := match[2]
+		value := match[3]
+		if _, ok := metaMap[name]; !ok {
+			metaMap[name] = make(map[string]string)
+		}
+		metaMap[name][key] = value
+	}
+
+	// Extract templates from "template" metadata as fallback for queries without body
+	for name, meta := range metaMap {
+		if tmplStr, ok := meta["template"]; ok && tmplStr != "" {
+			tmpl := &QueryTemplate{
+				ID:          name,
+				Body:        tmplStr,
+				Predicate:   meta["Predicate"],
+				SmellType:   meta["smell_type"],
+				Category:    meta["category"],
+				Severity:    meta["severity"],
+				Description: meta["description"],
+			}
+			templates = append(templates, tmpl)
+		}
+	}
+
 	// Extract query templates
 	// Format: query("name", A, B) :- triples(...).
 	queryPattern := regexp.MustCompile(`query\s*\(\s*"([^"]+)"\s*,([^:]+)\)\s*:-`)
 	queryMatches := queryPattern.FindAllStringSubmatch(content, -1)
+
+	// Collect names that already have a template from metadata
+	hasMetadataTemplate := make(map[string]bool)
+	for _, t := range templates {
+		hasMetadataTemplate[t.ID] = true
+	}
 
 	for _, match := range queryMatches {
 		name := match[1]
@@ -119,6 +174,16 @@ func (ts *TemplateStore) parseTemplateFile(content string) ([]*QueryTemplate, er
 			body = strings.TrimSpace(ruleMatch[1])
 			// Clean up the body - remove trailing period if present
 			body = strings.TrimSuffix(body, ".")
+		}
+
+		// Skip if body is empty (means template metadata already provided the template)
+		if body == "" {
+			continue
+		}
+
+		// Skip if we already have a template for this name from metadata
+		if hasMetadataTemplate[name] {
+			continue
 		}
 
 		tmpl := &QueryTemplate{
@@ -201,6 +266,30 @@ func (ts *TemplateStore) storeTemplate(ctx context.Context, store *externmeb.MEB
 		}
 	}
 
+	// Store predicate
+	if tmpl.Predicate != "" {
+		predFact := externmeb.Fact{
+			Subject:   tmpl.ID,
+			Predicate: "Predicate",
+			Object:    tmpl.Predicate,
+		}
+		if err := store.AddFact(predFact); err != nil {
+			return fmt.Errorf("failed to add predicate: %w", err)
+		}
+	}
+
+	// Store smell_type
+	if tmpl.SmellType != "" {
+		smellTypeFact := externmeb.Fact{
+			Subject:   tmpl.ID,
+			Predicate: "smell_type",
+			Object:    tmpl.SmellType,
+		}
+		if err := store.AddFact(smellTypeFact); err != nil {
+			return fmt.Errorf("failed to add smell_type: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -248,8 +337,9 @@ func (ts *TemplateStore) GetTemplate(ctx context.Context, projectID, templateID 
 }
 
 // ListTemplates returns all templates matching a category.
+// Templates are stored globally (not per-project), so we use empty projectID.
 func (ts *TemplateStore) ListTemplates(ctx context.Context, projectID, category string) ([]*QueryTemplate, error) {
-	store, err := ts.storeManager.GetAnalyticalStore(projectID)
+	store, err := ts.storeManager.GetAnalyticalStore("")
 	if err != nil {
 		return nil, err
 	}
@@ -267,14 +357,20 @@ func (ts *TemplateStore) ListTemplates(ctx context.Context, projectID, category 
 	}
 
 	var templates []*QueryTemplate
-	seen := make(map[string]bool)
+	seen := make(map[string]int)
 
 	for _, r := range results {
 		id := r["ID"]
-		if seen[id] {
+
+		// Keep entry with non-empty body if we already saw this id
+		if existingIdx, ok := seen[id]; ok {
+			if r["Body"] != "" && templates[existingIdx].Body == "" {
+				// Update existing template with non-empty body
+				templates[existingIdx].Body = r["Body"]
+			}
 			continue
 		}
-		seen[id] = true
+		seen[id] = len(templates)
 
 		tmpl := &QueryTemplate{
 			ID:   id,
@@ -293,6 +389,14 @@ func (ts *TemplateStore) ListTemplates(ctx context.Context, projectID, category 
 		descQuery := fmt.Sprintf(`triples("%s", "description", Desc)`, id)
 		if descResults, err := queryStore(ctx, store, descQuery); err == nil && len(descResults) > 0 {
 			tmpl.Description = descResults[0]["Desc"]
+		}
+		predQuery := fmt.Sprintf(`triples("%s", "Predicate", Pred)`, id)
+		if predResults, err := queryStore(ctx, store, predQuery); err == nil && len(predResults) > 0 {
+			tmpl.Predicate = predResults[0]["Pred"]
+		}
+		smellTypeQuery := fmt.Sprintf(`triples("%s", "smell_type", SmellType)`, id)
+		if smellTypeResults, err := queryStore(ctx, store, smellTypeQuery); err == nil && len(smellTypeResults) > 0 {
+			tmpl.SmellType = smellTypeResults[0]["SmellType"]
 		}
 
 		templates = append(templates, tmpl)

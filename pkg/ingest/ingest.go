@@ -20,8 +20,10 @@ import (
 
 // IngestOptions controls embedding behavior during ingestion.
 type IngestOptions struct {
-	SkipEmbeddings bool // Skip all embedding generation
-	ReEmbed        bool // Re-embed ALL symbols (not just has_doc facts)
+	SkipEmbeddings bool   // Skip all embedding generation
+	ReEmbed        bool   // Re-embed ALL symbols (not just has_doc facts)
+	FromCommit     string // Start commit SHA for git-based incremental ingestion
+	ToCommit       string // End commit SHA for git-based incremental (empty = working tree)
 }
 
 type IngestState struct {
@@ -115,20 +117,32 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 			return err
 		}
 		if d.IsDir() {
-			if d.Name() == "node_modules" || d.Name() == ".git" || d.Name() == "dist" || d.Name() == "build" || d.Name() == ".next" {
+			if config.IsSkippedDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		if isSupportedFile(path) {
-			relPath, _ := filepath.Rel(sourceDir, path)
+			relPath, relErr := filepath.Rel(sourceDir, path)
+			if relErr != nil {
+				logger.Error("Failed to get relative path", "path", path, "error", relErr)
+				return relErr
+			}
 			if projectName != "" {
 				relPath = filepath.Join(projectName, relPath)
 			}
 			state.FileIndex[relPath] = true
 
-			content, _ := os.ReadFile(path)
-			symbols, _ := ext.ExtractSymbols(path, content, relPath)
+			content, readErr := os.ReadFile(path)
+			if readErr != nil {
+				logger.Error("Failed to read file", "path", path, "error", readErr)
+				return readErr
+			}
+			symbols, extractErr := ext.ExtractSymbols(path, content, relPath)
+			if extractErr != nil {
+				logger.Error("Failed to extract symbols", "path", path, "error", extractErr)
+				return extractErr
+			}
 			for _, sym := range symbols {
 				state.SymbolTable[sym.Name] = sym.ID
 				if sym.Package != "" {
@@ -154,15 +168,21 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 		workerCount = config.MaxWorkers
 	}
 
+	// Shared semaphore for embeddings limit (max 10 concurrent)
+	sem := make(chan struct{}, 10)
+
 	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			localExt := NewTreeSitterExtractor()
-			// Global semaphore for embeddings limit (max 10 concurrent)
-			sem := make(chan struct{}, 10)
 			for path := range jobs {
-				rel, _ := filepath.Rel(sourceDir, path)
+				rel, relErr := filepath.Rel(sourceDir, path)
+				if relErr != nil {
+					logger.Error("Failed to get relative path", "path", path, "error", relErr)
+					pass2Err.Add(1)
+					continue
+				}
 				logger.Debug("Processing file", "project", projectName, "file", rel)
 				if err := processFile(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta, &embeddingWg, sem, state, opts); err != nil {
 					logger.Error("Failed to process file", "error", err)
@@ -172,12 +192,14 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 		}()
 	}
 
-	filepath.WalkDir(sourceDir, func(path string, d fs.DirEntry, err error) error {
+	var walkErr error
+	if err := filepath.WalkDir(sourceDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			walkErr = err
+			return nil // Continue walking despite error
 		}
 		if d.IsDir() {
-			if d.Name() == "node_modules" || d.Name() == ".git" || d.Name() == "dist" || d.Name() == "build" || d.Name() == ".next" {
+			if config.IsSkippedDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -186,7 +208,9 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 			jobs <- path
 		}
 		return nil
-	})
+	}); err != nil {
+		walkErr = err
+	}
 	close(jobs)
 	wg.Wait()
 
@@ -199,6 +223,13 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 		embeddingWg.Wait()
 	}
 
+	// Return error if any files failed to process
+	if pass2Err.Load() > 0 {
+		return fmt.Errorf("ingestion completed with %d errors", pass2Err.Load())
+	}
+	if walkErr != nil {
+		return fmt.Errorf("pass 2 walk failed: %w", walkErr)
+	}
 	return nil
 }
 
@@ -249,7 +280,10 @@ func buildEmbedText(symbolID string, bundleFacts []meb.Fact, content []byte) str
 }
 
 func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *EmbeddingService, path string, projectName string, sourceRoot string, meta *ProjectMetadata, embeddingWg *sync.WaitGroup, sem chan struct{}, state *IngestState, opts *IngestOptions) error {
-	relPath, _ := filepath.Rel(sourceRoot, path)
+	relPath, relErr := filepath.Rel(sourceRoot, path)
+	if relErr != nil {
+		return fmt.Errorf("failed to get relative path for %s: %w", path, relErr)
+	}
 
 	// Apply Logical Path Mapping from Metadata
 	if meta != nil && meta.Components != nil {
@@ -290,7 +324,12 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 			break
 		}
 		// fast retry for conflicts
-		time.Sleep(time.Millisecond * time.Duration(10*(retries+1)))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Millisecond * time.Duration(10*(retries+1))):
+			// continue retry
+		}
 	}
 	if addErr != nil {
 		logger.Error("Failed to store raw content", "file", relPath, "error", addErr)

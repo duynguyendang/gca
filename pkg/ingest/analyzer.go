@@ -3,11 +3,15 @@ package ingest
 import (
 	"context"
 	"fmt"
-	"log"
-	"strings"
 
 	mebpkg "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
+)
+
+const (
+	CurrentAnalyticsVersion   = "2.0"
+	AnalyticsVersionPredicate = "analytics_version"
 )
 
 // Analyzer performs post-ingestion analysis on the Source Store
@@ -33,8 +37,10 @@ type TemplateStoreInterface interface {
 type TemplateStoreQuery struct {
 	ID          string
 	Body        string
+	Predicate   string
 	Category    string
 	Severity    string
+	SmellType   string
 	Description string
 	Parameters  []TemplateParam
 }
@@ -56,47 +62,133 @@ func NewAnalyzer(sm StoreManagerInterface, ts TemplateStoreInterface) *Analyzer 
 
 // RunStaticAnalysis executes the full static analysis pipeline:
 // 1. Clear old analytical data
-// 2. Compute centrality and entry points -> Analytical Store
-// 3. Execute smell detection templates -> Analytical Store
+// 2. Compute centrality and entry points using Datalog rules
+// 3. Execute templates from TemplateStore
 func (a *Analyzer) RunStaticAnalysis(ctx context.Context, projectID string) error {
-	log.Printf("Starting static analysis for project: %s", projectID)
+	logger.Info("Starting static analysis", "project", projectID)
 
-	// Step 1: Clear old analytical data to prevent stale smells from previous ingests
 	if err := a.clearAnalyticalData(ctx, projectID); err != nil {
-		log.Printf("Warning: failed to clear old analytical data: %v", err)
-		// Continue anyway - don't block analysis if clear fails
+		logger.Warn("Failed to clear old analytical data", "error", err)
 	}
 
-	// Step 2: Compute centrality and entry points
-	if err := a.computeCentrality(ctx, projectID); err != nil {
-		log.Printf("Warning: centrality computation failed: %v", err)
+	if err := a.executeRulesFromTemplates(ctx, projectID); err != nil {
+		logger.Warn("Template rule execution failed", "error", err)
 	}
 
-	// Step 3: Detect smells using hardcoded queries
-	if err := a.detectSmells(ctx, projectID); err != nil {
-		log.Printf("Warning: smell detection failed: %v", err)
-	}
-
-	// Step 4: Execute template-based queries if template store is available
-	if a.templateStore != nil {
-		if err := a.executeTemplateQueries(ctx, projectID); err != nil {
-			log.Printf("Warning: template query execution failed: %v", err)
-		}
-	}
-
-	log.Printf("Static analysis completed for project: %s", projectID)
+	logger.Info("Static analysis completed", "project", projectID)
 	return nil
 }
 
+// executeRulesFromTemplates loads and executes all templates from TemplateStore.
+// Each template defines: query body, result predicate, and metadata.
+// This is the generic rule execution engine - works for any template type.
+func (a *Analyzer) executeRulesFromTemplates(ctx context.Context, projectID string) error {
+	if a.templateStore == nil {
+		return fmt.Errorf("template store not available")
+	}
+
+	templates, err := a.templateStore.ListTemplates(ctx, projectID, "")
+	if err != nil {
+		return fmt.Errorf("failed to list templates: %w", err)
+	}
+
+	if len(templates) == 0 {
+		logger.Info("No templates found in TemplateStore")
+		return nil
+	}
+
+	sourceStore, err := a.storeManager.GetSourceStore(projectID)
+	if err != nil {
+		return fmt.Errorf("failed to get source store: %w", err)
+	}
+
+	analyticalStore, err := a.storeManager.GetAnalyticalStore(projectID)
+	if err != nil {
+		return fmt.Errorf("failed to get analytical store: %w", err)
+	}
+
+	totalResults := 0
+
+	for _, tmpl := range templates {
+		if tmpl.Body == "" {
+			continue
+		}
+
+		results, err := mebpkg.Query(ctx, sourceStore, tmpl.Body)
+		if err != nil {
+			logger.Warn("Template query failed", "template", tmpl.ID, "error", err)
+			continue
+		}
+
+		logger.Debug("Template returned results", "template", tmpl.ID, "count", len(results))
+
+		for _, r := range results {
+			if err := a.emitFactFromTemplate(analyticalStore, r, tmpl); err != nil {
+				logger.Warn("Failed to emit fact for template", "template", tmpl.ID, "error", err)
+			} else {
+				totalResults++
+			}
+		}
+	}
+
+	logger.Info("Template rule execution complete", "facts", totalResults, "templates", len(templates))
+	return nil
+}
+
+// emitFactFromTemplate emits a structured fact to the analytical store.
+// The fact predicate is derived from template metadata (e.g., "has_smell_type", "is_entry_point").
+// Metadata fields (category, severity, etc.) are stored as separate predicates.
+func (a *Analyzer) emitFactFromTemplate(store *meb.MEBStore, result map[string]any, tmpl *TemplateStoreQuery) error {
+	var subject string
+
+	if s, ok := result["File"].(string); ok {
+		subject = s
+	} else if s, ok := result["A"].(string); ok {
+		subject = s
+	} else if s, ok := result["Subject"].(string); ok {
+		subject = s
+	}
+
+	if subject == "" {
+		return fmt.Errorf("no subject found in result")
+	}
+
+	predicate := tmpl.Predicate
+	if predicate == "" {
+		predicate = "has_" + tmpl.ID
+	}
+
+	smellType := tmpl.SmellType
+	if smellType == "" {
+		smellType = tmpl.ID
+	}
+
+	facts := []meb.Fact{
+		{Subject: subject, Predicate: predicate, Object: smellType},
+		{Subject: subject, Predicate: "has_category", Object: tmpl.Category},
+		{Subject: subject, Predicate: "has_severity", Object: tmpl.Severity},
+	}
+
+	for _, fact := range facts {
+		if err := store.AddFact(fact); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// extractString extracts a string value from a map.
+
 // clearAnalyticalData removes old smells, hub scores, entry points, and centrality data
-// from the analytical store to prevent stale data from previous ingests
+// from the analytical store to prevent stale data from previous ingests.
+// Uses batch collection then single-pass deletion per subject to minimize DB operations.
 func (a *Analyzer) clearAnalyticalData(ctx context.Context, projectID string) error {
 	analyticalStore, err := a.storeManager.GetAnalyticalStore(projectID)
 	if err != nil {
 		return fmt.Errorf("failed to get analytical store: %w", err)
 	}
 
-	// Clear predicates that are written by the analyzer
 	predicatesToClear := []string{
 		"has_smell",
 		"has_hub_score",
@@ -104,34 +196,32 @@ func (a *Analyzer) clearAnalyticalData(ctx context.Context, projectID string) er
 		"has_centrality",
 	}
 
-	clearedCount := 0
 	for _, pred := range predicatesToClear {
-		log.Printf("Clearing %s facts for project %s...", pred, projectID)
-		
-		// Collect all facts to delete first (avoid iterator invalidation during deletion)
-		var factsToDelete []meb.Fact
+		logger.Info("Clearing facts", "predicate", pred, "project", projectID)
+
+		subjectsToDelete := make(map[string]bool)
 		for fact, err := range analyticalStore.ScanContext(ctx, "", pred, "") {
 			if err != nil {
-				log.Printf("Warning: error scanning %s facts: %v", pred, err)
+				logger.Warn("Error scanning facts", "predicate", pred, "error", err)
 				continue
 			}
-			factsToDelete = append(factsToDelete, fact)
+			subjectsToDelete[fact.Subject] = true
 		}
-		
-		log.Printf("Found %d %s facts to clear", len(factsToDelete), pred)
 
-		// Now delete all collected facts
-		for _, fact := range factsToDelete {
-			if err := analyticalStore.DeleteFactsBySubject(fact.Subject); err != nil {
-				log.Printf("Warning: failed to delete fact for subject %s: %v", fact.Subject, err)
+		logger.Info("Found subjects to clear", "count", len(subjectsToDelete), "predicate", pred)
+
+		clearedCount := 0
+		for subject := range subjectsToDelete {
+			if err := analyticalStore.DeleteFactsBySubject(subject); err != nil {
+				logger.Warn("Failed to delete facts for subject", "subject", subject, "error", err)
 			} else {
 				clearedCount++
 			}
 		}
-	}
 
-	if clearedCount > 0 {
-		log.Printf("Cleared %d old analytical facts for project: %s", clearedCount, projectID)
+		if clearedCount > 0 {
+			logger.Info("Cleared facts", "count", clearedCount, "predicate", pred, "project", projectID)
+		}
 	}
 
 	return nil
@@ -167,7 +257,7 @@ func (a *Analyzer) executeTemplateQueries(ctx context.Context, projectID string)
 		// Execute template query against source store
 		results, err := mebpkg.Query(ctx, sourceStore, tmpl.Body)
 		if err != nil {
-			log.Printf("Warning: template query %s failed: %v", tmpl.ID, err)
+			logger.Warn("Template query failed", "template", tmpl.ID, "error", err)
 			continue
 		}
 
@@ -184,7 +274,7 @@ func (a *Analyzer) executeTemplateQueries(ctx context.Context, projectID string)
 				Object:    tmpl.ID + ":" + tmpl.Category,
 			}
 			if err := analyticalStore.AddFact(fact); err != nil {
-				log.Printf("Warning: failed to add smell fact: %v", err)
+				logger.Warn("Failed to add smell fact", "error", err)
 			}
 		}
 	}
@@ -200,28 +290,63 @@ func extractString(m map[string]interface{}, key string) string {
 	return ""
 }
 
+// getAnalyticsVersion retrieves the stored analytics version from the analytical store
+func (a *Analyzer) getAnalyticsVersion(analyticalStore *meb.MEBStore) string {
+	ctx := context.Background()
+	for item, err := range analyticalStore.ScanContext(ctx, "", AnalyticsVersionPredicate, "") {
+		if err != nil {
+			continue
+		}
+		if objStr, ok := item.Object.(string); ok {
+			return objStr
+		}
+	}
+	return ""
+}
+
+// setAnalyticsVersion stores the analytics version in the analytical store
+func (a *Analyzer) setAnalyticsVersion(analyticalStore *meb.MEBStore) error {
+	fact := meb.Fact{
+		Subject:   "analytics",
+		Predicate: AnalyticsVersionPredicate,
+		Object:    CurrentAnalyticsVersion,
+	}
+	return analyticalStore.AddFact(fact)
+}
+
 // RunPostIngestAnalysis runs all post-ingestion analysis for a project.
 // This should be called after the main ingestion is complete.
 // It runs asynchronously to avoid blocking the ingestion process.
+// Uses idempotent fact addition - duplicate facts won't be added if they already exist.
+// Checks analytics version to skip redundant computations.
+// All analysis is template-driven via TemplateStore - no hardcoded rules.
 func (a *Analyzer) RunPostIngestAnalysis(ctx context.Context, projectID string) error {
-	log.Printf("Starting post-ingest analysis for project: %s", projectID)
+	logger.Info("Starting post-ingest analysis", "project", projectID)
 
-	// Clear old analytical data first to prevent stale smells from previous ingests
+	analyticalStore, err := a.storeManager.GetAnalyticalStore(projectID)
+	if err != nil {
+		return fmt.Errorf("failed to get analytical store: %w", err)
+	}
+
+	storedVersion := a.getAnalyticsVersion(analyticalStore)
+	if storedVersion == CurrentAnalyticsVersion {
+		logger.Info("Analytics already up to date, skipping", "version", CurrentAnalyticsVersion)
+		return nil
+	}
+
 	if err := a.clearAnalyticalData(ctx, projectID); err != nil {
-		log.Printf("Warning: failed to clear old analytical data: %v", err)
+		logger.Warn("Failed to clear old analytical data", "error", err)
 	}
 
-	// Run centrality computation
-	if err := a.computeCentrality(ctx, projectID); err != nil {
-		log.Printf("Warning: centrality computation failed: %v", err)
+	if err := a.executeRulesFromTemplates(ctx, projectID); err != nil {
+		logger.Warn("Template rule execution failed", "error", err)
 	}
 
-	// Run smell detection
-	if err := a.detectSmells(ctx, projectID); err != nil {
-		log.Printf("Warning: smell detection failed: %v", err)
+	if err := a.setAnalyticsVersion(analyticalStore); err != nil {
+		logger.Warn("Failed to set analytics version", "error", err)
 	}
 
-	log.Printf("Post-ingest analysis complete for project: %s", projectID)
+	logger.Info("Post-ingest analysis complete", "project", projectID)
 	return nil
 }
 
@@ -229,7 +354,7 @@ func (a *Analyzer) RunPostIngestAnalysis(ctx context.Context, projectID string) 
 func (a *Analyzer) RunPostIngestAnalysisAsync(ctx context.Context, projectID string) {
 	go func() {
 		if err := a.RunPostIngestAnalysis(ctx, projectID); err != nil {
-			log.Printf("Async post-ingest analysis failed: %v", err)
+			logger.Error("Async post-ingest analysis failed", "error", err)
 		}
 	}()
 }
@@ -271,7 +396,7 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 				Object:    fmt.Sprintf("%d", count),
 			}
 			if err := analyticalStore.AddFact(fact); err != nil {
-				log.Printf("Warning: failed to add hub score for %s: %v", file, err)
+				logger.Warn("Failed to add hub score", "file", file, "error", err)
 			}
 		}
 	}
@@ -280,7 +405,7 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 	entryQuery := `triples(File, "defines", Symbol), or(contains(Symbol, "main"), contains(Symbol, "init"))`
 	entryResults, err := mebpkg.Query(ctx, sourceStore, entryQuery)
 	if err != nil {
-		log.Printf("Warning: entry point query failed: %v", err)
+		logger.Warn("Entry point query failed", "error", err)
 	} else {
 		for _, r := range entryResults {
 			if file, ok := r["File"].(string); ok {
@@ -290,7 +415,7 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 					Object:    "true",
 				}
 				if err := analyticalStore.AddFact(fact); err != nil {
-					log.Printf("Warning: failed to add entry point for %s: %v", file, err)
+					logger.Warn("Failed to add entry point", "file", file, "error", err)
 				}
 			}
 		}
@@ -300,7 +425,7 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 	symbolCentralityQuery := `triples(File, "defines", Symbol), triples(Symbol, "calls", Target)`
 	symbolResults, err := mebpkg.Query(ctx, sourceStore, symbolCentralityQuery)
 	if err != nil {
-		log.Printf("Warning: symbol centrality query failed: %v", err)
+		logger.Warn("Symbol centrality query failed", "error", err)
 	} else {
 		// Count calls per symbol
 		symbolCalls := make(map[string]int)
@@ -318,19 +443,20 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 					Object:    fmt.Sprintf("%d", count),
 				}
 				if err := analyticalStore.AddFact(fact); err != nil {
-					log.Printf("Warning: failed to add centrality for %s: %v", symbol, err)
+					logger.Warn("Failed to add centrality", "symbol", symbol, "error", err)
 				}
 			}
 		}
 	}
 
-	log.Printf("Centrality analysis complete: %d hub files, %d entry points",
-		len(callerCounts), len(entryResults))
+	logger.Info("Centrality analysis complete", "hub_files", len(callerCounts), "entry_points", len(entryResults))
 
 	return nil
 }
 
 // detectSmells runs smell detection queries and writes results to Analytical Store.
+// Smell templates are loaded from the TemplateStore (backed by policies/smells/*.dl).
+// This makes smell detection fully Datalog-driven - adding new smells requires only .dl files.
 func (a *Analyzer) detectSmells(ctx context.Context, projectID string) error {
 	sourceStore, err := a.storeManager.GetSourceStore(projectID)
 	if err != nil {
@@ -342,116 +468,71 @@ func (a *Analyzer) detectSmells(ctx context.Context, projectID string) error {
 		return fmt.Errorf("failed to get analytical store: %w", err)
 	}
 
+	if a.templateStore == nil {
+		return fmt.Errorf("template store not available for smell detection")
+	}
+
+	templates, err := a.templateStore.ListTemplates(ctx, projectID, "smell")
+	if err != nil {
+		return fmt.Errorf("failed to list smell templates: %w", err)
+	}
+
 	smellResults := 0
 
-	// Detect circular dependencies
-	circularQuery := `triples(A, "calls", B), triples(B, "calls", A), A != B`
-	circularResults, err := mebpkg.Query(ctx, sourceStore, circularQuery)
-	if err != nil {
-		log.Printf("Warning: circular dependency query failed: %v", err)
-	} else {
-		for _, r := range circularResults {
-			aStr, _ := r["A"].(string)
-			bStr, _ := r["B"].(string)
-			fact := meb.Fact{
-				Subject:   aStr,
-				Predicate: "has_smell",
-				Object:    "circular_dependency:" + bStr,
-			}
-			if err := analyticalStore.AddFact(fact); err != nil {
-				log.Printf("Warning: failed to add circular smell: %v", err)
+	for _, tmpl := range templates {
+		if tmpl.Body == "" {
+			logger.Warn("Template has empty body", "template", tmpl.ID)
+			continue
+		}
+
+		results, err := mebpkg.Query(ctx, sourceStore, tmpl.Body)
+		if err != nil {
+			logger.Warn("Smell query failed", "template", tmpl.ID, "error", err)
+			continue
+		}
+
+		for _, r := range results {
+			if err := a.emitStructuredFact(analyticalStore, r, tmpl.ID, tmpl.Category, tmpl.Severity); err != nil {
+				logger.Warn("Failed to emit structured fact", "error", err)
 			} else {
 				smellResults++
 			}
 		}
 	}
 
-	// Detect hub files (God files) - files with excessive imports
-	// Query all imports and count in Go - use named variable instead of _ for wildcard
-	importQuery := `triples(File, "imports", P)`
-	importResults, err := mebpkg.Query(ctx, sourceStore, importQuery)
-	if err != nil {
-		log.Printf("Warning: import query failed: %v", err)
-	} else {
-		importCounts := make(map[string]int)
-		for _, r := range importResults {
-			if file, ok := r["File"].(string); ok {
-				importCounts[file]++
-			}
-		}
-		for file, count := range importCounts {
-			if count > 50 && !strings.Contains(file, ":") {
-				fact := meb.Fact{
-					Subject:   file,
-					Predicate: "has_smell",
-					Object:    fmt.Sprintf("god_file:imports:%d", count),
-				}
-				if err := analyticalStore.AddFact(fact); err != nil {
-					log.Printf("Warning: failed to add hub smell: %v", err)
-				} else {
-					smellResults++
-				}
-			}
-		}
-	}
-
-	// Detect files with excessive definitions
-	// Query all defines and count in Go - use named variable instead of _ for wildcard
-	definesQuery := `triples(File, "defines", S)`
-	definesResults, err := mebpkg.Query(ctx, sourceStore, definesQuery)
-	if err != nil {
-		log.Printf("Warning: defines query failed: %v", err)
-	} else {
-		definesCounts := make(map[string]int)
-		for _, r := range definesResults {
-			if file, ok := r["File"].(string); ok {
-				definesCounts[file]++
-			}
-		}
-		for file, count := range definesCounts {
-			if count > 30 && !strings.Contains(file, ":") {
-				fact := meb.Fact{
-					Subject:   file,
-					Predicate: "has_smell",
-					Object:    fmt.Sprintf("god_file:defines:%d", count),
-				}
-				if err := analyticalStore.AddFact(fact); err != nil {
-					log.Printf("Warning: failed to add god file smell: %v", err)
-				} else {
-					smellResults++
-				}
-			}
-		}
-	}
-
-	// Detect layer violations
-	layerQuery := `triples(File, "imports", Target), triples(File, "has_tag", LayerTag), triples(Target, "has_tag", "backend"), LayerTag != "backend"`
-	layerResults, err := mebpkg.Query(ctx, sourceStore, layerQuery)
-	if err != nil {
-		log.Printf("Warning: layer violation query failed: %v", err)
-	} else {
-		for _, r := range layerResults {
-			file, _ := r["File"].(string)
-			target, _ := r["Target"].(string)
-			layer, _ := r["LayerTag"].(string)
-			fact := meb.Fact{
-				Subject:   file,
-				Predicate: "has_smell",
-				Object:    "layer_violation:" + target + ":" + layer,
-			}
-			if err := analyticalStore.AddFact(fact); err != nil {
-				log.Printf("Warning: failed to add layer violation: %v", err)
-			} else {
-				smellResults++
-			}
-		}
-	}
-
-	log.Printf("Smell detection complete: %d smells found", smellResults)
+	logger.Info("Smell detection complete", "smells", smellResults)
 	return nil
 }
 
-// contains is a helper to check if a string contains a substring.
-func contains(s, substr string) bool {
-	return strings.Contains(s, substr)
+// emitStructuredFact emits a structured fact triple to the analytical store.
+// The predicate is derived from the template ID (e.g., "smell_circular_direct").
+// Value fields are stored as separate predicates.
+func (a *Analyzer) emitStructuredFact(store *meb.MEBStore, result map[string]any, templateID, category, severity string) error {
+	var subject string
+
+	if s, ok := result["File"].(string); ok {
+		subject = s
+	} else if s, ok := result["A"].(string); ok {
+		subject = s
+	} else if s, ok := result["Subject"].(string); ok {
+		subject = s
+	}
+
+	if subject == "" {
+		return fmt.Errorf("no subject found in result")
+	}
+
+	facts := []meb.Fact{
+		{Subject: subject, Predicate: "has_smell_type", Object: templateID},
+		{Subject: subject, Predicate: "has_smell_category", Object: category},
+		{Subject: subject, Predicate: "has_smell_severity", Object: severity},
+	}
+
+	for _, fact := range facts {
+		if err := store.AddFact(fact); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

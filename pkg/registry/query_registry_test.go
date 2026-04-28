@@ -130,39 +130,39 @@ func TestExtractParameters(t *testing.T) {
 	r := &QueryRegistry{}
 
 	tests := []struct {
-		name     string
-		template string
+		name      string
+		template  string
 		wantNames []string
 		wantCount int
 	}{
 		{
-			name:     "has FileID placeholder",
-			template: `triples({FileID}, "defines", Symbol)`,
+			name:      "has FileID placeholder",
+			template:  `triples({FileID}, "defines", Symbol)`,
 			wantNames: []string{"FileID"},
-			wantCount:  1,
+			wantCount: 1,
 		},
 		{
-			name:     "has Symbol placeholder",
-			template: `triples(File, "defines", {Symbol})`,
+			name:      "has Symbol placeholder",
+			template:  `triples(File, "defines", {Symbol})`,
 			wantNames: []string{"Symbol"},
-			wantCount:  1,
+			wantCount: 1,
 		},
 		{
-			name:     "has both FileID and Symbol placeholders",
-			template: `triples({FileID}, "defines", {Symbol})`,
+			name:      "has both FileID and Symbol placeholders",
+			template:  `triples({FileID}, "defines", {Symbol})`,
 			wantNames: []string{"FileID", "Symbol"},
-			wantCount:  2,
+			wantCount: 2,
 		},
 		{
-			name:     "has FileID and Target placeholders",
-			template: `triples({FileID}, "calls", {Target})`,
+			name:      "has FileID and Target placeholders",
+			template:  `triples({FileID}, "calls", {Target})`,
 			wantNames: []string{"FileID", "Target"},
-			wantCount:  2, // All placeholders are now extracted
+			wantCount: 2, // All placeholders are now extracted
 		},
 		{
-			name:     "no placeholders",
-			template: `triples(A, "calls", B)`,
-			wantCount:  0,
+			name:      "no placeholders",
+			template:  `triples(A, "calls", B)`,
+			wantCount: 0,
 		},
 	}
 

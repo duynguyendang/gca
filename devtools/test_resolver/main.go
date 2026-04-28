@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	
+
 	"github.com/duynguyendang/gca/pkg/ingest"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/store"
@@ -17,12 +17,12 @@ func main() {
 		log.Fatal(err)
 	}
 	defer s.Close()
-	
+
 	ctx := context.Background()
-	
+
 	// Test with names we KNOW exist from the output
 	testNames := []string{"Execute", "main", "init", "getMemoryProfile", "createStore"}
-	
+
 	fmt.Println("=== Testing FindSubjectsByObject with known names ===")
 	for _, name := range testNames {
 		count := 0
@@ -37,14 +37,14 @@ func main() {
 			fmt.Printf("  '%s' -> NOT FOUND\n", name)
 		}
 	}
-	
+
 	// Test the resolver
 	fmt.Println("\n=== Testing SymbolResolver ===")
 	resolver := ingest.NewSymbolResolver(s)
 	resolver.BuildImportMap(s)
-	
+
 	// Try resolving with names from the actual code
-	testCases := []struct{
+	testCases := []struct {
 		callerFile string
 		calleeName string
 	}{
@@ -52,12 +52,12 @@ func main() {
 		{"gca-v2-fresh/cmd/root.go", "createStore"},
 		{"gca-v2-fresh/pkg/server/server.go", "NewServer"},
 	}
-	
+
 	for _, tc := range testCases {
 		resolved := resolver.ResolveCallee(tc.callerFile, tc.calleeName)
 		fmt.Printf("  ResolveCallee(%q, %q) = %q\n", tc.callerFile, tc.calleeName, resolved)
 	}
-	
+
 	// Check what has_name facts exist for specific symbols
 	fmt.Println("\n=== Checking specific symbols ===")
 	symbols := []string{
@@ -65,7 +65,7 @@ func main() {
 		"gca-v2-fresh/cmd/root.go:createStore",
 		"gca-v2-fresh/pkg/server/server.go:NewServer",
 	}
-	
+
 	for _, sym := range symbols {
 		fmt.Printf("\nSymbol: %s\n", sym)
 		// Check has_name

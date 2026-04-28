@@ -103,4 +103,7 @@ var PromptPaths = map[string]string{
 	"default_context": "prompts/default_context.prompt",
 	"explain":         "prompts/explain_results.prompt",
 	"planner":         "prompts/planner.prompt",
+	"insight":         "prompts/insight.prompt",
+	"summary":         "prompts/summary.prompt",
+	"narrative":       "prompts/narrative.prompt",
 }

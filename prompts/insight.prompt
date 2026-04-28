@@ -1,0 +1,19 @@
+---
+
+temperature: 0.2
+input:
+  schema:
+    SymbolID: string
+    Context: string
+---
+Analyze the architectural role of component {{.SymbolID}}.
+
+Provide a comprehensive analysis including:
+1. **Role**: What is its primary responsibility?
+2. **Interactions**: What does it call and what calls it?
+3. **Design Patterns**: What patterns does it embody?
+
+{{if .Context}}
+## Additional Context
+{{.Context}}
+{{end}}

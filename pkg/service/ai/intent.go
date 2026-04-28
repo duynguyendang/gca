@@ -32,11 +32,11 @@ type IntentResult struct {
 
 type IntentFeatures struct {
 	HasQuestionWord   bool
-	HasSymbol          bool
-	QueryLength        int
-	StructuralScore    float64
-	DomainSpecificity   float64
-	CoOccurrenceBonus  float64
+	HasSymbol         bool
+	QueryLength       int
+	StructuralScore   float64
+	DomainSpecificity float64
+	CoOccurrenceBonus float64
 }
 
 // intentPatternWithFeatures extends basic pattern with metadata for scoring
@@ -53,7 +53,7 @@ var strongIntentIndicators = map[Intent][]string{
 	IntentSecurity:    {"sql injection", "xss", "csrf", "authentication", "authorization", "sql-inject", "sanitiz", "vulnerabilit", "audit"},
 	IntentRefactor:    {"refactor", "technical debt", "code smell", "cyclic complexity", "coupling"},
 	IntentTestGen:     {"unit test", "integration test", "test coverage", "write test", "generate test", "jest", "pytest", "go test"},
-	IntentPerformance:  {"performance", "bottleneck", "optimize", "memory leak", "cpu", "latency", "slow query"},
+	IntentPerformance: {"performance", "bottleneck", "optimize", "memory leak", "cpu", "latency", "slow query"},
 }
 
 // questionWords that indicate interrogative intent
@@ -64,6 +64,19 @@ var structuralIndicators = []string{"?", "how do", "how does", "how can", "what 
 
 // symbolPattern matches common symbol formats (Package.Type, file/path, CamelCase)
 var symbolPattern = regexp.MustCompile(`([A-Z][a-zA-Z0-9]*\.[A-Z][a-zA-Z0-9]*|[a-zA-Z0-9_]+/[a-zA-Z0-9_./]+|[A-Z][a-z]+[A-Z][a-zA-Z0-9]*)`)
+
+var followUpPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^(and|but|so|then)\s+`),
+	regexp.MustCompile(`^(why|how|what)\s+`),
+	regexp.MustCompile(`^show\s+(me\s+)?(more|others?|another)`),
+	regexp.MustCompile(`^(just|only)\s+(one|more|a\s+few)`),
+}
+
+var pronounPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^(it|this|that|them|those)\s+(is|was|are|were|can|does|doesn|should|would)`),
+	regexp.MustCompile(`^(it|this|that)\s+(call|use|invoke|have|has|contain)`),
+	regexp.MustCompile(`^(what|where)\s+(is|are|was)\s+(it|this|that)`),
+}
 
 var intentPatterns = []struct {
 	intent     Intent
@@ -496,14 +509,8 @@ func isFollowUp(query string) bool {
 	}
 
 	// Check for implicit follow-up patterns
-	followUpPatterns := []string{
-		`^(and|but|so|then)\s+`,
-		`^(why|how|what)\s+`,
-		`^show\s+(me\s+)?(more|others?|another)`,
-		`^(just|only)\s+(one|more|a\s+few)`,
-	}
 	for _, pattern := range followUpPatterns {
-		if regexp.MustCompile(pattern).MatchString(queryLower) {
+		if pattern.MatchString(queryLower) {
 			return true
 		}
 	}
@@ -516,14 +523,8 @@ func detectPronounReference(query string) string {
 	queryLower := strings.ToLower(query)
 
 	// Pattern: query starts with pronoun or demonstrative
-	pronounPatterns := []string{
-		`^(it|this|that|them|those)\s+(is|was|are|were|can|does|doesn|should|would)`,
-		`^(it|this|that)\s+(call|use|invoke|have|has|contain)`,
-		`^(what|where)\s+(is|are|was)\s+(it|this|that)`,
-	}
-
 	for _, pattern := range pronounPatterns {
-		if regexp.MustCompile(pattern).MatchString(queryLower) {
+		if pattern.MatchString(queryLower) {
 			return "previous_target"
 		}
 	}
@@ -566,8 +567,8 @@ func isComplementaryIntent(prev, curr Intent) bool {
 	transitions := map[Intent][]Intent{
 		IntentExplain:   {IntentFind, IntentWhoCalls, IntentWhatCalls},
 		IntentSummarize: {IntentFind, IntentExplain},
-		IntentFind:     {IntentExplain, IntentWhoCalls},
-		IntentWhoCalls: {IntentFind, IntentExplain},
+		IntentFind:      {IntentExplain, IntentWhoCalls},
+		IntentWhoCalls:  {IntentFind, IntentExplain},
 	}
 
 	if candidates, ok := transitions[prev]; ok {

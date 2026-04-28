@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -203,14 +204,9 @@ func (s *CentralityService) SortByCentrality(ctx context.Context, store *meb.MEB
 }
 
 func sortByCentralityDesc(symbols []string, centrality map[string]float64) {
-	n := len(symbols)
-	for i := 0; i < n-1; i++ {
-		for j := 0; j < n-i-1; j++ {
-			if centrality[symbols[j]] < centrality[symbols[j+1]] {
-				symbols[j], symbols[j+1] = symbols[j+1], symbols[j]
-			}
-		}
-	}
+	sort.Slice(symbols, func(i, j int) bool {
+		return centrality[symbols[i]] > centrality[symbols[j]]
+	})
 }
 
 func (s *CentralityService) InvalidateCache(projectID string) {
@@ -225,8 +221,6 @@ func (s *CentralityService) IsEnabled() bool {
 
 type InterfacePattern struct {
 	interfaceNames []string
-	mu             sync.RWMutex
-	compiled       map[string]*regexp.Regexp
 }
 
 var defaultInterfacePattern = &InterfacePattern{
@@ -249,7 +243,6 @@ var defaultInterfacePattern = &InterfacePattern{
 		"parser",
 		"validator",
 	},
-	compiled: make(map[string]*regexp.Regexp),
 }
 
 func (p *InterfacePattern) Match(symbol string) bool {

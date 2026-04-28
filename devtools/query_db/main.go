@@ -85,12 +85,12 @@ func main() {
 	// Check if resolver would work
 	fmt.Println("\n=== Testing resolver pattern ===")
 	resolver := ingest.NewSymbolResolver(store)
-	
+
 	// Build import map
 	resolver.BuildImportMap(store)
 
 	// Try to resolve some callees
-	testCallees := []struct{
+	testCallees := []struct {
 		callerFile string
 		calleeName string
 	}{

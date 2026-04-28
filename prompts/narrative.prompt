@@ -1,0 +1,19 @@
+---
+
+temperature: 0.3
+input:
+  schema:
+    Query: string
+    Components: string
+---
+Explain the high-level logic flow for these components: {{.Components}}.
+
+Keep the explanation concise and focus on:
+1. **Entry Points**: What triggers this flow?
+2. **Data Flow**: How does information move through the system?
+3. **Key Decisions**: What are the critical branching points?
+
+{{if .Query}}
+## User Question
+{{.Query}}
+{{end}}

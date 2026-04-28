@@ -2,6 +2,7 @@ package datalog
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -347,7 +348,7 @@ func applyAggregation(results []map[string]any, modifier *QueryModifier) []map[s
 				}
 				aggResult[alias] = sum
 			case AggregationMin:
-				var min float64 = 1<<63 - 1
+				var min float64 = math.MaxFloat64
 				for _, r := range group {
 					if val, ok := r[modifier.Aggregation.Variable]; ok {
 						if f, ok := toFloat64(val); ok {
@@ -359,7 +360,7 @@ func applyAggregation(results []map[string]any, modifier *QueryModifier) []map[s
 				}
 				aggResult[alias] = min
 			case AggregationMax:
-				var max float64 = -1 << 63
+				var max float64 = -math.MaxFloat64
 				for _, r := range group {
 					if val, ok := r[modifier.Aggregation.Variable]; ok {
 						if f, ok := toFloat64(val); ok {

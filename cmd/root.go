@@ -94,7 +94,7 @@ func createBaseContext() (context.Context, context.CancelFunc) {
 }
 
 // createStore creates a new MEB store with appropriate configuration
-func createStore(readOnly bool, dataPath string, projectName string) (*meb.MEBStore, error) {
+func createStore(readOnly bool, dataPath string, projectName string, sourcePath string) (*meb.MEBStore, error) {
 	storePath := dataPath
 	if projectName != "" {
 		storePath = filepath.Join(dataPath, projectName)
@@ -113,7 +113,7 @@ func createStore(readOnly bool, dataPath string, projectName string) (*meb.MEBSt
 		cfg.ReadOnly = true
 		fmt.Printf("Running in READ-ONLY mode. Data directory: %s\n", storePath)
 	} else {
-		fmt.Printf("Running in INGESTION mode.\nSource: %s\nData: %s\n", sourceDir, storePath)
+		fmt.Printf("Running in INGESTION mode.\nSource: %s\nData: %s\n", sourcePath, storePath)
 	}
 
 	return meb.NewMEBStore(cfg)

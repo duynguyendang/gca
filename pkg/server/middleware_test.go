@@ -81,7 +81,7 @@ func TestCORSMiddlewarePreflight(t *testing.T) {
 
 func TestCompressionMiddleware(t *testing.T) {
 	tests := []struct {
-		name          string
+		name           string
 		acceptEncoding string
 		wantCompressed bool
 	}{

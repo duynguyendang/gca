@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/duynguyendang/gca/pkg/common"
@@ -49,18 +51,26 @@ type AIService struct {
 	MultiFilePrompt      *prompts.Prompt
 	DefaultContextPrompt *prompts.Prompt
 
-	// Response caching for AI synthesis
-	responseCache    map[string]*cachedResponse
-	responseCacheMu  sync.RWMutex
-	responseCacheTTL time.Duration
-	stopCh            chan struct{}
-	cleanupDone      chan struct{}
+	// Response caching for AI synthesis (LRU with list for O(1) eviction)
+	responseCache        map[string]*cachedResponse
+	responseCacheMu      sync.RWMutex
+	responseCacheTTL     time.Duration
+	responseCacheMaxSize int
+	responseCacheList    *list.List
+	stopCh               chan struct{}
+	cleanupDone          chan struct{}
+
+	// Circuit breaker for AI service resilience
+	circuitFailures    atomic.Int32
+	circuitOpen        atomic.Bool
+	circuitLastFailure atomic.Int64
 }
 
 type cachedResponse struct {
 	Answer  string
 	Summary string
 	Time    time.Time
+	e       *list.Element
 }
 
 func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService, error) {
@@ -169,12 +179,53 @@ func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService,
 		DefaultContextPrompt: loadPrompt("default_context"),
 		responseCache:        make(map[string]*cachedResponse),
 		responseCacheTTL:     cacheTTL,
+		responseCacheMaxSize: 1000,
+		responseCacheList:    list.New(),
 		stopCh:               stopCh,
 		cleanupDone:          cleanupDone,
 	}, nil
 }
 
+const (
+	circuitFailureThreshold = 5
+	circuitOpenDuration     = 30 * time.Second
+)
+
+func (s *AIService) isCircuitOpen() bool {
+	if !s.circuitOpen.Load() {
+		return false
+	}
+	lastFailure := s.circuitLastFailure.Load()
+	if time.Since(time.Unix(lastFailure, 0)) > circuitOpenDuration {
+		s.circuitOpen.Store(false)
+		return false
+	}
+	return true
+}
+
+func (s *AIService) recordFailure() {
+	s.circuitFailures.Add(1)
+	s.circuitLastFailure.Store(time.Now().Unix())
+	if s.circuitFailures.Load() >= circuitFailureThreshold {
+		s.circuitOpen.Store(true)
+		logger.Warn("AI circuit breaker opened", "failures", s.circuitFailures.Load())
+	}
+}
+
+func (s *AIService) recordSuccess() {
+	s.circuitFailures.Store(0)
+	s.circuitOpen.Store(false)
+}
+
+func (s *AIService) shouldFailFast() bool {
+	return s.isCircuitOpen()
+}
+
 func (s *AIService) GenerateText(ctx context.Context, prompt string) (string, error) {
+	if s.shouldFailFast() {
+		return "", fmt.Errorf("AI service circuit breaker is open, failing fast to prevent cascading failures")
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
@@ -185,10 +236,12 @@ func (s *AIService) GenerateText(ctx context.Context, prompt string) (string, er
 		ai.WithPrompt(prompt),
 	)
 	if err != nil {
+		s.recordFailure()
 		logger.Error("LLM Request Failed", "prompt", prompt, "error", err)
 		return "", err
 	}
 
+	s.recordSuccess()
 	return resp.Text(), nil
 }
 
@@ -299,27 +352,51 @@ func (s *AIService) BuildDiagnosticContext(ctx context.Context, projectID string
 	return sb.String(), nil
 }
 
-// cacheResponse caches an AI response for a given query
+// cacheResponse caches an AI response for a given query (LRU)
 func (s *AIService) cacheResponse(cacheKey string, answer, summary string) {
 	s.responseCacheMu.Lock()
 	defer s.responseCacheMu.Unlock()
+
+	// Evict oldest if at capacity
+	if s.responseCacheList.Len() >= s.responseCacheMaxSize {
+		if oldest := s.responseCacheList.Back(); oldest != nil {
+			delete(s.responseCache, oldest.Value.(string))
+			s.responseCacheList.Remove(oldest)
+		}
+	}
+
+	// Add new entry to front of list
+	e := s.responseCacheList.PushFront(cacheKey)
 	s.responseCache[cacheKey] = &cachedResponse{
 		Answer:  answer,
 		Summary: summary,
 		Time:    time.Now(),
+		e:       e,
 	}
 }
 
-// getCachedResponse retrieves a cached response if valid
+// getCachedResponse retrieves a cached response if valid (LRU promotion)
 func (s *AIService) getCachedResponse(cacheKey string) (string, string, bool) {
 	s.responseCacheMu.RLock()
-	defer s.responseCacheMu.RUnlock()
-	if cached, ok := s.responseCache[cacheKey]; ok {
-		if time.Since(cached.Time) < s.responseCacheTTL {
-			return cached.Answer, cached.Summary, true
-		}
+	cached, ok := s.responseCache[cacheKey]
+	s.responseCacheMu.RUnlock()
+
+	if !ok {
+		return "", "", false
 	}
-	return "", "", false
+
+	if time.Since(cached.Time) >= s.responseCacheTTL {
+		return "", "", false
+	}
+
+	// Promote to front (LRU)
+	s.responseCacheMu.Lock()
+	if cached.e != nil {
+		s.responseCacheList.MoveToFront(cached.e)
+	}
+	s.responseCacheMu.Unlock()
+
+	return cached.Answer, cached.Summary, true
 }
 
 // generateCacheKey creates a deterministic cache key from query + results hash
@@ -329,14 +406,32 @@ func (s *AIService) generateCacheKey(query string, intent Intent, results interf
 	return hex.EncodeToString(hash[:])
 }
 
-// cleanupExpiredCache removes expired cache entries
+// cleanupExpiredCache removes expired cache entries and enforces max size (LRU)
 func (s *AIService) cleanupExpiredCache() {
 	s.responseCacheMu.Lock()
 	defer s.responseCacheMu.Unlock()
 	now := time.Now()
-	for key, cached := range s.responseCache {
+
+	// Remove expired entries (traverse list from back = oldest)
+	for e := s.responseCacheList.Back(); e != nil; e = e.Prev() {
+		key := e.Value.(string)
+		cached, ok := s.responseCache[key]
+		if !ok {
+			continue
+		}
 		if now.Sub(cached.Time) >= s.responseCacheTTL {
 			delete(s.responseCache, key)
+			s.responseCacheList.Remove(e)
+		}
+	}
+
+	// Enforce max size (remove oldest from back if still over limit)
+	for s.responseCacheList.Len() > s.responseCacheMaxSize {
+		if oldest := s.responseCacheList.Back(); oldest != nil {
+			delete(s.responseCache, oldest.Value.(string))
+			s.responseCacheList.Remove(oldest)
+		} else {
+			break
 		}
 	}
 }
@@ -953,11 +1048,11 @@ func (s *AIService) HandleRequestOODA(ctx context.Context, req AIRequest) (strin
 }
 
 type AskRequest struct {
-	ProjectID          string            `json:"project_id"`
-	Query              string            `json:"query"`
-	SymbolID           string            `json:"symbol_id,omitempty"`
-	Depth              int               `json:"depth,omitempty"`
-	Context            string            `json:"context,omitempty"`
+	ProjectID           string             `json:"project_id"`
+	Query               string             `json:"query"`
+	SymbolID            string             `json:"symbol_id,omitempty"`
+	Depth               int                `json:"depth,omitempty"`
+	Context             string             `json:"context,omitempty"`
 	ConversationHistory []ConversationTurn `json:"conversation_history,omitempty"`
 }
 
@@ -1054,8 +1149,8 @@ func (s *AIService) HandleAsk(ctx context.Context, req AskRequest) (*AskResponse
 		IntentChat:        true,
 		IntentFind:        true,
 		IntentSummarize:   true,
-		IntentExplain:    true,
-		IntentRefactor:   true,
+		IntentExplain:     true,
+		IntentRefactor:    true,
 		IntentSecurity:    true,
 		IntentPerformance: true,
 	}

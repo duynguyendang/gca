@@ -52,7 +52,7 @@ func TestSPOIndexBasic(t *testing.T) {
 	t.Run("BoundSubjectOnly", func(t *testing.T) {
 		count := 0
 		t.Logf("Scanning for subject='main.go', predicate='', object=''")
-		
+
 		for fact, err := range s.ScanContext(ctx, "main.go", "", "") {
 			if err != nil {
 				t.Errorf("Scan error: %v", err)
@@ -71,7 +71,7 @@ func TestSPOIndexBasic(t *testing.T) {
 	t.Run("BoundSubjectAndPredicate", func(t *testing.T) {
 		count := 0
 		t.Logf("Scanning for subject='main.go', predicate='defines', object=''")
-		
+
 		for fact, err := range s.ScanContext(ctx, "main.go", "defines", "") {
 			if err != nil {
 				t.Errorf("Scan error: %v", err)
@@ -90,7 +90,7 @@ func TestSPOIndexBasic(t *testing.T) {
 	t.Run("AllBound", func(t *testing.T) {
 		count := 0
 		t.Logf("Scanning for subject='main.go', predicate='defines', object='main'")
-		
+
 		for fact, err := range s.ScanContext(ctx, "main.go", "defines", "main") {
 			if err != nil {
 				t.Errorf("Scan error: %v", err)
@@ -109,7 +109,7 @@ func TestSPOIndexBasic(t *testing.T) {
 	t.Run("NoBounds", func(t *testing.T) {
 		count := 0
 		t.Logf("Scanning for all facts (no bounds)")
-		
+
 		for fact, err := range s.ScanContext(ctx, "", "", "") {
 			if err != nil {
 				t.Errorf("Scan error: %v", err)
@@ -259,10 +259,10 @@ func TestSPOIndexDictionary(t *testing.T) {
 
 	// Check dictionary IDs before adding facts
 	t.Log("Checking dictionary ID resolution:")
-	
+
 	subjID, subjFound := s.LookupID("main.go")
 	t.Logf("  Subject 'main.go' ID: %d, found: %v", subjID, subjFound)
-	
+
 	predID, predFound := s.LookupID("defines")
 	t.Logf("  Predicate 'defines' ID: %d, found: %v", predID, predFound)
 
@@ -272,7 +272,7 @@ func TestSPOIndexDictionary(t *testing.T) {
 	// Check dictionary IDs after adding facts
 	subjID2, subjFound2 := s.LookupID("main.go")
 	t.Logf("  After add - Subject 'main.go' ID: %d, found: %v", subjID2, subjFound2)
-	
+
 	predID2, predFound2 := s.LookupID("defines")
 	t.Logf("  After add - Predicate 'defines' ID: %d, found: %v", predID2, predFound2)
 

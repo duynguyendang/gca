@@ -42,7 +42,7 @@ Arguments:
 
 		// Create store in read-only mode
 		projectName := getProjectName(dataPath)
-		s, err := createStore(true, dataPath, projectName)
+		s, err := createStore(true, dataPath, projectName, "")
 		if err != nil {
 			return fmt.Errorf("failed to create MEB store: %w", err)
 		}

@@ -69,8 +69,16 @@ func TestStoreManager_ListProjects_Caching(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Create p1
-	os.Mkdir(filepath.Join(tmpDir, "p1"), 0755)
+	// Create p1 with proper store structure (badger dir)
+	p1Dir := filepath.Join(tmpDir, "p1")
+	if err := os.MkdirAll(p1Dir, 0755); err != nil {
+		t.Fatalf("Failed to create p1 dir: %v", err)
+	}
+	store1, err := meb.NewMEBStore(store.DefaultConfig(p1Dir))
+	if err != nil {
+		t.Fatalf("Failed to init p1 store: %v", err)
+	}
+	store1.Close()
 
 	sm := NewStoreManager(tmpDir, MemoryProfileDefault, false)
 
@@ -83,8 +91,16 @@ func TestStoreManager_ListProjects_Caching(t *testing.T) {
 		t.Errorf("Expected 1 project p1, got %v", projects)
 	}
 
-	// Add p2
-	os.Mkdir(filepath.Join(tmpDir, "p2"), 0755)
+	// Add p2 with proper store structure
+	p2Dir := filepath.Join(tmpDir, "p2")
+	if err := os.MkdirAll(p2Dir, 0755); err != nil {
+		t.Fatalf("Failed to create p2 dir: %v", err)
+	}
+	store2, err := meb.NewMEBStore(store.DefaultConfig(p2Dir))
+	if err != nil {
+		t.Fatalf("Failed to init p2 store: %v", err)
+	}
+	store2.Close()
 
 	// Second list (should be cached, so still only p1)
 	projects, err = sm.ListProjects()

@@ -6,6 +6,7 @@ query_metadata("smell_layer_violation", "category", "smell").
 query_metadata("smell_layer_violation", "tier", "1").
 query_metadata("smell_layer_violation", "severity", "high").
 query_metadata("smell_layer_violation", "smell_type", "layer_violation").
+query_metadata("smell_layer_violation", "template", `triples(File, "imports", Target), triples(File, "has_tag", LayerTag), triples(Target, "has_tag", "backend"), LayerTag != "backend"`).
 
 % Frontend importing backend packages directly
 query("smell_layer_violation", File, Target, LayerTag) :-
