@@ -52,14 +52,15 @@ func synthesizeWithRegistry(intent Intent, results interface{}, ctx context.Cont
 	return summarizeGeneral(results)
 }
 
-func summarizeCallers(results interface{}) string {
-	var callers []string
-
+func extractStringsFromResults(results interface{}, keys []string) []string {
+	var found []string
 	switch r := results.(type) {
 	case []map[string]any:
 		for _, row := range r {
-			if caller, ok := row["?caller"].(string); ok && caller != "" {
-				callers = append(callers, caller)
+			for _, key := range keys {
+				if val, ok := row[key].(string); ok && val != "" {
+					found = append(found, val)
+				}
 			}
 		}
 	case map[string]interface{}:
@@ -67,96 +68,44 @@ func summarizeCallers(results interface{}) string {
 			for _, n := range nodes {
 				if m, ok := n.(map[string]interface{}); ok {
 					if id, ok := m["id"].(string); ok {
-						callers = append(callers, id)
+						found = append(found, id)
 					}
 				}
 			}
 		}
 	}
+	return found
+}
 
+func summarizeCallers(results interface{}) string {
+	callers := extractStringsFromResults(results, []string{"?caller"})
 	if len(callers) == 0 {
 		return "No callers found."
 	}
-
 	unique := removeDuplicates(callers)
 	if len(unique) == 1 {
 		return fmt.Sprintf("**%s** is called by: %s", extractNameFromID(unique[0]), strings.Join(unique, ", "))
 	}
-
 	return fmt.Sprintf("**%d callers** found:\n%s", len(unique), formatList(unique))
 }
 
 func summarizeCallees(results interface{}) string {
-	var callees []string
-
-	switch r := results.(type) {
-	case []map[string]any:
-		for _, row := range r {
-			if callee, ok := row["?callee"].(string); ok && callee != "" {
-				callees = append(callees, callee)
-			}
-			if obj, ok := row["?o"].(string); ok && obj != "" {
-				callees = append(callees, obj)
-			}
-		}
-	case map[string]interface{}:
-		if nodes, ok := r["nodes"].([]interface{}); ok {
-			for _, n := range nodes {
-				if m, ok := n.(map[string]interface{}); ok {
-					if id, ok := m["id"].(string); ok {
-						callees = append(callees, id)
-					}
-				}
-			}
-		}
-	}
-
+	callees := extractStringsFromResults(results, []string{"?callee", "?o"})
 	if len(callees) == 0 {
 		return "No callees found."
 	}
-
 	unique := removeDuplicates(callees)
 	if len(unique) == 1 {
 		return fmt.Sprintf("**%s** calls: %s", extractNameFromID(unique[0]), strings.Join(unique, ", "))
 	}
-
 	return fmt.Sprintf("**%d functions/methods** called:\n%s", len(unique), formatList(unique))
 }
 
 func summarizePath(results interface{}) string {
-	var path []string
+	path := extractStringsFromResults(results, []string{"node"})
 
-	switch r := results.(type) {
-	case []map[string]any:
-		for _, row := range r {
-			if n, ok := row["node"].(string); ok && n != "" {
-				path = append(path, n)
-			}
-		}
-	case map[string]interface{}:
-		if nodes, ok := r["nodes"].([]interface{}); ok {
-			for _, n := range nodes {
-				if m, ok := n.(map[string]interface{}); ok {
-					if id, ok := m["id"].(string); ok {
-						path = append(path, id)
-					}
-				}
-			}
-		}
-		if links, ok := r["links"].([]interface{}); ok && len(links) > 0 {
-			if len(path) == 0 {
-				for _, l := range links {
-					if m, ok := l.(map[string]interface{}); ok {
-						if src, ok := m["source"].(string); ok {
-							path = append(path, src)
-						}
-						if tgt, ok := m["target"].(string); ok {
-							path = append(path, tgt)
-						}
-					}
-				}
-			}
-		}
+	if pathNodes := extractNodesFromResults(results); len(pathNodes) > 0 && len(path) == 0 {
+		path = pathNodes
 	}
 
 	if len(path) == 0 {
@@ -168,38 +117,25 @@ func summarizePath(results interface{}) string {
 		len(unique)-1, strings.Join(unique, " → "))
 }
 
-func summarizeEntity(ctx context.Context, results interface{}, store *meb.MEBStore) string {
-	var entities []string
-	var docs []string
-
-	switch r := results.(type) {
-	case []map[string]any:
-		for _, row := range r {
-			for _, key := range []string{"?s", "?sym", "?obj", "?name"} {
-				if val, ok := row[key].(string); ok && val != "" {
-					entities = append(entities, val)
-				}
-			}
-			for _, key := range []string{"?doc"} {
-				if val, ok := row[key].(string); ok && val != "" {
-					docs = append(docs, val)
-				}
-			}
-		}
-	case map[string]interface{}:
-		if nodes, ok := r["nodes"].([]interface{}); ok {
-			for _, n := range nodes {
+func extractNodesFromResults(results interface{}) []string {
+	var nodes []string
+	if r, ok := results.(map[string]interface{}); ok {
+		if nds, ok := r["nodes"].([]interface{}); ok {
+			for _, n := range nds {
 				if m, ok := n.(map[string]interface{}); ok {
 					if id, ok := m["id"].(string); ok {
-						entities = append(entities, id)
-					}
-					if doc, ok := m["doc"].(string); ok && doc != "" {
-						docs = append(docs, doc)
+						nodes = append(nodes, id)
 					}
 				}
 			}
 		}
 	}
+	return nodes
+}
+
+func summarizeEntity(ctx context.Context, results interface{}, store *meb.MEBStore) string {
+	entities := extractStringsFromResults(results, []string{"?s", "?sym", "?obj", "?name"})
+	docs := extractStringsFromResults(results, []string{"?doc"})
 
 	if len(entities) == 0 {
 		return "No matching entities found."
@@ -226,33 +162,10 @@ func summarizeEntity(ctx context.Context, results interface{}, store *meb.MEBSto
 }
 
 func summarizeFind(results interface{}) string {
-	var found []string
-
-	switch r := results.(type) {
-	case []map[string]any:
-		for _, row := range r {
-			for _, key := range []string{"?s", "?sym", "?obj", "?id"} {
-				if val, ok := row[key].(string); ok && val != "" {
-					found = append(found, val)
-				}
-			}
-		}
-	case map[string]interface{}:
-		if nodes, ok := r["nodes"].([]interface{}); ok {
-			for _, n := range nodes {
-				if m, ok := n.(map[string]interface{}); ok {
-					if id, ok := m["id"].(string); ok {
-						found = append(found, id)
-					}
-				}
-			}
-		}
-	}
-
+	found := extractStringsFromResults(results, []string{"?s", "?sym", "?obj", "?id"})
 	if len(found) == 0 {
 		return "No matches found."
 	}
-
 	unique := removeDuplicates(found)
 	return fmt.Sprintf("**Found %d matches:**\n%s", len(unique), formatList(unique))
 }
