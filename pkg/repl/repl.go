@@ -102,18 +102,6 @@ func displayProjectContext(projectContext *ProjectSummary) {
 		}
 	}
 
-	if len(projectContext.TopSymbols) > 0 {
-		fmt.Printf("\n🎯 Top Symbols (%d):\n", len(projectContext.TopSymbols))
-		displayLimit := config.DisplayLimitMedium
-		for i, symbol := range projectContext.TopSymbols {
-			if i >= displayLimit {
-				fmt.Printf("   ... and %d more\n", len(projectContext.TopSymbols)-displayLimit)
-				break
-			}
-			fmt.Printf("   - %s (%d)\n", symbol.Name, symbol.Count)
-		}
-	}
-
 	if len(projectContext.Stats) > 0 {
 		fmt.Printf("\n📊 Statistics:\n")
 		if count, ok := projectContext.Stats["total_facts"]; ok {
@@ -484,7 +472,6 @@ func executePlanCommand(ctx context.Context, cfg Config, s *meb.MEBStore, goal s
 		"Query":      goal,
 		"Packages":   projectContext.Packages,
 		"Predicates": projectContext.Predicates,
-		"TopSymbols": projectContext.TopSymbols,
 	}
 
 	promptStr, err := plannerPrompt.Execute(data)

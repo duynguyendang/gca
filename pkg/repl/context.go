@@ -8,17 +8,10 @@ import (
 	"github.com/duynguyendang/meb"
 )
 
-// SymbolStat local definition since it was removed from meb
-type SymbolStat struct {
-	Name  string `json:"name"`
-	Count int    `json:"count"`
-}
-
 // ProjectSummary holds a structured summary of the codebase for the AI Planner.
 type ProjectSummary struct {
 	Predicates  []string       `json:"predicates"`
 	Packages    []string       `json:"packages"`
-	TopSymbols  []SymbolStat   `json:"top_symbols"`
 	Stats       map[string]int `json:"stats"`
 	EntryPoints []string       `json:"entry_points"`
 }
@@ -38,16 +31,10 @@ func GenerateProjectSummary(s *meb.MEBStore) (*ProjectSummary, error) {
 		return nil, fmt.Errorf("package extraction failed: %w", err)
 	}
 
-	// Step 3: Symbol Frequency Analysis
-	topSymbols, err := analyzeTopSymbols(s, 50)
-	if err != nil {
-		return nil, fmt.Errorf("symbol analysis failed: %w", err)
-	}
+	// Step 3: System Statistics
+	stats := gatherStats(s, len(predicates), len(packages), 0)
 
-	// Step 4: System Statistics
-	stats := gatherStats(s, len(predicates), len(packages), len(topSymbols))
-
-	// Step 5: Entry Points
+	// Step 4: Entry Points
 	entryPoints, err := extractEntryPoints(s)
 	if err != nil {
 		// Log error but don't fail summary?
@@ -57,7 +44,6 @@ func GenerateProjectSummary(s *meb.MEBStore) (*ProjectSummary, error) {
 	return &ProjectSummary{
 		Predicates:  predicates,
 		Packages:    packages,
-		TopSymbols:  topSymbols,
 		Stats:       stats,
 		EntryPoints: entryPoints,
 	}, nil
@@ -107,12 +93,6 @@ func extractPackages(s *meb.MEBStore) ([]string, error) {
 	sort.Strings(packages)
 
 	return packages, nil
-}
-
-// analyzeTopSymbols retrieves the top N most frequent symbols using MEBStore API.
-func analyzeTopSymbols(s *meb.MEBStore, limit int) ([]SymbolStat, error) {
-	// Function removed. Return empty stats.
-	return []SymbolStat{}, nil
 }
 
 // gatherStats computes high-level system statistics.

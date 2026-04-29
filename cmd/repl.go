@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
 
@@ -11,9 +10,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var _ context.Context // Explicitly reference context package type
-
-// replCmd represents the repl command
 var replCmd = &cobra.Command{
 	Use:   "repl [data-folder]",
 	Short: "Start interactive REPL for querying the knowledge graph",

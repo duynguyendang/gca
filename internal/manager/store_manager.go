@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/ephemeral"
 	mebpkg "github.com/duynguyendang/gca/pkg/meb"
@@ -431,11 +432,7 @@ func hashToTopicID(name string) uint32 {
 	if name == "" {
 		return 1
 	}
-	var h uint32 = 2166136261 // FNV-1a offset basis
-	for i := 0; i < len(name); i++ {
-		h ^= uint32(name[i])
-		h *= 16777619 // FNV-1a prime
-	}
+	h := common.FNV1aHash(name)
 	return (h & 0xFFFFFF) | 1 // ensure non-zero (0 is reserved)
 }
 

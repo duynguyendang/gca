@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
@@ -276,10 +277,7 @@ func buildEmbedText(symbolID string, bundleFacts []meb.Fact, content []byte) str
 	}
 	// Add content preview (truncated to avoid bloat)
 	if len(content) > 0 {
-		contentStr := string(content)
-		if len(contentStr) > 500 {
-			contentStr = contentStr[:500] + "..."
-		}
+		contentStr := common.ContentPreview(string(content))
 		parts = append(parts, contentStr)
 	}
 
@@ -498,11 +496,7 @@ func hashToTopicID(name string) uint32 {
 	if name == "" {
 		return 1
 	}
-	var h uint32 = 2166136261 // FNV-1a offset basis
-	for i := 0; i < len(name); i++ {
-		h ^= uint32(name[i])
-		h *= 16777619 // FNV-1a prime
-	}
+	h := common.FNV1aHash(name)
 	return (h & 0xFFFFFF) | 1 // ensure non-zero (0 is reserved)
 }
 

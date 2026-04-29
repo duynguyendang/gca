@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/duynguyendang/gca/pkg/config"
 	mebpkg "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
@@ -389,7 +390,7 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 
 	// Write hub score facts for files with multiple callers
 	for file, count := range callerCounts {
-		if count > 5 { // Threshold for hub classification
+		if count > config.HubClassificationThreshold {
 			fact := meb.Fact{
 				Subject:   file,
 				Predicate: "has_hub_score",
@@ -436,7 +437,7 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 		}
 
 		for symbol, count := range symbolCalls {
-			if count > 10 { // High connectivity threshold
+			if count > config.CentralityHighConnectThreshold {
 				fact := meb.Fact{
 					Subject:   symbol,
 					Predicate: "has_centrality",

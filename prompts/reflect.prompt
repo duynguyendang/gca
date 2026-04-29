@@ -1,0 +1,23 @@
+---
+temperature: 0.1
+input:
+  schema:
+    StepID: int
+    Task: string
+    Query: string
+---
+You are the GCA Lead Architect debugging a failed query step.
+
+Step {{.StepID}}: {{.Task}}
+Query: {{.Query}}
+Result: NO RESULTS or ERROR
+
+The query returned no results or failed. Suggest a revised Datalog query that might work better.
+
+Consider:
+1. Are the predicate names correct?
+2. Are variables used consistently?
+3. Is the regex pattern valid?
+4. Could the query be too restrictive?
+
+Return ONLY the revised Datalog query, nothing else. No explanations, no markdown.

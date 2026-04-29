@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/logger"
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/meb"
@@ -31,7 +32,7 @@ func NewExecutor(store *meb.MEBStore) *Executor {
 		FailureThreshold: 5,
 		SuccessThreshold: 3,
 		OpenDuration:     30 * time.Second,
-		MaxJoinResults:   5000,
+		MaxJoinResults:   common.MaxJoinResults,
 	})
 	return &Executor{
 		store: store,
@@ -145,13 +146,13 @@ func (e *Executor) hydrateResults(ctx context.Context, results []map[string]any,
 
 		if err == nil && len(content) > 0 {
 			code := string(content)
-			if len(code) > 2000 {
-				code = code[:2000] + "\n... (truncated)"
+			if len(code) > 0 {
+				code = common.CodePreview(code)
 			}
 			node.Code = code
 		}
 
-		kindCtx, cancel2 := context.WithTimeout(ctx, 500*time.Millisecond)
+		kindCtx, cancel2 := context.WithTimeout(ctx, time.Duration(common.ExecutorQueryTimeoutMs)*time.Millisecond)
 		kindResults, _ := gcamdb.Query(kindCtx, e.store, fmt.Sprintf(`triples("%s", "kind", ?o)`, id))
 		cancel2()
 		if len(kindResults) > 0 {

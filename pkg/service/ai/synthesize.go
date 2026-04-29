@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/meb"
@@ -27,26 +28,28 @@ func SynthesizeAnswer(ctx context.Context, intent Intent, nlQuery string, query 
 		Results: results,
 	}
 
-	switch intent {
-	case IntentWhoCalls:
-		synth.Answer = summarizeCallers(results)
-	case IntentWhatCalls:
-		synth.Answer = summarizeCallees(results)
-	case IntentHowReaches:
-		synth.Answer = summarizePath(results)
-	case IntentSummarize:
-		synth.Answer = summarizeEntity(ctx, results, store)
-	case IntentFind:
-		synth.Answer = summarizeFind(results)
-	case IntentChat:
-		synth.Answer = summarizeGeneral(results)
-	default:
-		synth.Answer = summarizeGeneral(results)
-	}
-
+	synth.Answer = synthesizeWithRegistry(intent, results, ctx, store)
 	synth.Summary = generateSummary(intent, results)
 
 	return synth, nil
+}
+
+type synthesisFunc func(results interface{}, ctx context.Context, store *meb.MEBStore) string
+
+var synthesizeRegistry = map[Intent]synthesisFunc{
+	IntentWhoCalls:   func(r interface{}, _ context.Context, _ *meb.MEBStore) string { return summarizeCallers(r) },
+	IntentWhatCalls:  func(r interface{}, _ context.Context, _ *meb.MEBStore) string { return summarizeCallees(r) },
+	IntentHowReaches: func(r interface{}, _ context.Context, _ *meb.MEBStore) string { return summarizePath(r) },
+	IntentSummarize:   func(r interface{}, ctx context.Context, store *meb.MEBStore) string { return summarizeEntity(ctx, r, store) },
+	IntentFind:       func(r interface{}, _ context.Context, _ *meb.MEBStore) string { return summarizeFind(r) },
+	IntentChat:       func(r interface{}, _ context.Context, _ *meb.MEBStore) string { return summarizeGeneral(r) },
+}
+
+func synthesizeWithRegistry(intent Intent, results interface{}, ctx context.Context, store *meb.MEBStore) string {
+	if handler, ok := synthesizeRegistry[intent]; ok {
+		return handler(results, ctx, store)
+	}
+	return summarizeGeneral(results)
 }
 
 func summarizeCallers(results interface{}) string {
@@ -214,9 +217,7 @@ func summarizeEntity(ctx context.Context, results interface{}, store *meb.MEBSto
 			if i >= 3 {
 				break
 			}
-			if len(doc) > 200 {
-				doc = doc[:200] + "..."
-			}
+			doc = common.DocPreview(doc)
 			summary.WriteString(fmt.Sprintf("- %s\n", doc))
 		}
 	}

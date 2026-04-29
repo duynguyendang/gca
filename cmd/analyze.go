@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"time"
@@ -11,8 +10,6 @@ import (
 	"github.com/duynguyendang/gca/pkg/registry"
 	"github.com/spf13/cobra"
 )
-
-var _ context.Context // Explicitly reference context package type
 
 // analyzeCmd represents the analyze command
 var analyzeCmd = &cobra.Command{

@@ -207,7 +207,7 @@ func (t *D3Transformer) Transform(ctx context.Context, query string, results []m
 		}
 
 		// SAFETY: Skip literal text nodes (newlines or very long strings) if they weren't caught above
-		if strings.Contains(sVal, "\n") || len(sVal) > 200 || strings.Contains(oVal, "\n") || len(oVal) > 200 {
+		if strings.Contains(sVal, "\n") || len(sVal) > common.MaxExportLabelLength || strings.Contains(oVal, "\n") || len(oVal) > common.MaxExportLabelLength {
 			continue
 		}
 

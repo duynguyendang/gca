@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
@@ -12,8 +11,6 @@ import (
 	"github.com/duynguyendang/gca/pkg/registry"
 	"github.com/spf13/cobra"
 )
-
-var _ context.Context // Explicitly reference context package type
 
 var incremental bool
 var noEmbed bool

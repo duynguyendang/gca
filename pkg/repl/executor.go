@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/prompts"
-	"github.com/duynguyendang/meb"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/meb"
 )
 
 // ExecutePlan executes the plan steps.
@@ -111,6 +111,44 @@ func expandVariables(query string, session *ExecutionSession) string {
 
 // reflectAndCorrect asks the LLM to suggest an alternative query when a step fails or returns no results.
 func reflectAndCorrect(ctx context.Context, cfg Config, step *PlanStep, session *ExecutionSession, plannerPrompt *prompts.Prompt) (string, error) {
+	reflectPromptFile, err := prompts.LoadPrompt("prompts/reflect.prompt")
+	if err != nil || reflectPromptFile == nil {
+		return reflectWithInlinePrompt(ctx, cfg, step)
+	}
+
+	promptStr, err := reflectPromptFile.Execute(map[string]interface{}{
+		"StepID": step.ID,
+		"Task":   step.Task,
+		"Query":  step.Query,
+	})
+	if err != nil {
+		return reflectWithInlinePrompt(ctx, cfg, step)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	resp, err := genkit.Generate(ctx, cfg.Genkit,
+		ai.WithModelName(cfg.Model),
+		ai.WithPrompt(promptStr),
+	)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.Text() == "" {
+		return "", fmt.Errorf("no response from LLM")
+	}
+
+	clean := strings.TrimSpace(resp.Text())
+	clean = strings.TrimPrefix(clean, "```datalog")
+	clean = strings.TrimPrefix(clean, "```")
+	clean = strings.TrimSuffix(clean, "```")
+	return strings.TrimSpace(clean), nil
+}
+
+// reflectWithInlinePrompt is a fallback when the reflect.prompt file can't be loaded.
+func reflectWithInlinePrompt(ctx context.Context, cfg Config, step *PlanStep) (string, error) {
 	reflectPrompt := fmt.Sprintf(`You are the GCA Lead Architect debugging a failed query step.
 
 Step %d: %s

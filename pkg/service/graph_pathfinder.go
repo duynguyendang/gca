@@ -543,7 +543,9 @@ func (s *GraphService) GetFlowPath(ctx context.Context, projectID, fromID, toID 
 	}
 
 	if len(nodes) > 0 {
-		_ = s.enrichNodes(ctx, store, &export.D3Graph{Nodes: nodes}, true)
+		if err := s.enrichNodes(ctx, store, &export.D3Graph{Nodes: nodes}, true); err != nil {
+			logger.Warn("Failed to enrich nodes", "error", err)
+		}
 	}
 
 	return &export.D3Graph{Nodes: nodes, Links: links}, nil

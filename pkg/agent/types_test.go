@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"text/template"
+
+	"github.com/duynguyendang/gca/pkg/prompts"
 )
 
 func TestPlanStep_StatusConstants(t *testing.T) {
@@ -81,9 +84,26 @@ func (m *MockModelAdapter) GenerateContent(ctx context.Context, prompt string) (
 	return m.Response, m.Err
 }
 
+// mockPlannerPromptLoader returns a minimal prompt for testing.
+func mockPlannerPromptLoader(name string) (*prompts.Prompt, error) {
+	// Use the actual prompt file for more realistic testing
+	p, err := prompts.LoadPrompt(name)
+	if err != nil {
+		// Return a minimal inline prompt if file not found (for CI environments)
+		if name == "prompts/agent_planner.prompt" {
+			tmpl, _ := template.New("prompt").Parse("Available predicates:\n{{.Predicates}}\n\nUser Question: {{.Query}}\n\nRespond with ONLY a JSON array.")
+			return &prompts.Prompt{
+				Template: tmpl,
+			}, nil
+		}
+		return nil, err
+	}
+	return p, nil
+}
+
 func TestNewPlanner(t *testing.T) {
 	mock := &MockModelAdapter{Response: "{}"}
-	p := NewPlanner(mock)
+	p := NewPlannerWithLoader(mock, mockPlannerPromptLoader)
 	if p == nil {
 		t.Fatal("NewPlanner returned nil")
 	}
@@ -97,7 +117,7 @@ func TestPlanner_Plan_ModelError(t *testing.T) {
 		Response: "{}",
 		Err:      context.DeadlineExceeded,
 	}
-	p := NewPlanner(mock)
+	p := NewPlannerWithLoader(mock, mockPlannerPromptLoader)
 
 	_, err := p.Plan(context.Background(), "test query", []string{"calls"})
 	if err == nil {
@@ -110,7 +130,7 @@ func TestPlanner_Plan_ModelError(t *testing.T) {
 
 func TestPlanner_Plan_InvalidJSON(t *testing.T) {
 	mock := &MockModelAdapter{Response: "not valid json"}
-	p := NewPlanner(mock)
+	p := NewPlannerWithLoader(mock, mockPlannerPromptLoader)
 
 	_, err := p.Plan(context.Background(), "test query", []string{"calls"})
 	if err == nil {
@@ -124,7 +144,7 @@ func TestPlanner_Plan_InvalidJSON(t *testing.T) {
 func TestPlanner_Plan_Success(t *testing.T) {
 	jsonResponse := `{"steps": [{"task": "Find main", "query": "triples(?s, 'defines', 'main')"}]}`
 	mock := &MockModelAdapter{Response: jsonResponse}
-	p := NewPlanner(mock)
+	p := NewPlannerWithLoader(mock, mockPlannerPromptLoader)
 
 	steps, err := p.Plan(context.Background(), "find the main function", []string{"defines", "calls"})
 	if err != nil {
@@ -147,7 +167,7 @@ func TestPlanner_Plan_Success(t *testing.T) {
 func TestPlanner_Plan_WithMarkdownFence(t *testing.T) {
 	jsonResponse := "Here's the plan:\n```json\n{\"steps\": [{\"task\": \"Find main\", \"query\": \"triples(?s, 'defines', 'main')\"}]}\n```\nJust do it."
 	mock := &MockModelAdapter{Response: jsonResponse}
-	p := NewPlanner(mock)
+	p := NewPlannerWithLoader(mock, mockPlannerPromptLoader)
 
 	steps, err := p.Plan(context.Background(), "find main", []string{"defines"})
 	if err != nil {
@@ -165,7 +185,7 @@ func TestPlanner_Plan_MultipleSteps(t *testing.T) {
 		{"task": "Analyze impact", "query": "triples(?s, 'imports', 'main.go:main')"}
 	]}`
 	mock := &MockModelAdapter{Response: jsonResponse}
-	p := NewPlanner(mock)
+	p := NewPlannerWithLoader(mock, mockPlannerPromptLoader)
 
 	steps, err := p.Plan(context.Background(), "analyze the auth flow", []string{"defines", "calls", "imports"})
 	if err != nil {
@@ -185,9 +205,13 @@ func TestPlanner_Plan_MultipleSteps(t *testing.T) {
 }
 
 func TestBuildPlannerPrompt(t *testing.T) {
-	predicates := []string{"defines", "calls", "imports"}
-	prompt := buildPlannerPrompt("find main", predicates)
+	mock := &MockModelAdapter{Response: "{}"}
+	p := NewPlannerWithLoader(mock, mockPlannerPromptLoader)
 
+	prompt, err := p.buildPlannerPrompt("find main", []string{"defines", "calls", "imports"})
+	if err != nil {
+		t.Fatalf("buildPlannerPrompt() error = %v", err)
+	}
 	if !strings.Contains(prompt, "Available predicates:") {
 		t.Error("Prompt should contain 'Available predicates:'")
 	}
@@ -197,13 +221,16 @@ func TestBuildPlannerPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "find main") {
 		t.Error("Prompt should contain the user query")
 	}
-	if !strings.Contains(prompt, "Datalog") {
-		t.Error("Prompt should mention Datalog")
-	}
 }
 
 func TestBuildPlannerPrompt_EmptyPredicates(t *testing.T) {
-	prompt := buildPlannerPrompt("test query", []string{})
+	mock := &MockModelAdapter{Response: "{}"}
+	p := NewPlannerWithLoader(mock, mockPlannerPromptLoader)
+
+	prompt, err := p.buildPlannerPrompt("test query", []string{})
+	if err != nil {
+		t.Fatalf("buildPlannerPrompt() error = %v", err)
+	}
 	if !strings.Contains(prompt, "test query") {
 		t.Error("Prompt should contain user query even with empty predicates")
 	}

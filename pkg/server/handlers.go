@@ -1343,13 +1343,14 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 	}
 
 	// Compute per-file debt scores.
-	// Smell weights: circular=10, god_file=5, layer_violation=3, security=8, default=2
+	// Smell weights — must match policies/smells/scoring.dl
 	smellWeight := map[string]int{
-		"circular_dependency": 10,
-		"god_file":            5,
-		"layer_violation":     3,
-		"hub_anomaly":         3,
-		"security_risk":       8,
+		"circular_dependency": config.SmellWeightCircularDependency,
+		"circular_transitive":  config.SmellWeightCircularTransitive,
+		"god_file":             config.SmellWeightGodFile,
+		"layer_violation":      config.SmellWeightLayerViolation,
+		"hub_anomaly":          config.SmellWeightHubAnomaly,
+		"security_risk":         config.SmellWeightUnsanitizedDB,
 	}
 	getWeight := func(smell string) int {
 		for prefix, w := range smellWeight {
@@ -1357,7 +1358,7 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 				return w
 			}
 		}
-		return 2
+		return config.SmellWeightDefault
 	}
 
 	var files []FileHealthV2

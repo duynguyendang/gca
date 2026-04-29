@@ -1,15 +1,11 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
-	"log"
 
 	"github.com/duynguyendang/gca/pkg/mcp"
 	"github.com/spf13/cobra"
 )
-
-var _ context.Context // Explicitly reference context package type
 
 // mcpCmd represents the mcp command
 var mcpCmd = &cobra.Command{
@@ -54,7 +50,7 @@ Arguments:
 
 		// Start MCP server
 		if err := mcp.Run(ctx, s); err != nil {
-			log.Fatalf("MCP server failed: %v", err)
+			return fmt.Errorf("MCP server failed: %w", err)
 		}
 
 		return nil

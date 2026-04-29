@@ -699,35 +699,48 @@ func (r IntentResult) String() string {
 	return string(r.Intent)
 }
 
-func GetDatalogTemplateForIntent(intent Intent, target string) string {
-	switch intent {
-	case IntentWhoCalls:
-		if target != "" {
-			return `triples(?caller, "calls", "` + target + `")`
+var intentTemplateRegistry = map[Intent]func(target string) string{
+	IntentWhoCalls: func(t string) string {
+		if t != "" {
+			return `triples(?caller, "calls", "` + t + `")`
 		}
 		return `triples(?caller, "calls", ?callee)`
-	case IntentWhatCalls:
-		if target != "" {
-			return `triples("` + target + `", "calls", ?callee)`
+	},
+	IntentWhatCalls: func(t string) string {
+		if t != "" {
+			return `triples("` + t + `", "calls", ?callee)`
 		}
 		return `triples(?caller, "calls", ?callee)`
-	case IntentHowReaches:
+	},
+	IntentHowReaches: func(_ string) string {
 		return `{"tool": "find_path", "source": "?source", "target": "?target"}`
-	case IntentSummarize:
+	},
+	IntentSummarize: func(_ string) string {
 		return `triples("?target", "defines", ?sym), triples("?target", "has_doc", ?doc)`
-	case IntentExplain:
+	},
+	IntentExplain: func(_ string) string {
 		return `triples("?target", "?pred", ?obj)`
-	case IntentFind:
+	},
+	IntentFind: func(_ string) string {
 		return `triples(?s, "defines", ?sym), regex(?sym, "?target")`
-	case IntentSecurity:
+	},
+	IntentSecurity: func(_ string) string {
 		return `triples(?s, "references", ?ref), regex(?ref, "password|token|secret|key")`
-	case IntentRefactor:
+	},
+	IntentRefactor: func(_ string) string {
 		return `triples(?f, "defines", ?sym), triples(?sym, "has_doc", ?doc)`
-	case IntentTestGen:
+	},
+	IntentTestGen: func(_ string) string {
 		return `triples(?f, "defines", ?sym)`
-	case IntentPerformance:
+	},
+	IntentPerformance: func(_ string) string {
 		return `triples(?f, "defines", ?sym)`
-	default:
-		return `triples(?s, ?p, ?o)`
+	},
+}
+
+func GetDatalogTemplateForIntent(intent Intent, target string) string {
+	if handler, ok := intentTemplateRegistry[intent]; ok {
+		return handler(target)
 	}
+	return `triples(?s, ?p, ?o)`
 }
