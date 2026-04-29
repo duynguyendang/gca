@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 )
 
@@ -23,7 +24,45 @@ func BuildDatalogPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet,
 
 func BuildChatPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, data interface{}) (string, error) {
 	if ps.Chat != nil {
-		return ps.Chat.Execute(data)
+		m, ok := data.(map[string]interface{})
+		if !ok {
+			return ps.Chat.Execute(data)
+		}
+
+		var contextBuilder strings.Builder
+		contextBuilder.WriteString("## Context\n")
+
+		if symbolID, ok := m["SymbolID"].(string); ok && symbolID != "" {
+			if err := AppendSymbolContext(ctx, store, symbolID, &contextBuilder); err != nil {
+				logger.Warn("Failed to fetch symbol context", "symbolID", symbolID, "error", err)
+			}
+		}
+
+		if nodes, ok := m["Data"].([]interface{}); ok && len(nodes) > 0 {
+			contextBuilder.WriteString("\n### Related Nodes\n")
+			for i, node := range nodes {
+				if i >= 10 {
+					break
+				}
+				if nodeMap, ok := node.(map[string]interface{}); ok {
+					name, _ := nodeMap["name"].(string)
+					kind, _ := nodeMap["kind"].(string)
+					code, _ := nodeMap["code"].(string)
+					contextBuilder.WriteString(fmt.Sprintf("\n#### %s (%s)\n", name, kind))
+					if code != "" {
+						contextBuilder.WriteString("```\n")
+						contextBuilder.WriteString(code)
+						contextBuilder.WriteString("\n```\n")
+					}
+				}
+			}
+		}
+
+		templateData := map[string]interface{}{
+			"Query":   m["Query"],
+			"Context": contextBuilder.String(),
+		}
+		return ps.Chat.Execute(templateData)
 	}
 	var sb strings.Builder
 	sb.WriteString("Chat analysis:\n")
@@ -33,7 +72,30 @@ func BuildChatPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, da
 
 func BuildPathNarrativePrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, data interface{}) (string, error) {
 	if ps.PathNarrative != nil {
-		return ps.PathNarrative.Execute(data)
+		m, ok := data.(map[string]interface{})
+		if !ok {
+			return ps.PathNarrative.Execute(data)
+		}
+
+		var pathBuilder strings.Builder
+		if nodes, ok := m["Data"].([]interface{}); ok {
+			for i, node := range nodes {
+				if i >= 20 {
+					break
+				}
+				if nodeMap, ok := node.(map[string]interface{}); ok {
+					if name, ok := nodeMap["name"].(string); ok {
+						pathBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, name))
+					}
+				}
+			}
+		}
+
+		templateData := map[string]interface{}{
+			"Query": m["Query"],
+			"Path":  pathBuilder.String(),
+		}
+		return ps.PathNarrative.Execute(templateData)
 	}
 	var sb strings.Builder
 	sb.WriteString("Path analysis:\n")
@@ -43,7 +105,28 @@ func BuildPathNarrativePrompt(ctx context.Context, store *meb.MEBStore, ps *Prom
 
 func BuildPathEndpointsPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, data interface{}) (string, error) {
 	if ps.PathEndpoints != nil {
-		return ps.PathEndpoints.Execute(data)
+		m, ok := data.(map[string]interface{})
+		if !ok {
+			return ps.PathEndpoints.Execute(data)
+		}
+
+		var candidatesBuilder strings.Builder
+		if candidates, ok := m["Data"].([]interface{}); ok {
+			for i, c := range candidates {
+				if i >= 20 {
+					break
+				}
+				if s, ok := c.(string); ok {
+					candidatesBuilder.WriteString(fmt.Sprintf("- %s\n", s))
+				}
+			}
+		}
+
+		templateData := map[string]interface{}{
+			"Query":      m["Query"],
+			"Candidates": candidatesBuilder.String(),
+		}
+		return ps.PathEndpoints.Execute(templateData)
 	}
 	var sb strings.Builder
 	sb.WriteString("Endpoint analysis:\n")
@@ -62,7 +145,30 @@ func BuildResolveSymbolPrompt(ctx context.Context, store *meb.MEBStore, ps *Prom
 
 func BuildPrunePrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, data interface{}) (string, error) {
 	if ps.Prune != nil {
-		return ps.Prune.Execute(data)
+		m, ok := data.(map[string]interface{})
+		if !ok {
+			return ps.Prune.Execute(data)
+		}
+
+		var nodesBuilder strings.Builder
+		if nodes, ok := m["Data"].([]interface{}); ok {
+			for i, node := range nodes {
+				if i >= 50 {
+					break
+				}
+				if nodeMap, ok := node.(map[string]interface{}); ok {
+					name, _ := nodeMap["name"].(string)
+					kind, _ := nodeMap["kind"].(string)
+					id, _ := nodeMap["id"].(string)
+					nodesBuilder.WriteString(fmt.Sprintf("- %s (%s) [%s]\n", name, kind, id))
+				}
+			}
+		}
+
+		templateData := map[string]interface{}{
+			"Nodes": nodesBuilder.String(),
+		}
+		return ps.Prune.Execute(templateData)
 	}
 	var sb strings.Builder
 	sb.WriteString("Prune analysis:\n")
@@ -143,7 +249,23 @@ func BuildDefaultContextPrompt(ctx context.Context, store *meb.MEBStore, ps *Pro
 
 func BuildInsightPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, data interface{}) (string, error) {
 	if ps.Insight != nil {
-		return ps.Insight.Execute(data)
+		m, ok := data.(map[string]interface{})
+		if !ok {
+			return ps.Insight.Execute(data)
+		}
+
+		var contextBuilder strings.Builder
+		if symbolID, ok := m["SymbolID"].(string); ok && symbolID != "" {
+			if err := AppendSymbolContext(ctx, store, symbolID, &contextBuilder); err != nil {
+				logger.Warn("Failed to fetch symbol context", "symbolID", symbolID, "error", err)
+			}
+		}
+
+		templateData := map[string]interface{}{
+			"SymbolID": m["SymbolID"],
+			"Context":  contextBuilder.String(),
+		}
+		return ps.Insight.Execute(templateData)
 	}
 	var sb strings.Builder
 	sb.WriteString("Insight analysis:\n")
@@ -153,7 +275,30 @@ func BuildInsightPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet,
 
 func BuildSummaryPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, data interface{}) (string, error) {
 	if ps.Summary != nil {
-		return ps.Summary.Execute(data)
+		m, ok := data.(map[string]interface{})
+		if !ok {
+			return ps.Summary.Execute(data)
+		}
+
+		var symbolsBuilder strings.Builder
+		if nodes, ok := m["Data"].([]interface{}); ok {
+			for i, node := range nodes {
+				if i >= 20 {
+					break
+				}
+				if nodeMap, ok := node.(map[string]interface{}); ok {
+					name, _ := nodeMap["name"].(string)
+					kind, _ := nodeMap["kind"].(string)
+					symbolsBuilder.WriteString(fmt.Sprintf("- %s (%s)\n", name, kind))
+				}
+			}
+		}
+
+		templateData := map[string]interface{}{
+			"Query":   m["Query"],
+			"Symbols": symbolsBuilder.String(),
+		}
+		return ps.Summary.Execute(templateData)
 	}
 	var sb strings.Builder
 	sb.WriteString("Summary analysis:\n")
@@ -163,7 +308,30 @@ func BuildSummaryPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet,
 
 func BuildNarrativePrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, data interface{}) (string, error) {
 	if ps.Narrative != nil {
-		return ps.Narrative.Execute(data)
+		m, ok := data.(map[string]interface{})
+		if !ok {
+			return ps.Narrative.Execute(data)
+		}
+
+		var componentsBuilder strings.Builder
+		if nodes, ok := m["Data"].([]interface{}); ok {
+			for i, node := range nodes {
+				if i >= 30 {
+					break
+				}
+				if nodeMap, ok := node.(map[string]interface{}); ok {
+					if name, ok := nodeMap["name"].(string); ok {
+						componentsBuilder.WriteString(fmt.Sprintf("- %s\n", name))
+					}
+				}
+			}
+		}
+
+		templateData := map[string]interface{}{
+			"Query":      m["Query"],
+			"Components": componentsBuilder.String(),
+		}
+		return ps.Narrative.Execute(templateData)
 	}
 	var sb strings.Builder
 	sb.WriteString("Narrative analysis:\n")
@@ -173,7 +341,35 @@ func BuildNarrativePrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSe
 
 func BuildRefactorPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, data interface{}) (string, error) {
 	if ps.Refactor != nil {
-		return ps.Refactor.Execute(data)
+		m, ok := data.(map[string]interface{})
+		if !ok {
+			return ps.Refactor.Execute(data)
+		}
+
+		var contextBuilder strings.Builder
+		if nodes, ok := m["Data"].([]interface{}); ok && len(nodes) > 0 {
+			for i, node := range nodes {
+				if i >= 10 {
+					break
+				}
+				if nodeMap, ok := node.(map[string]interface{}); ok {
+					name, _ := nodeMap["name"].(string)
+					kind, _ := nodeMap["kind"].(string)
+					code, _ := nodeMap["code"].(string)
+					contextBuilder.WriteString(fmt.Sprintf("\n### %s (%s)\n", name, kind))
+					if code != "" {
+						contextBuilder.WriteString("```\n" + code + "\n```\n")
+					}
+				}
+			}
+		}
+
+		templateData := map[string]interface{}{
+			"Query":   m["Query"],
+			"SymbolID": m["SymbolID"],
+			"Context":  contextBuilder.String(),
+		}
+		return ps.Refactor.Execute(templateData)
 	}
 	var sb strings.Builder
 	sb.WriteString("Refactoring analysis:\n")
@@ -183,7 +379,35 @@ func BuildRefactorPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet
 
 func BuildTestGenPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, data interface{}) (string, error) {
 	if ps.TestGen != nil {
-		return ps.TestGen.Execute(data)
+		m, ok := data.(map[string]interface{})
+		if !ok {
+			return ps.TestGen.Execute(data)
+		}
+
+		var contextBuilder strings.Builder
+		if nodes, ok := m["Data"].([]interface{}); ok && len(nodes) > 0 {
+			for i, node := range nodes {
+				if i >= 10 {
+					break
+				}
+				if nodeMap, ok := node.(map[string]interface{}); ok {
+					name, _ := nodeMap["name"].(string)
+					kind, _ := nodeMap["kind"].(string)
+					code, _ := nodeMap["code"].(string)
+					contextBuilder.WriteString(fmt.Sprintf("\n### %s (%s)\n", name, kind))
+					if code != "" {
+						contextBuilder.WriteString("```\n" + code + "\n```\n")
+					}
+				}
+			}
+		}
+
+		templateData := map[string]interface{}{
+			"Query":   m["Query"],
+			"SymbolID": m["SymbolID"],
+			"Context":  contextBuilder.String(),
+		}
+		return ps.TestGen.Execute(templateData)
 	}
 	var sb strings.Builder
 	sb.WriteString("Test generation analysis:\n")
@@ -193,7 +417,35 @@ func BuildTestGenPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet,
 
 func BuildSecurityPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, data interface{}) (string, error) {
 	if ps.Security != nil {
-		return ps.Security.Execute(data)
+		m, ok := data.(map[string]interface{})
+		if !ok {
+			return ps.Security.Execute(data)
+		}
+
+		var contextBuilder strings.Builder
+		if nodes, ok := m["Data"].([]interface{}); ok && len(nodes) > 0 {
+			for i, node := range nodes {
+				if i >= 10 {
+					break
+				}
+				if nodeMap, ok := node.(map[string]interface{}); ok {
+					name, _ := nodeMap["name"].(string)
+					kind, _ := nodeMap["kind"].(string)
+					code, _ := nodeMap["code"].(string)
+					contextBuilder.WriteString(fmt.Sprintf("\n### %s (%s)\n", name, kind))
+					if code != "" {
+						contextBuilder.WriteString("```\n" + code + "\n```\n")
+					}
+				}
+			}
+		}
+
+		templateData := map[string]interface{}{
+			"Query":   m["Query"],
+			"SymbolID": m["SymbolID"],
+			"Context":  contextBuilder.String(),
+		}
+		return ps.Security.Execute(templateData)
 	}
 	var sb strings.Builder
 	sb.WriteString("Security audit:\n")
@@ -203,7 +455,35 @@ func BuildSecurityPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet
 
 func BuildPerformancePrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, data interface{}) (string, error) {
 	if ps.Performance != nil {
-		return ps.Performance.Execute(data)
+		m, ok := data.(map[string]interface{})
+		if !ok {
+			return ps.Performance.Execute(data)
+		}
+
+		var contextBuilder strings.Builder
+		if nodes, ok := m["Data"].([]interface{}); ok && len(nodes) > 0 {
+			for i, node := range nodes {
+				if i >= 10 {
+					break
+				}
+				if nodeMap, ok := node.(map[string]interface{}); ok {
+					name, _ := nodeMap["name"].(string)
+					kind, _ := nodeMap["kind"].(string)
+					code, _ := nodeMap["code"].(string)
+					contextBuilder.WriteString(fmt.Sprintf("\n### %s (%s)\n", name, kind))
+					if code != "" {
+						contextBuilder.WriteString("```\n" + code + "\n```\n")
+					}
+				}
+			}
+		}
+
+		templateData := map[string]interface{}{
+			"Query":   m["Query"],
+			"SymbolID": m["SymbolID"],
+			"Context":  contextBuilder.String(),
+		}
+		return ps.Performance.Execute(templateData)
 	}
 	var sb strings.Builder
 	sb.WriteString("Performance analysis:\n")

@@ -443,7 +443,7 @@ func (s *AIService) buildTaskPrompt(ctx context.Context, store *meb.MEBStore, re
 	data := map[string]interface{}{
 		"Query":   req.Query,
 		"SymbolID": req.SymbolID,
-		"Data":   req.Data,
+		"Data":    req.Data,
 	}
 	return promptbuilder.BuildPrompt(req.Task, ctx, store, s.prompts, data)
 }
