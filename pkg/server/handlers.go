@@ -1030,11 +1030,12 @@ func (s *Server) handleEnrichCalledBy(c *gin.Context) {
 //   - error: error message if any
 func (s *Server) handleAsk(c *gin.Context) {
 	var req struct {
-		ProjectID string `json:"project_id"`
-		Query     string `json:"query"`
-		SymbolID  string `json:"symbol_id"`
-		Depth     int    `json:"depth"`
-		Context   string `json:"context"`
+		ProjectID          string               `json:"project_id"`
+		Query              string               `json:"query"`
+		SymbolID           string               `json:"symbol_id"`
+		Depth              int                  `json:"depth"`
+		Context            string               `json:"context"`
+		ConversationHistory []ai.ConversationTurn `json:"conversation_history"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1052,11 +1053,12 @@ func (s *Server) handleAsk(c *gin.Context) {
 	}
 
 	askReq := ai.AskRequest{
-		ProjectID: req.ProjectID,
-		Query:     req.Query,
-		SymbolID:  req.SymbolID,
-		Depth:     req.Depth,
-		Context:   req.Context,
+		ProjectID:          req.ProjectID,
+		Query:              req.Query,
+		SymbolID:           req.SymbolID,
+		Depth:              req.Depth,
+		Context:            req.Context,
+		ConversationHistory: req.ConversationHistory,
 	}
 
 	resp, err := s.aiService.HandleAsk(c.Request.Context(), askReq)
