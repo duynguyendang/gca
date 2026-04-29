@@ -37,8 +37,32 @@ type FileHashMap map[string]FileHash
 
 // IncrementalState extends FileHashMap with git commit tracking.
 type IncrementalState struct {
-	FileHashes    FileHashMap `json:"file_hashes"`
-	LastCommitSHA string      `json:"last_commit_sha,omitempty"`
+	FileHashes FileHashMap `json:"file_hashes"`
+}
+
+const MetadataSubject = "gca:metadata"
+
+// GetLastCommitSHA retrieves the last ingested commit SHA from the store.
+func GetLastCommitSHA(s *meb.MEBStore) string {
+	for fact, err := range s.Scan(MetadataSubject, config.PredicateLastCommitSHA, "") {
+		if err != nil {
+			continue
+		}
+		if sha, ok := fact.Object.(string); ok {
+			return sha
+		}
+	}
+	return ""
+}
+
+// SaveLastCommitSHA stores the last ingested commit SHA to the store.
+func SaveLastCommitSHA(s *meb.MEBStore, sha string) {
+	s.DeleteFactsBySubject(MetadataSubject)
+	s.AddFact(meb.Fact{
+		Subject:   MetadataSubject,
+		Predicate: config.PredicateLastCommitSHA,
+		Object:    sha,
+	})
 }
 
 // IncrementalStateKey is the storage key for the incremental state.
@@ -219,14 +243,13 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 	var deletedFiles []string
 	var newHashes FileHashMap
 	var usedGit bool
-	var currentHeadSHA string
 
 	if IsGitRepo(sourceDir) {
 		fromRef := ""
 		if opts != nil && opts.FromCommit != "" {
 			fromRef = opts.FromCommit
-		} else if incrState.LastCommitSHA != "" {
-			fromRef = incrState.LastCommitSHA
+		} else if lastSHA := GetLastCommitSHA(s); lastSHA != "" {
+			fromRef = lastSHA
 		}
 
 		if fromRef != "" {
@@ -255,11 +278,6 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 				deletedFiles = diff.DeletedFiles
 				usedGit = true
 			}
-		}
-
-		// Get current HEAD for storage
-		if head, headErr := GetHEADCommitSHA(sourceDir); headErr == nil {
-			currentHeadSHA = head
 		}
 	}
 
@@ -434,9 +452,15 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 		}
 	}
 
+	// Save current HEAD as last commit SHA for git repos
+	if usedGit {
+		if head, headErr := GetHEADCommitSHA(sourceDir); headErr == nil {
+			SaveLastCommitSHA(s, head)
+		}
+	}
+
 	newState := &IncrementalState{
-		FileHashes:    newHashes,
-		LastCommitSHA: currentHeadSHA,
+		FileHashes: newHashes,
 	}
 	if err := SaveIncrementalState(s, newState); err != nil {
 		logger.Warn("Could not save incremental state", "error", err)

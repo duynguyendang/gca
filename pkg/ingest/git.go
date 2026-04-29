@@ -1,11 +1,13 @@
 package ingest
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
-	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -105,7 +107,6 @@ func GitDiffBetweenCommits(from, to, dir string) (*GitDiffResult, error) {
 	for _, change := range changes {
 		action, aErr := change.Action()
 		if aErr != nil {
-			logger.Warn("Could not determine change action", "error", aErr)
 			continue
 		}
 
@@ -155,51 +156,86 @@ func GitDiffToWorkingTree(from, dir string) (*GitDiffResult, error) {
 
 	// 1. Diff from commit to HEAD (committed changes since from)
 	headRef, headErr := repo.Head()
-	if headErr == nil && headRef.Hash() != fromHash {
+	if headErr != nil {
+		return nil, fmt.Errorf("failed to get HEAD: %w", headErr)
+	}
+
+	// If fromHash == headHash, there are no new commits - only check worktree
+	if headRef.Hash() != fromHash {
 		fromCommit, fcErr := repo.CommitObject(fromHash)
-		if fcErr == nil {
-			headCommit, hcErr := repo.CommitObject(headRef.Hash())
-			if hcErr == nil {
-				fromTree, ftErr := fromCommit.Tree()
-				headTree, htErr := headCommit.Tree()
-				if ftErr == nil && htErr == nil {
-					changes, diffErr := object.DiffTree(fromTree, headTree)
-					if diffErr == nil {
-						for _, change := range changes {
-							collectChange(change, seen, result)
-						}
-					}
-				}
-			}
+		if fcErr != nil {
+			return nil, fmt.Errorf("failed to get from-commit: %w", fcErr)
+		}
+		headCommit, hcErr := repo.CommitObject(headRef.Hash())
+		if hcErr != nil {
+			return nil, fmt.Errorf("failed to get head-commit: %w", hcErr)
+		}
+		fromTree, ftErr := fromCommit.Tree()
+		if ftErr != nil {
+			return nil, fmt.Errorf("failed to get from-tree: %w", ftErr)
+		}
+		headTree, htErr := headCommit.Tree()
+		if htErr != nil {
+			return nil, fmt.Errorf("failed to get head-tree: %w", htErr)
+		}
+		changes, diffErr := object.DiffTree(fromTree, headTree)
+		if diffErr != nil {
+			return nil, fmt.Errorf("failed to diff trees: %w", diffErr)
+		}
+		for _, change := range changes {
+			collectChange(change, seen, result)
 		}
 	}
 
 	// 2. Diff from HEAD to working tree (dirty files)
-	if headErr == nil {
-		wt, wtErr := repo.Worktree()
-		if wtErr == nil {
-			status, stErr := wt.Status()
-			if stErr == nil {
-				for path, fileStatus := range status {
-					if fileStatus.Worktree == git.Unmodified && fileStatus.Staging == git.Unmodified {
-						continue
-					}
-					if !isSupportedFile(path) {
-						continue
-					}
-					if seen[path] {
-						continue
-					}
-					seen[path] = true
-
-					fullPath := filepath.Join(dir, path)
-					if _, statErr := os.Stat(fullPath); os.IsNotExist(statErr) {
-						result.DeletedFiles = append(result.DeletedFiles, path)
-					} else {
-						result.ChangedFiles = append(result.ChangedFiles, path)
-					}
-				}
+	// Use git diff command to avoid go-git stat caching issues
+	cmd := exec.Command("git", "diff", "--name-only")
+	cmd.Dir = dir
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
 			}
+			if !isSupportedFile(line) {
+				continue
+			}
+			if seen[line] {
+				continue
+			}
+			seen[line] = true
+
+			// Check if file exists on disk
+			fullPath := filepath.Join(dir, line)
+			if _, statErr := os.Stat(fullPath); os.IsNotExist(statErr) {
+				result.DeletedFiles = append(result.DeletedFiles, line)
+			} else {
+				result.ChangedFiles = append(result.ChangedFiles, line)
+			}
+		}
+	}
+
+	// Also check for untracked files
+	cmd2 := exec.Command("git", "ls-files", "--others", "--exclude-standard")
+	cmd2.Dir = dir
+	var out2 bytes.Buffer
+	cmd2.Stdout = &out2
+	if err := cmd2.Run(); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(out2.String()), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if !isSupportedFile(line) {
+				continue
+			}
+			if seen[line] {
+				continue
+			}
+			seen[line] = true
+			result.ChangedFiles = append(result.ChangedFiles, line)
 		}
 	}
 

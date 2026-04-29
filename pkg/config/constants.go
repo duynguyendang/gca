@@ -128,6 +128,7 @@ const (
 	PredicateCalledBy        = "called_by"
 	PredicateHasName         = "has_name"
 	PredicateHasSecurityRisk = "has_security_risk"
+	PredicateLastCommitSHA   = "last_commit_sha"
 )
 
 // Centrality configuration

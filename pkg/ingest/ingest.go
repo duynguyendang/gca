@@ -218,6 +218,13 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 	EnhanceVirtualTriples(s)
 	TagRoles(s)
 
+	// Save HEAD commit SHA for git-based incremental detection
+	if IsGitRepo(sourceDir) {
+		if head, headErr := GetHEADCommitSHA(sourceDir); headErr == nil {
+			SaveLastCommitSHA(s, head)
+		}
+	}
+
 	if embeddingService != nil {
 		logger.Info("Waiting for embeddings to complete")
 		embeddingWg.Wait()
