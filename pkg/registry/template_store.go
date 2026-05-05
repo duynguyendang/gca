@@ -58,7 +58,6 @@ func (ts *TemplateStore) LoadPolicyFiles(ctx context.Context, initPath string) e
 			if err := ts.storeTemplate(ctx, store, tmpl); err != nil {
 				return fmt.Errorf("failed to store template %s: %w", tmpl.ID, err)
 			}
-			templatesLoaded++
 		}
 	}
 
