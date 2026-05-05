@@ -1,0 +1,102 @@
+% Surprise Scoring — Detect unexpected architectural coupling
+% High surprise scores indicate violations of expected structural patterns.
+
+query_metadata("surprise_cross_community", "Detect calls crossing community boundaries").
+query_metadata("surprise_cross_community", "category", "analysis").
+query_metadata("surprise_cross_community", "tier", "1").
+query_metadata("surprise_cross_community", "severity", "medium").
+query_metadata("surprise_cross_community", "description", "Edges where source and target belong to different Leiden clusters - unexpected cross-community coupling").
+query_metadata("surprise_cross_community", "Predicate", "has_surprise").
+
+query("surprise_cross_community", Source, Target, SrcCluster, TgtCluster, 0.30) :-
+    triples(Source, "calls", Target),
+    triples(Source, "belongs_to_cluster", SrcCluster),
+    triples(Target, "belongs_to_cluster", TgtCluster),
+    SrcCluster != TgtCluster.
+
+query_metadata("surprise_cross_language", "Detect calls between different language files").
+query_metadata("surprise_cross_language", "category", "analysis").
+query_metadata("surprise_cross_language", "tier", "1").
+query_metadata("surprise_cross_language", "severity", "low").
+query_metadata("surprise_cross_language", "description", "Edges where source and target have different language tags - polyglot boundary violations").
+query_metadata("surprise_cross_language", "Predicate", "has_surprise").
+
+query("surprise_cross_language", Source, Target, SrcLang, TgtLang, 0.20) :-
+    triples(Source, "calls", Target),
+    triples(Source, "has_language", SrcLang),
+    triples(Target, "has_language", TgtLang),
+    SrcLang != TgtLang.
+
+query_metadata("surprise_peripheral_hub", "Detect low-degree nodes calling high-degree hubs").
+query_metadata("surprise_peripheral_hub", "category", "analysis").
+query_metadata("surprise_peripheral_hub", "tier", "1").
+query_metadata("surprise_peripheral_hub", "severity", "medium").
+query_metadata("surprise_peripheral_hub", "description", "Edges where a peripheral node (out_degree <= 2) calls a hub node (in_degree >= 10) - architectural inversion").
+query_metadata("surprise_peripheral_hub", "Predicate", "has_surprise").
+
+query("surprise_peripheral_hub", Source, Target, SrcDeg, TgtDeg, 0.20) :-
+    triples(Source, "calls", Target),
+    triples(Source, "has_out_degree", SrcDegStr),
+    triples(Target, "has_in_degree", TgtDegStr),
+    numeric(SrcDegStr, SrcDeg),
+    numeric(TgtDegStr, TgtDeg),
+    SrcDeg =< 2,
+    TgtDeg >= 10.
+
+query_metadata("surprise_cross_test_boundary", "Detect production code calling test code (anomaly)").
+query_metadata("surprise_cross_test_boundary", "category", "analysis").
+query_metadata("surprise_cross_test_boundary", "tier", "1").
+query_metadata("surprise_cross_test_boundary", "severity", "high").
+query_metadata("surprise_cross_test_boundary", "description", "Production code calling test helper code - indicates test logic leakage into production").
+query_metadata("surprise_cross_test_boundary", "Predicate", "has_surprise").
+
+% Only flag production->test calls (tests calling prod is normal)
+query("surprise_cross_test_boundary", Source, Target, 0.25) :-
+    triples(Source, "calls", Target),
+    not triples(Source, "is_test_symbol", "true"),
+    triples(Target, "is_test_symbol", "true").
+
+% Composite surprise score per edge
+query_metadata("surprise_score", "Composite surprise score (0.0-1.0) for each call edge").
+query_metadata("surprise_score", "category", "analysis").
+query_metadata("surprise_score", "tier", "1").
+query_metadata("surprise_score", "description", "Sums all surprise factors for a call edge to produce a 0.0-1.0 score. Higher = more unexpected.").
+query_metadata("surprise_score", "Predicate", "has_surprise_score").
+
+surprise_score(Source, Target, Score) :-
+    triples(Source, "calls", Target),
+    findall(F, surprise_factor(Source, Target, F), Factors),
+    list.sum(Factors, Score).
+
+surprise_factor(S, T, 0.30) :- query("surprise_cross_community", S, T, _, _, 0.30).
+surprise_factor(S, T, 0.20) :- query("surprise_cross_language", S, T, _, _, 0.20).
+surprise_factor(S, T, 0.20) :- query("surprise_peripheral_hub", S, T, _, _, 0.20).
+surprise_factor(S, T, 0.25) :- query("surprise_cross_test_boundary", S, T, 0.25).
+
+% Top surprising edges (sorted by score descending)
+query_metadata("surprise_top", "Top-K most surprising call edges").
+query_metadata("surprise_top", "category", "analysis").
+query_metadata("surprise_top", "tier", "1").
+query_metadata("surprise_top", "description", "Returns top-K edges with highest surprise scores for review").
+query_metadata("surprise_top", "Predicate", "has_surprise").
+
+query("surprise_top", Source, Target, Score) :-
+    surprise_score(Source, Target, Score),
+    Score > 0,
+    rank(Score, Rank),
+    Rank =< 20.
+
+% High surprise locations (files with most surprising edges)
+query_metadata("surprise_hotspot", "Files with most surprising coupling").
+query_metadata("surprise_hotspot", "category", "analysis").
+query_metadata("surprise_hotspot", "tier", "2").
+query_metadata("surprise_hotspot", "description", "Aggregate surprise scores by file to find locations with unexpected architectural patterns").
+query_metadata("surprise_hotspot", "Predicate", "has_surprise").
+
+query("surprise_hotspot", File, TotalScore, EdgeCount) :-
+    surprise_score(Source, Target, Score),
+    Score > 0,
+    triples(Source, "in_file", File),
+    aggregates.Sum({File}, Score, TotalScore),
+    aggregates.Count({File}, _, EdgeCount),
+    TotalScore >= 0.5.

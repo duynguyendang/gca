@@ -3,12 +3,29 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"math/rand"
+	"time"
 
 	"github.com/duynguyendang/gca/pkg/config"
 	mebpkg "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 )
+
+// Local clustering types to avoid import cycle with service package.
+type clusterNode struct {
+	ID        string
+	Weight    float64
+	Neighbors map[int]float64
+}
+type clusterLink struct {
+	Source string
+	Target string
+}
+type clusterResult struct {
+	Clusters    map[int][]string
+	NodeCluster map[string]int
+}
 
 const (
 	CurrentAnalyticsVersion   = "2.0"
@@ -343,6 +360,10 @@ func (a *Analyzer) RunPostIngestAnalysis(ctx context.Context, projectID string) 
 		logger.Warn("Template rule execution failed", "error", err)
 	}
 
+	if err := a.computeCentrality(ctx, projectID); err != nil {
+		logger.Warn("Centrality computation failed", "error", err)
+	}
+
 	if err := a.setAnalyticsVersion(analyticalStore); err != nil {
 		logger.Warn("Failed to set analytics version", "error", err)
 	}
@@ -452,7 +473,230 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 
 	logger.Info("Centrality analysis complete", "hub_files", len(callerCounts), "entry_points", len(entryResults))
 
+	// Write degree facts for ALL symbols (not just high-centrality ones)
+	// This enables Datalog queries for surprise scoring and knowledge gap analysis
+	if err := a.writeDegreeFacts(ctx, sourceStore, analyticalStore); err != nil {
+		logger.Warn("Failed to write degree facts", "error", err)
+	}
+
+	// Write community facts (belongs_to_cluster)
+	if err := a.writeCommunityFacts(ctx, sourceStore, analyticalStore); err != nil {
+		logger.Warn("Failed to write community facts", "error", err)
+	}
+
 	return nil
+}
+
+// writeDegreeFacts computes in/out degree for all symbols and writes as facts.
+func (a *Analyzer) writeDegreeFacts(ctx context.Context, sourceStore, analyticalStore *meb.MEBStore) error {
+	inDegree := make(map[string]int)
+	outDegree := make(map[string]int)
+
+	for fact := range sourceStore.ScanContext(ctx, "", config.PredicateCalls, "") {
+		if obj, ok := fact.Object.(string); ok {
+			inDegree[obj]++
+		}
+		outDegree[fact.Subject]++
+	}
+
+	for fact := range sourceStore.ScanContext(ctx, "", config.PredicateImports, "") {
+		if obj, ok := fact.Object.(string); ok {
+			inDegree[obj]++
+		}
+		outDegree[fact.Subject]++
+	}
+
+	allSymbols := make(map[string]bool)
+	for sym := range inDegree {
+		allSymbols[sym] = true
+	}
+	for sym := range outDegree {
+		allSymbols[sym] = true
+	}
+
+	factCount := 0
+	for sym := range allSymbols {
+		in := inDegree[sym]
+		out := outDegree[sym]
+
+		inFact := meb.Fact{Subject: sym, Predicate: "has_in_degree", Object: fmt.Sprintf("%d", in)}
+		if err := analyticalStore.AddFact(inFact); err != nil {
+			logger.Warn("Failed to add in_degree fact", "symbol", sym, "error", err)
+		} else {
+			factCount++
+		}
+
+		outFact := meb.Fact{Subject: sym, Predicate: "has_out_degree", Object: fmt.Sprintf("%d", out)}
+		if err := analyticalStore.AddFact(outFact); err != nil {
+			logger.Warn("Failed to add out_degree fact", "symbol", sym, "error", err)
+		} else {
+			factCount++
+		}
+	}
+
+	logger.Debug("Degree facts written", "facts", factCount, "symbols", len(allSymbols))
+	return nil
+}
+
+// writeCommunityFacts runs Leiden community detection and writes belongs_to_cluster facts.
+func (a *Analyzer) writeCommunityFacts(ctx context.Context, sourceStore, analyticalStore *meb.MEBStore) error {
+	var nodes []clusterNode
+	var links []clusterLink
+
+	seenNodes := make(map[string]bool)
+	nodeMap := make(map[string]int)
+
+	for fact := range sourceStore.ScanContext(ctx, "", config.PredicateCalls, "") {
+		if !seenNodes[fact.Subject] {
+			seenNodes[fact.Subject] = true
+			nodeMap[fact.Subject] = len(nodes)
+			nodes = append(nodes, clusterNode{ID: fact.Subject, Weight: 1.0, Neighbors: make(map[int]float64)})
+		}
+		if obj, ok := fact.Object.(string); ok && !seenNodes[obj] {
+			seenNodes[obj] = true
+			nodeMap[obj] = len(nodes)
+			nodes = append(nodes, clusterNode{ID: obj, Weight: 1.0, Neighbors: make(map[int]float64)})
+		}
+		if obj, ok := fact.Object.(string); ok {
+			srcIdx := nodeMap[fact.Subject]
+			tgtIdx := nodeMap[obj]
+			nodes[srcIdx].Neighbors[tgtIdx]++
+			nodes[tgtIdx].Neighbors[srcIdx]++
+			links = append(links, clusterLink{Source: fact.Subject, Target: obj})
+		}
+	}
+
+	if len(nodes) == 0 {
+		logger.Debug("No nodes for community detection")
+		return nil
+	}
+
+	// Guard against empty graph (no edges)
+	result := detectCommunitiesLeidenLocal(nodes)
+
+	factCount := 0
+	for nodeID, clusterID := range result.NodeCluster {
+		fact := meb.Fact{
+			Subject:   nodeID,
+			Predicate: "belongs_to_cluster",
+			Object:    fmt.Sprintf("cluster_%d", clusterID),
+		}
+		if err := analyticalStore.AddFact(fact); err != nil {
+			logger.Warn("Failed to add cluster fact", "node", nodeID, "error", err)
+		} else {
+			factCount++
+		}
+	}
+
+	logger.Debug("Community facts written", "facts", factCount, "clusters", len(result.Clusters))
+	return nil
+}
+
+// detectCommunitiesLeidenLocal is a local implementation of Leiden algorithm.
+func detectCommunitiesLeidenLocal(nodes []clusterNode) *clusterResult {
+	if len(nodes) == 0 {
+		return &clusterResult{Clusters: map[int][]string{}, NodeCluster: map[string]int{}}
+	}
+
+	totalWeight := 0.0
+	for i := range nodes {
+		for _, w := range nodes[i].Neighbors {
+			totalWeight += w
+		}
+	}
+	totalWeight /= 2
+
+	// Guard against empty graph (no edges) - return singleton communities
+	if totalWeight == 0 {
+		result := &clusterResult{
+			Clusters:    map[int][]string{},
+			NodeCluster: map[string]int{},
+		}
+		for i, n := range nodes {
+			result.Clusters[i] = []string{n.ID}
+			result.NodeCluster[n.ID] = i
+		}
+		return result
+	}
+
+	partition := make([]int, len(nodes))
+	for i := range partition {
+		partition[i] = i
+	}
+
+	commWeight := make([]float64, len(nodes))
+	for i := range nodes {
+		commWeight[i] = nodes[i].Weight
+	}
+
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	improved := true
+	resolution := 0.1
+
+	for pass := 0; pass < 10 && improved; pass++ {
+		improved = false
+		order := make([]int, len(nodes))
+		for i := range order {
+			order[i] = i
+		}
+		rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
+
+		for _, uIdx := range order {
+			u := nodes[uIdx]
+			oldComm := partition[uIdx]
+
+			neighborComms := make(map[int]float64)
+			for vIdx, w := range u.Neighbors {
+				neighborComms[partition[vIdx]] += w
+			}
+			neighborComms[oldComm] += 0
+
+			bestComm := oldComm
+			k_i := u.Weight
+			factor := k_i / (2 * totalWeight)
+
+			w_in_old := neighborComms[oldComm]
+			tot_old := commWeight[oldComm] - k_i
+			gain_old := w_in_old - (resolution * tot_old * factor)
+
+			for c, w_in := range neighborComms {
+				if c == oldComm {
+					continue
+				}
+				tot := commWeight[c]
+				gain := w_in - (resolution * tot * factor)
+				if gain > gain_old+1e-9 {
+					gain_old = gain
+					bestComm = c
+					improved = true
+				}
+			}
+
+			if bestComm != oldComm {
+				commWeight[oldComm] -= k_i
+				commWeight[bestComm] += k_i
+				partition[uIdx] = bestComm
+			}
+		}
+	}
+
+	finalClusters := make(map[int][]string)
+	finalNodeMap := make(map[string]int)
+	newCommMap := make(map[int]int)
+	nextID := 0
+
+	for i, commID := range partition {
+		realCommID, exists := newCommMap[commID]
+		if !exists {
+			realCommID = nextID
+			newCommMap[commID] = realCommID
+			nextID++
+		}
+		finalClusters[realCommID] = append(finalClusters[realCommID], nodes[i].ID)
+		finalNodeMap[nodes[i].ID] = realCommID
+	}
+
+	return &clusterResult{Clusters: finalClusters, NodeCluster: finalNodeMap}
 }
 
 // detectSmells runs smell detection queries and writes results to Analytical Store.

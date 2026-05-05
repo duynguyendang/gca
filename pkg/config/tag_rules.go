@@ -43,6 +43,14 @@ func DefaultTagRules() []TagRule {
 				`.*/migrations?/.*`),
 			Weight: 5,
 		},
+		{
+			Tag: TagTestFile,
+			Pattern: regexp.MustCompile(`_test\.go$|_test\.py$|_test\.ts$|_test\.tsx$|` +
+				`_tests\.go$|test_.*\.py$|test_.*\.ts$|test_.*\.tsx$|` +
+				`.*\.spec\.(ts|js|py)$|.*\.test\.(ts|js|py)$|` +
+				`tests?/.*`),
+			Weight: 0, // Test files don't add risk
+		},
 	}
 }
 

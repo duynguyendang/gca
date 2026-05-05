@@ -61,6 +61,22 @@ func shouldInjectTag(s Store, fileID, tag string) bool {
 	return true
 }
 
+// shouldInjectFact checks if a fact already exists before adding (idempotent write).
+func shouldInjectFact(s Store, subj, pred string, obj any) bool {
+	objStr, ok := obj.(string)
+	if !ok {
+		return true // non-string objects are always "new"
+	}
+	for fact, err := range s.Scan(subj, pred, objStr) {
+		if err != nil {
+			continue
+		}
+		_ = fact
+		return false // already exists
+	}
+	return true
+}
+
 // configDrivenTagMatcher iterates over the regex rules and injects matching tags.
 func configDrivenTagMatcher(s Store, fileID string, tagCfg *config.ProjectTagConfig) {
 	if strings.Contains(fileID, ":") {
@@ -318,6 +334,51 @@ func EnhanceVirtualTriples(s Store) error {
 			if strings.EqualFold(common.ExtractSymbolName(sID), base) {
 				safeAddFact(s, string(id), config.PredicateExports, sID)
 			}
+		}
+	}
+
+	logger.Info("Injecting test file tags and in_file facts")
+	for fact, err := range s.Scan("", config.PredicateDefines, "") {
+		if err != nil {
+			continue
+		}
+		fileID := fact.Subject
+		if strings.Contains(fileID, ":") {
+			continue
+		}
+
+		// Inject in_file fact for every symbol defined in this file
+		symbolID, ok := fact.Object.(string)
+		if ok && shouldInjectFact(s, symbolID, "in_file", fileID) {
+			s.AddFact(meb.Fact{Subject: symbolID, Predicate: "in_file", Object: fileID})
+		}
+
+		if tagCfg.MatchingTags(fileID) != nil {
+			for _, tag := range tagCfg.MatchingTags(fileID) {
+				if tag == config.TagTestFile {
+					if shouldInjectTag(s, fileID, config.TagTestFile) {
+						s.AddFact(meb.Fact{Subject: fileID, Predicate: config.PredicateHasTag, Object: config.TagTestFile})
+						logger.Debug("Test file tagged", "file", fileID)
+					}
+				}
+			}
+		}
+	}
+
+	// Tag test symbols (functions ending with Test, Tests, etc.)
+	testSymbolRegex := regexp.MustCompile(`^(Test|Benchmark|Example)[A-Z].*`)
+	for fact, err := range s.Scan("", config.PredicateDefines, "") {
+		if err != nil {
+			continue
+		}
+		sID, ok := fact.Object.(string)
+		if !ok {
+			continue
+		}
+		name := common.ExtractSymbolName(sID)
+		if testSymbolRegex.MatchString(name) {
+			s.AddFact(meb.Fact{Subject: sID, Predicate: config.PredicateHasTag, Object: config.TagTestSymbol})
+			s.AddFact(meb.Fact{Subject: sID, Predicate: "is_test_symbol", Object: "true"})
 		}
 	}
 

@@ -84,7 +84,7 @@ Powered by Firebase Genkit with support for multiple providers:
 
 - **Unified NL Pipeline**: Natural language → Datalog → LLM answer
 - **Graph Centrality**: Symbols ranked by architectural significance (entry points, hubs, interfaces)
-- **Intent Classification**: 14+ task types (insight, narrative, resolve_symbol, etc.)
+- **Intent Classification**: 11 task types (insight, narrative, resolve_symbol, etc.)
 - **Path Narratives**: Traces and explains interaction flows
 - **Context-Aware Prompts**: Injects local symbols, relations, and documentation
 - **Circuit Breaker**: AI service resilience with automatic failover
@@ -172,40 +172,68 @@ The following features are planned for future releases:
 ```
 gca/
 ├── cmd/                        # CLI entry points
-│   ├── ingest.go              # Ingest command
-│   ├── mcp.go                 # MCP server command
-│   ├── repl.go                # REPL command
-│   ├── root.go                # Root command
-│   └── server.go              # Server command
+│   ├── root.go                 # Root command, global flags, store creation
+│   ├── ingest.go               # Ingest command
+│   ├── analyze.go              # Post-ingest analysis command
+│   ├── mcp.go                  # MCP server command
+│   ├── repl.go                 # Interactive REPL command
+│   └── server.go               # HTTP server command
 ├── pkg/
-│   ├── config/                 # Configuration constants
-│   ├── constants.go           # Predicate constants (defines, calls, etc.)
+│   ├── agent/                  # Multi-step reasoning agent (orchestrator, planner, executor, reflector)
+│   ├── common/                 # Shared utilities (format, hash, path, query, truncate, errors)
+│   ├── config/                 # Configuration constants, tag rules, attention heuristics
+│   │   ├── constants.go       # Predicate constants (defines, calls, imports, etc.)
+│   │   ├── attention.go       # IsAttentionWorthyName heuristics
+│   │   └── tag_rules.go       # TagRule, ProjectTagConfig, pattern matching
 │   ├── datalog/               # Datalog parser & executor
+│   │   ├── parser.go           # Parse, SmartSplit
+│   │   ├── enhanced.go        # ParseEnhanced, ApplyModifiers, ApplyAggregation
+│   │   └── optimizer.go       # QueryOptimizer, predicate pushdown
+│   ├── ephemeral/             # RAM-only session store for PR reviews
+│   ├── export/                # D3 graph export
 │   ├── ingest/                # Code ingestion pipeline
-│   │   ├── extractor.go       # tree-sitter AST extraction
-│   │   ├── ingest.go          # Parallel worker orchestration
-│   │   ├── incremental.go     # Incremental updates
-│   │   ├── resolve.go         # Symbol resolution & call graph building
-│   │   └── virtual.go         # Virtual predicate enrichment
-│   ├── meb/                   # MEB store wrapper
+│   │   ├── extractor.go      # tree-sitter AST extraction (1131 lines)
+│   │   ├── ingest.go          # Parallel worker orchestration (527 lines)
+│   │   ├── resolve.go         # Symbol resolution & call graph (464 lines)
+│   │   ├── virtual.go         # Virtual predicate enrichment (394 lines)
+│   │   ├── incremental.go     # Incremental updates (521 lines)
+│   │   └── git.go             # Git diff for incremental ingest
+│   ├── llmconfig/             # Multi-LLM provider configuration
+│   ├── logger/                # Structured slog-based logging
+│   ├── mcp/                   # Model Context Protocol server (476 lines)
+│   ├── meb/                   # MEB store wrapper (589 lines)
 │   ├── ooda/                  # OODA cognitive loop
-│   │   ├── ooda.go            # Core types (GCAFrame, GCALoop)
-│   │   ├── observer.go        # Intent classification + centrality
-│   │   ├── orienter.go        # Context retrieval
-│   │   ├── decider.go         # Prompt building
-│   │   └── verifier_actor.go  # Policy enforcement
+│   │   ├── ooda.go           # Core types (GCAFrame, GCALoop)
+│   │   ├── observer.go       # Intent classification + centrality
+│   │   ├── decider.go        # Prompt building with PromptBuilder
+│   │   ├── verifier_actor.go # Policy enforcement, GeminiActor
+│   │   └── helpers.go        # Helper utilities
+│   ├── promptbuilder/         # Shared prompt assembly (15 task builders)
+│   ├── prompts/               # Prompt template loader
+│   ├── registry/              # GenePool query registry & template store
+│   ├── repl/                  # Interactive CLI (523 lines)
+│   ├── server/                # HTTP API handlers (1409 lines in handlers.go)
+│   │   └── server.go         # Gin router, middleware, CORS, rate limiting
 │   ├── service/               # Business logic layer
-│   │   ├── ai/                # AI service (Genkit-based)
-│   │   ├── graph.go           # Graph operations
-│   │   ├── graph_xref.go      # Cross-reference analysis
-│   │   ├── centrality.go      # Graph centrality computation
-│   │   ├── pathfinder.go      # Weighted path finding
-│   │   └── clustering.go      # Graph clustering (Leiden)
-│   ├── server/                # HTTP API handlers
-│   ├── repl/                  # Interactive CLI
-│   └── mcp/                   # Model Context Protocol server
-└── internal/
-    └── manager/               # Multi-project store manager
+│   │   ├── ai/               # AI service (GeminiAdapter, intent, query_gen, synthesize)
+│   │   ├── graph.go          # Graph operations
+│   │   ├── graph_xref.go     # Cross-reference analysis (who-calls, what-calls)
+│   │   ├── graph_pathfinder.go # Weighted path finding (686 lines)
+│   │   ├── graph_queries.go  # Semantic search, cycle detection
+│   │   ├── graph_backbone.go # Backbone extraction
+│   │   ├── graph_clustering.go # Community detection, hybrid clustering
+│   │   ├── graph_hydration.go # Lazy node hydration
+│   │   ├── graph_diff.go     # Snapshot comparison for PR reviews
+│   │   ├── centrality.go     # Degree & PageRank centrality
+│   │   ├── clustering.go     # Cluster operations
+│   │   └── pathfinder.go     # Path finding with weighting
+│   └── telemetry/             # Observability wrappers
+├── internal/
+│   └── manager/               # Multi-project store manager (StoreManager, EphemeralStore)
+├── policies/                   # Datalog policy files
+│   ├── smells/               # Smell detection (circular, god_file, hub, layer, security, surprise, knowledge_gaps, scoring)
+│   └── memory/               # Memory promotion rules
+└── prompts/                   # LLM prompt templates (*.prompt files)
 ```
 
 ## Installation

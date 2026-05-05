@@ -96,9 +96,11 @@ const (
 
 // Architectural tag constants for security smell detection
 const (
-	TagPublicAPI = "public_api"
-	TagSanitizer = "sanitizer"
-	TagDatabase  = "database"
+	TagPublicAPI  = "public_api"
+	TagSanitizer  = "sanitizer"
+	TagDatabase   = "database"
+	TagTestFile   = "test_file"
+	TagTestSymbol = "test_symbol"
 )
 
 // Additional predicates

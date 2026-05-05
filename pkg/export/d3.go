@@ -33,8 +33,10 @@ type D3Link struct {
 	Target           string  `json:"target"`
 	Relation         string  `json:"relation"`
 	Weight           float64 `json:"weight,omitempty"`
-	Type             string  `json:"type"`                 // "ast" or "virtual"
-	SourceProvenance string  `json:"provenance,omitempty"` // Renamed to avoid collision with Source field
+	Type             string  `json:"type"`                   // "ast" or "virtual"
+	SourceProvenance string  `json:"provenance,omitempty"`   // "ast", "virtual", "inference"
+	Confidence       float64 `json:"confidence,omitempty"`    // 0.0-1.0 edge reliability score
+	ConfidenceTier   string  `json:"confidence_tier,omitempty"` // "EXTRACTED", "INFERRED", "AMBIGUOUS"
 }
 
 // D3Graph represents the full graph structure for D3.js.
@@ -234,8 +236,17 @@ func (t *D3Transformer) Transform(ctx context.Context, query string, results []m
 
 		// Add Link
 		linkType := "ast"
-		if provenance == "virtual" || provenance == "inference" {
+		confidence := 0.95
+		confidenceTier := "EXTRACTED"
+		switch provenance {
+		case "virtual":
 			linkType = "virtual"
+			confidence = 0.75
+			confidenceTier = "INFERRED"
+		case "inference":
+			linkType = "virtual"
+			confidence = 0.5
+			confidenceTier = "AMBIGUOUS"
 		}
 
 		links = append(links, D3Link{
@@ -245,6 +256,8 @@ func (t *D3Transformer) Transform(ctx context.Context, query string, results []m
 			Weight:           weight,
 			Type:             linkType,
 			SourceProvenance: provenance,
+			Confidence:       confidence,
+			ConfidenceTier:   confidenceTier,
 		})
 	}
 

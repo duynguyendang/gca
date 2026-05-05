@@ -203,3 +203,41 @@ func TestProjectTagConfig_EmptyRules(t *testing.T) {
 		t.Error("Empty rules should return 0 weight")
 	}
 }
+
+func TestConfig_TagTestFileConstant(t *testing.T) {
+	if TagTestFile != "test_file" {
+		t.Errorf("Expected TagTestFile='test_file', got %q", TagTestFile)
+	}
+}
+
+func TestConfig_TagTestSymbolConstant(t *testing.T) {
+	if TagTestSymbol != "test_symbol" {
+		t.Errorf("Expected TagTestSymbol='test_symbol', got %q", TagTestSymbol)
+	}
+}
+
+func TestTagRules_TestFilePattern(t *testing.T) {
+	rules := DefaultTagRules()
+	if len(rules) == 0 {
+		t.Fatal("DefaultTagRules should not be empty")
+	}
+	hasTestFileRule := false
+	for _, r := range rules {
+		if r.Tag == TagTestFile && r.Pattern != nil {
+			hasTestFileRule = true
+			if !r.Pattern.MatchString("foo_test.go") {
+				t.Errorf("Test file pattern should match foo_test.go")
+			}
+			if !r.Pattern.MatchString("test_bar.py") {
+				t.Errorf("Test file pattern should match test_bar.py")
+			}
+			if r.Pattern.MatchString("normal.go") {
+				t.Errorf("Test file pattern should NOT match normal.go")
+			}
+			break
+		}
+	}
+	if !hasTestFileRule {
+		t.Error("DefaultTagRules should include a rule for TagTestFile")
+	}
+}
