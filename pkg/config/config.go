@@ -3,16 +3,14 @@ package config
 import "time"
 
 const (
-	DefaultPort     = "8080"
-	DefaultHost     = "0.0.0.0"
-	DefaultGRPCPort = "50051"
+	DefaultPort = "8080"
+	DefaultHost = "0.0.0.0"
 )
 
 const (
 	DefaultModel          = "gemini-1.5-flash"
 	DefaultEmbeddingModel = "gemini-embedding-001"
-	DefaultVisionModel    = "gemini-1.5-flash"
-	DefaultTemperature    = 0.2
+	DefaultTemperature   = 0.2
 	DefaultMaxTokens      = 2048
 )
 
@@ -59,10 +57,6 @@ const (
 )
 
 const (
-	InMemoryCacheSize = 128 << 20 // 128 MB
-)
-
-const (
 	RetryCount = 3
 )
 
@@ -106,4 +100,10 @@ var PromptPaths = map[string]string{
 	"insight":         "prompts/insight.prompt",
 	"summary":         "prompts/summary.prompt",
 	"narrative":       "prompts/narrative.prompt",
+	"agent_planner":   "prompts/agent_planner.prompt",
+	"reflect":         "prompts/reflect.prompt",
+	"refactor":        "prompts/refactor.prompt",
+	"test_gen":        "prompts/test_gen.prompt",
+	"security":        "prompts/security.prompt",
+	"performance":     "prompts/performance.prompt",
 }

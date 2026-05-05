@@ -350,85 +350,49 @@ func extractIntentFeatures(query, queryLower string) IntentFeatures {
 }
 
 func checkStrongIntentIndicators(query string, indicators map[Intent][]string) IntentResult {
-	// Security check (highest priority for security-related queries)
-	securityTerms := 0
-	for _, term := range indicators[IntentSecurity] {
-		if strings.Contains(query, term) {
-			securityTerms++
-		}
-	}
-	if securityTerms >= 2 {
-		return IntentResult{
-			Intent:     IntentSecurity,
-			Confidence: 0.95,
-			Extracted:  map[string]string{"security_terms": query},
-		}
-	}
-	if securityTerms == 1 {
-		return IntentResult{
-			Intent:     IntentSecurity,
-			Confidence: 0.85,
-			Extracted:  map[string]string{"security_term": query},
-		}
+	intentChecks := []struct {
+		intent       Intent
+		minTerms     int
+		confHigh     float64
+		confLow      float64
+		additional  func(string) bool
+	}{
+		{IntentSecurity, 2, 0.95, 0.85, nil},
+		{IntentRefactor, 1, 0.90, 0, nil},
+		{IntentTestGen, 2, 0.93, 0.88, func(q string) bool {
+			return strings.Contains(q, "test") || strings.Contains(q, "coverage")
+		}},
+		{IntentPerformance, 2, 0.92, 0.85, nil},
 	}
 
-	// Refactor check
-	refactorTerms := 0
-	for _, term := range indicators[IntentRefactor] {
-		if strings.Contains(query, term) {
-			refactorTerms++
+	for _, check := range intentChecks {
+		matchedTerms := countMatchingTerms(query, indicators[check.intent])
+		if matchedTerms >= check.minTerms {
+			return IntentResult{
+				Intent:     check.intent,
+				Confidence: check.confHigh,
+				Extracted:  map[string]string{strings.ToLower(string(check.intent)) + "_terms": query},
+			}
 		}
-	}
-	if refactorTerms >= 1 {
-		return IntentResult{
-			Intent:     IntentRefactor,
-			Confidence: 0.90,
-			Extracted:  map[string]string{"refactor_terms": query},
-		}
-	}
-
-	// TestGen check
-	testTerms := 0
-	for _, term := range indicators[IntentTestGen] {
-		if strings.Contains(query, term) {
-			testTerms++
-		}
-	}
-	if testTerms >= 2 {
-		return IntentResult{
-			Intent:     IntentTestGen,
-			Confidence: 0.93,
-			Extracted:  map[string]string{"test_terms": query},
-		}
-	}
-	if testTerms == 1 && (strings.Contains(query, "test") || strings.Contains(query, "coverage")) {
-		return IntentResult{
-			Intent:     IntentTestGen,
-			Confidence: 0.88,
-		}
-	}
-
-	// Performance check
-	perfTerms := 0
-	for _, term := range indicators[IntentPerformance] {
-		if strings.Contains(query, term) {
-			perfTerms++
-		}
-	}
-	if perfTerms >= 2 {
-		return IntentResult{
-			Intent:     IntentPerformance,
-			Confidence: 0.92,
-		}
-	}
-	if perfTerms == 1 {
-		return IntentResult{
-			Intent:     IntentPerformance,
-			Confidence: 0.85,
+		if check.additional != nil && check.additional(query) && matchedTerms == 1 {
+			return IntentResult{
+				Intent:     check.intent,
+				Confidence: check.confLow,
+			}
 		}
 	}
 
 	return IntentResult{Confidence: -1}
+}
+
+func countMatchingTerms(query string, terms []string) int {
+	count := 0
+	for _, term := range terms {
+		if strings.Contains(query, term) {
+			count++
+		}
+	}
+	return count
 }
 
 func min(a, b float64) float64 {
@@ -699,35 +663,48 @@ func (r IntentResult) String() string {
 	return string(r.Intent)
 }
 
-func GetDatalogTemplateForIntent(intent Intent, target string) string {
-	switch intent {
-	case IntentWhoCalls:
-		if target != "" {
-			return `triples(?caller, "calls", "` + target + `")`
+var intentTemplateRegistry = map[Intent]func(target string) string{
+	IntentWhoCalls: func(t string) string {
+		if t != "" {
+			return `triples(?caller, "calls", "` + t + `")`
 		}
 		return `triples(?caller, "calls", ?callee)`
-	case IntentWhatCalls:
-		if target != "" {
-			return `triples("` + target + `", "calls", ?callee)`
+	},
+	IntentWhatCalls: func(t string) string {
+		if t != "" {
+			return `triples("` + t + `", "calls", ?callee)`
 		}
 		return `triples(?caller, "calls", ?callee)`
-	case IntentHowReaches:
+	},
+	IntentHowReaches: func(_ string) string {
 		return `{"tool": "find_path", "source": "?source", "target": "?target"}`
-	case IntentSummarize:
+	},
+	IntentSummarize: func(_ string) string {
 		return `triples("?target", "defines", ?sym), triples("?target", "has_doc", ?doc)`
-	case IntentExplain:
+	},
+	IntentExplain: func(_ string) string {
 		return `triples("?target", "?pred", ?obj)`
-	case IntentFind:
+	},
+	IntentFind: func(_ string) string {
 		return `triples(?s, "defines", ?sym), regex(?sym, "?target")`
-	case IntentSecurity:
+	},
+	IntentSecurity: func(_ string) string {
 		return `triples(?s, "references", ?ref), regex(?ref, "password|token|secret|key")`
-	case IntentRefactor:
+	},
+	IntentRefactor: func(_ string) string {
 		return `triples(?f, "defines", ?sym), triples(?sym, "has_doc", ?doc)`
-	case IntentTestGen:
+	},
+	IntentTestGen: func(_ string) string {
 		return `triples(?f, "defines", ?sym)`
-	case IntentPerformance:
+	},
+	IntentPerformance: func(_ string) string {
 		return `triples(?f, "defines", ?sym)`
-	default:
-		return `triples(?s, ?p, ?o)`
+	},
+}
+
+func GetDatalogTemplateForIntent(intent Intent, target string) string {
+	if handler, ok := intentTemplateRegistry[intent]; ok {
+		return handler(target)
 	}
+	return `triples(?s, ?p, ?o)`
 }

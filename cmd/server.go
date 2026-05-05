@@ -62,7 +62,7 @@ and AI-powered code analysis.`,
 		defer cancel()
 
 		if err := httpSrv.Shutdown(ctx); err != nil {
-			log.Fatal("Server forced to shutdown: ", err)
+			return fmt.Errorf("server forced to shutdown: %w", err)
 		}
 
 		log.Println("Server exiting")

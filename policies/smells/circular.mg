@@ -27,29 +27,22 @@ query_metadata("smell_circular_transitive", "remediation", "Refactor one of the 
 query_metadata("smell_circular_transitive", "Predicate", "has_smell_type").
 query_metadata("smell_circular_transitive", "template", `triples(A, "imports", B), triples(B, "imports", C), triples(C, "imports", A), A != B, B != C, A != C`).
 
-query("smell_circular_transitive", File, Path) :-
+query("smell_circular_transitive", A, C) :-
     triples(A, "imports", B),
     triples(B, "imports", C),
     triples(C, "imports", A),
-    % Derive the cycle path as a string representation
-    Path = string(A, " -> ", B, " -> ", C, " -> ", A),
-    % Enforce distinct files (no self-loops or 2-file cycles)
     A != B,
     B != C,
-    A != C,
-    % Unify File to A — the entry point of the cycle (all three are equally problematic)
-    File = A.
+    A != C.
 
-query("smell_circular_transitive", File, Path) :-
+query("smell_circular_transitive", A, D) :-
     triples(A, "imports", B),
     triples(B, "imports", C),
     triples(C, "imports", D),
     triples(D, "imports", A),
-    Path = string(A, " -> ", B, " -> ", C, " -> ", D, " -> ", A),
     A != B,
     B != C,
     C != D,
     A != C,
     A != D,
-    B != D,
-    File = A.
+    B != D.

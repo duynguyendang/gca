@@ -179,10 +179,10 @@ func (s *GraphService) GetCentralityRanking(ctx context.Context, projectID strin
 			boost = 2.5
 		}
 		if symbols[i].outDegree > 10 && symbols[i].inDegree > 5 {
-			boost *= 1.5
+			boost *= config.CentralityBoostHub
 		}
 		if IsInterfacePattern(symbols[i].symbol) {
-			boost *= 1.3
+			boost *= config.CentralityBoostInterface
 		}
 		symbols[i].score *= boost
 		if symbols[i].score > maxScore {

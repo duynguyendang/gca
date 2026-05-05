@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/store"
 	"github.com/oklog/ulid/v2"
@@ -184,10 +185,6 @@ func hashToTopicID(name string) uint32 {
 	if name == "" {
 		return 1
 	}
-	var h uint32 = 2166136261 // FNV-1a offset basis
-	for i := 0; i < len(name); i++ {
-		h ^= uint32(name[i])
-		h *= 16777619 // FNV-1a prime
-	}
+	h := common.FNV1aHash(name)
 	return (h & topicIDMask) | topicIDEphemeralBit
 }

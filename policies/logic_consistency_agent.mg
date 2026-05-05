@@ -1,0 +1,1 @@
+% GCA Logic & Consistency Agent - GenePool Rules

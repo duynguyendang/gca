@@ -7,13 +7,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/logger"
+	"github.com/duynguyendang/gca/pkg/prompts"
 )
 
-// ModelAdapter abstracts the LLM call so the planner is testable.
-type ModelAdapter interface {
-	GenerateContent(ctx context.Context, prompt string) (string, error)
-}
+// ModelAdapter is an alias for the shared LLMClient interface.
+type ModelAdapter = common.LLMClient
 
 // PlanResult is the JSON structure we expect the LLM to return.
 type PlanResult struct {
@@ -27,18 +27,33 @@ type PlanStepSpec struct {
 
 // Planner decomposes a natural-language query into a sequence of Datalog PlanSteps.
 type Planner struct {
-	model ModelAdapter
+	model        ModelAdapter
+	promptLoader func(name string) (*prompts.Prompt, error)
 }
 
 // NewPlanner creates a planner backed by the given model adapter.
 func NewPlanner(model ModelAdapter) *Planner {
-	return &Planner{model: model}
+	return &Planner{
+		model:        model,
+		promptLoader: prompts.LoadPrompt,
+	}
+}
+
+// NewPlannerWithLoader creates a planner with a custom prompt loader (for testing).
+func NewPlannerWithLoader(model ModelAdapter, loader func(name string) (*prompts.Prompt, error)) *Planner {
+	return &Planner{
+		model:        model,
+		promptLoader: loader,
+	}
 }
 
 // Plan asks the LLM to decompose the query and returns the PlanSteps.
 // The context should already carry a timeout (e.g. 30s).
 func (p *Planner) Plan(ctx context.Context, query string, predicates []string) ([]PlanStep, error) {
-	prompt := buildPlannerPrompt(query, predicates)
+	prompt, err := p.buildPlannerPrompt(query, predicates)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build planner prompt: %w", err)
+	}
 
 	logger.Debug("Agent/Planner Sending plan request", "query", query, "predicates", len(predicates))
 
@@ -56,33 +71,24 @@ func (p *Planner) Plan(ctx context.Context, query string, predicates []string) (
 	return steps, nil
 }
 
-func buildPlannerPrompt(query string, predicates []string) string {
+func (p *Planner) buildPlannerPrompt(query string, predicates []string) (string, error) {
 	var predList strings.Builder
-	for _, p := range predicates {
-		predList.WriteString(fmt.Sprintf("- `%s`\n", p))
+	for _, pred := range predicates {
+		predList.WriteString(fmt.Sprintf("- `%s`\n", pred))
 	}
 
-	return fmt.Sprintf(`You are a code analysis planner. Decompose the user's question into a sequence of Datalog queries.
+	prompt, err := p.promptLoader("prompts/agent_planner.prompt")
+	if err != nil {
+		return "", err
+	}
+	if prompt == nil {
+		return "", fmt.Errorf("agent_planner.prompt not loaded")
+	}
 
-Available predicates:
-%s
-
-Rules:
-1. Each step MUST be a valid Datalog triple query like: triples(?s, "predicate", ?o)
-2. Steps are executed sequentially. Step N+1 can reference results from step N using {{step_N_result}}.
-3. Limit to 3-5 steps maximum.
-4. The final step should produce the answer the user is looking for.
-5. If the question can be answered in one query, return exactly one step.
-
-User Question: %s
-
-Respond with ONLY a JSON object:
-{
-  "steps": [
-    {"task": "Find entry points", "query": "triples(?s, \"defines\", \"main\")"},
-    {"task": "Trace calls", "query": "triples(\"{{step_0_result}}\", \"calls\", ?o)"}
-  ]
-}`, predList.String(), query)
+	return prompt.Execute(map[string]interface{}{
+		"Query":      query,
+		"Predicates": predList.String(),
+	})
 }
 
 // parsePlanResponse extracts PlanSteps from the LLM JSON response.

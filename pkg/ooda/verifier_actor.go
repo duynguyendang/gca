@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/duynguyendang/gca/pkg/common"
 )
 
 type Policy struct {
@@ -147,14 +149,10 @@ func (v *PolicyVerifier) Verify(ctx context.Context, frame *GCAFrame) error {
 }
 
 type GeminiActor struct {
-	model Model
+	model common.LLMClient
 }
 
-type Model interface {
-	GenerateContent(ctx context.Context, prompt string) (string, error)
-}
-
-func NewGeminiActor(model Model) *GeminiActor {
+func NewGeminiActor(model common.LLMClient) *GeminiActor {
 	return &GeminiActor{model: model}
 }
 

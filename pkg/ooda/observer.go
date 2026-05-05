@@ -457,15 +457,15 @@ func (o *GraphOrienter) computeDegreeCentrality(ctx context.Context, store *meb.
 		lower := strings.ToLower(sym)
 		if strings.Contains(lower, ":main") || strings.Contains(lower, ".main") ||
 			strings.Contains(lower, ":init") || strings.Contains(lower, ".init") {
-			boost *= 2.5
+			boost *= config.CentralityBoostMain
 		}
 
 		if out > 10 && in > 5 {
-			boost *= 1.5
+			boost *= config.CentralityBoostHub
 		}
 
 		if isInterfacePattern(sym) {
-			boost *= 1.3
+			boost *= config.CentralityBoostInterface
 		}
 
 		// Secondary attention filter: boost attention-worthy names
@@ -490,21 +490,10 @@ func (o *GraphOrienter) computeDegreeCentrality(ctx context.Context, store *meb.
 	return scores
 }
 
-// isInterfacePattern checks if a symbol name matches interface-like patterns
+var interfacePatternRegex = regexp.MustCompile(`(interface|handler|service|repository|controller|provider|client|adapter|factory|strategy|observer|listener|plugin|middleware|builder|parser|validator)`)
+
 func isInterfacePattern(symbol string) bool {
-	lower := strings.ToLower(symbol)
-	patterns := []string{
-		"interface", "handler", "service", "repository",
-		"controller", "provider", "client", "adapter",
-		"factory", "strategy", "observer", "listener",
-		"plugin", "middleware", "builder", "parser", "validator",
-	}
-	for _, p := range patterns {
-		if strings.Contains(lower, p) {
-			return true
-		}
-	}
-	return false
+	return interfacePatternRegex.MatchString(strings.ToLower(symbol))
 }
 
 // sortByCentralityDesc sorts symbols by centrality score in descending order

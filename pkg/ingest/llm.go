@@ -3,17 +3,11 @@ package ingest
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/llmconfig"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/anthropic"
-	"github.com/firebase/genkit/go/plugins/compat_oai/openai"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-	"github.com/firebase/genkit/go/plugins/ollama"
 )
 
 // EmbeddingService handles interactions with the embedding model.
@@ -24,58 +18,16 @@ type EmbeddingService struct {
 
 // NewEmbeddingService creates a new service instance.
 func NewEmbeddingService(ctx context.Context) (*EmbeddingService, error) {
-	apiKey := os.Getenv("LLM_API_KEY")
-	if apiKey == "" {
-		return nil, fmt.Errorf("LLM_API_KEY not set")
+	cfg, err := llmconfig.LoadFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load LLM config: %w", err)
 	}
 
-	provider := os.Getenv("LLM_PROVIDER")
-	if provider == "" {
-		provider = "googleai"
-	}
-
-	var plugins []api.Plugin
-
-	switch provider {
-	case "googleai", "gemini":
-		plugins = append(plugins, &googlegenai.GoogleAI{APIKey: apiKey})
-	case "openai":
-		plugins = append(plugins, &openai.OpenAI{APIKey: apiKey})
-	case "anthropic":
-		plugins = append(plugins, &anthropic.Anthropic{APIKey: apiKey})
-	case "ollama":
-		addr := os.Getenv("OLLAMA_ADDRESS")
-		if addr == "" {
-			addr = "http://localhost:11434"
-		}
-		plugins = append(plugins, &ollama.Ollama{ServerAddress: addr})
-	default:
-		plugins = append(plugins, &googlegenai.GoogleAI{APIKey: apiKey})
-	}
-
-	model := os.Getenv("EMBEDDING_MODEL")
-	if model == "" {
-		switch provider {
-		case "googleai", "gemini":
-			model = "googleai/text-embedding-004"
-		case "openai":
-			model = "openai/text-embedding-3-large"
-		case "anthropic":
-			return nil, fmt.Errorf("embedding model not supported for provider %s", provider)
-		case "ollama":
-			model = "ollama/nomic-embed-text"
-		default:
-			model = "googleai/text-embedding-004"
-		}
-	} else if !strings.Contains(model, "/") {
-		model = provider + "/" + model
-	}
-
-	g := genkit.Init(ctx, genkit.WithPlugins(plugins...))
+	g := genkit.Init(ctx, genkit.WithPlugins(cfg.Plugins...))
 
 	return &EmbeddingService{
 		g:              g,
-		embeddingModel: model,
+		embeddingModel: cfg.EmbeddingModel,
 	}, nil
 }
 

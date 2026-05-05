@@ -6,8 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,18 +13,15 @@ import (
 
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/llmconfig"
 	"github.com/duynguyendang/gca/pkg/logger"
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/ooda"
+	"github.com/duynguyendang/gca/pkg/promptbuilder"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/meb"
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/anthropic"
-	"github.com/firebase/genkit/go/plugins/compat_oai/openai"
-	"github.com/firebase/genkit/go/plugins/googlegenai"
-	"github.com/firebase/genkit/go/plugins/ollama"
 )
 
 type ProjectStoreManager interface {
@@ -37,19 +32,10 @@ type ProjectStoreManager interface {
 type AIService struct {
 	g              *genkit.Genkit
 	manager        ProjectStoreManager
+	prompts        *promptbuilder.PromptSet
 	defaultModel   string
 	embeddingModel string
 	provider       string
-
-	DatalogPrompt        *prompts.Prompt
-	ChatPrompt           *prompts.Prompt
-	PathNarrativePrompt  *prompts.Prompt
-	PathEndpointsPrompt  *prompts.Prompt
-	ResolveSymbolPrompt  *prompts.Prompt
-	PrunePrompt          *prompts.Prompt
-	SmartSearchPrompt    *prompts.Prompt
-	MultiFilePrompt      *prompts.Prompt
-	DefaultContextPrompt *prompts.Prompt
 
 	// Response caching for AI synthesis (LRU with list for O(1) eviction)
 	responseCache        map[string]*cachedResponse
@@ -74,72 +60,12 @@ type cachedResponse struct {
 }
 
 func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService, error) {
-	provider := os.Getenv("LLM_PROVIDER")
-	if provider == "" {
-		provider = "googleai"
+	cfg, err := llmconfig.LoadFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load LLM config: %w", err)
 	}
 
-	apiKey := os.Getenv("LLM_API_KEY")
-	if apiKey == "" && provider != "ollama" {
-		return nil, fmt.Errorf("LLM_API_KEY not found")
-	}
-
-	var plugins []api.Plugin
-
-	switch provider {
-	case "googleai", "gemini":
-		plugins = append(plugins, &googlegenai.GoogleAI{APIKey: apiKey})
-	case "openai":
-		plugins = append(plugins, &openai.OpenAI{APIKey: apiKey})
-	case "anthropic":
-		plugins = append(plugins, &anthropic.Anthropic{APIKey: apiKey})
-	case "ollama":
-		addr := os.Getenv("OLLAMA_ADDRESS")
-		if addr == "" {
-			addr = "http://localhost:11434"
-		}
-		plugins = append(plugins, &ollama.Ollama{ServerAddress: addr})
-	default:
-		plugins = append(plugins, &googlegenai.GoogleAI{APIKey: apiKey})
-	}
-
-	defaultModel := os.Getenv("LLM_MODEL")
-	if defaultModel == "" {
-		switch provider {
-		case "googleai", "gemini":
-			defaultModel = "googleai/gemini-2.5-flash"
-		case "openai":
-			defaultModel = "openai/gpt-4o"
-		case "anthropic":
-			defaultModel = "anthropic/claude-3-5-sonnet-20241022"
-		case "ollama":
-			defaultModel = "ollama/llama3.2"
-		default:
-			defaultModel = "googleai/gemini-2.5-flash"
-		}
-	} else if !strings.Contains(defaultModel, "/") {
-		defaultModel = provider + "/" + defaultModel
-	}
-
-	embeddingModel := os.Getenv("EMBEDDING_MODEL")
-	if embeddingModel == "" {
-		switch provider {
-		case "googleai", "gemini":
-			embeddingModel = "googleai/text-embedding-004"
-		case "openai":
-			embeddingModel = "openai/text-embedding-3-large"
-		case "anthropic":
-			embeddingModel = ""
-		case "ollama":
-			embeddingModel = "ollama/nomic-embed-text"
-		default:
-			embeddingModel = "googleai/text-embedding-004"
-		}
-	} else if !strings.Contains(embeddingModel, "/") {
-		embeddingModel = provider + "/" + embeddingModel
-	}
-
-	g := genkit.Init(ctx, genkit.WithPlugins(plugins...), genkit.WithDefaultModel(defaultModel))
+	g := genkit.Init(ctx, genkit.WithPlugins(cfg.Plugins...), genkit.WithDefaultModel(cfg.DefaultModel))
 
 	loadPrompt := func(name string) *prompts.Prompt {
 		path, ok := config.PromptPaths[name]
@@ -155,7 +81,7 @@ func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService,
 		return p
 	}
 
-	logger.Info("AI Service initialized", "provider", provider, "model", defaultModel, "embedding", embeddingModel)
+	logger.Info("AI Service initialized", "provider", cfg.Provider, "model", cfg.DefaultModel, "embedding", cfg.EmbeddingModel)
 
 	// Initialize cache TTL from config
 	cacheTTL := config.QueryCacheTTL
@@ -165,18 +91,27 @@ func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService,
 	return &AIService{
 		g:                    g,
 		manager:              manager,
-		defaultModel:         defaultModel,
-		embeddingModel:       embeddingModel,
-		provider:             provider,
-		DatalogPrompt:        loadPrompt("datalog"),
-		ChatPrompt:           loadPrompt("chat"),
-		PathNarrativePrompt:  loadPrompt("path_narrative"),
-		PathEndpointsPrompt:  loadPrompt("path_endpoints"),
-		ResolveSymbolPrompt:  loadPrompt("resolve_symbol"),
-		PrunePrompt:          loadPrompt("prune"),
-		SmartSearchPrompt:    loadPrompt("smart_search"),
-		MultiFilePrompt:      loadPrompt("multi_file"),
-		DefaultContextPrompt: loadPrompt("default_context"),
+		defaultModel:         cfg.DefaultModel,
+		embeddingModel:       cfg.EmbeddingModel,
+		provider:             cfg.Provider,
+		prompts: &promptbuilder.PromptSet{
+			Datalog:        loadPrompt("datalog"),
+			Chat:           loadPrompt("chat"),
+			PathNarrative:  loadPrompt("path_narrative"),
+			PathEndpoints:  loadPrompt("path_endpoints"),
+			ResolveSymbol:  loadPrompt("resolve_symbol"),
+			Prune:          loadPrompt("prune"),
+			SmartSearch:    loadPrompt("smart_search"),
+			MultiFile:      loadPrompt("multi_file"),
+			DefaultContext: loadPrompt("default_context"),
+			Insight:        loadPrompt("insight"),
+			Summary:        loadPrompt("summary"),
+			Narrative:      loadPrompt("narrative"),
+			Refactor:       loadPrompt("refactor"),
+			TestGen:        loadPrompt("test_gen"),
+			Security:       loadPrompt("security"),
+			Performance:    loadPrompt("performance"),
+		},
 		responseCache:        make(map[string]*cachedResponse),
 		responseCacheTTL:     cacheTTL,
 		responseCacheMaxSize: 1000,
@@ -226,7 +161,7 @@ func (s *AIService) GenerateText(ctx context.Context, prompt string) (string, er
 		return "", fmt.Errorf("AI service circuit breaker is open, failing fast to prevent cascading failures")
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, config.AIRequestTimeout)
 	defer cancel()
 
 	logger.Debug("Sending Prompt to LLM", "provider", s.provider, "prompt", prompt)
@@ -505,302 +440,12 @@ func (s *AIService) HandleRequest(ctx context.Context, req AIRequest) (string, e
 }
 
 func (s *AIService) buildTaskPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
-	switch req.Task {
-	case "insight":
-		return s.buildInsightPrompt(ctx, store, req)
-	case "chat":
-		return s.buildChatPrompt(req)
-	case "prune":
-		return s.buildPrunePrompt(req)
-	case "summary":
-		return s.buildSummaryPrompt(ctx, store, req)
-	case "narrative":
-		return s.buildNarrativePrompt(ctx, store, req)
-	case "resolve_symbol":
-		return s.buildResolveSymbolPrompt(req)
-	case "path_endpoints":
-		return s.buildPathEndpointsPrompt(req)
-	case "datalog":
-		return s.buildDatalogPrompt(req)
-	case "path_narrative":
-		return s.buildPathNarrativePrompt(ctx, store, req)
-	case "smart_search_analysis":
-		return s.buildSmartSearchPrompt(req)
-	case "multi_file_summary":
-		return s.buildMultiFileSummaryPrompt(ctx, store, req)
-	case "refactor":
-		return s.buildRefactorPrompt(ctx, store, req)
-	case "test_generation":
-		return s.buildTestGenerationPrompt(ctx, store, req)
-	case "security_audit":
-		return s.buildSecurityAuditPrompt(ctx, store, req)
-	case "performance":
-		return s.buildPerformancePrompt(ctx, store, req)
-	default:
-		return s.BuildPrompt(ctx, store, req.Query, req.SymbolID)
+	data := map[string]interface{}{
+		"Query":   req.Query,
+		"SymbolID": req.SymbolID,
+		"Data":    req.Data,
 	}
-}
-
-func (s *AIService) buildInsightPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
-	return s.BuildPrompt(ctx, store, fmt.Sprintf("Analyze the architectural role of component %s. Provide a comprehensive analysis including role, interactions, and design patterns.", req.SymbolID), req.SymbolID)
-}
-
-func (s *AIService) buildChatPrompt(req AIRequest) (string, error) {
-	context := formatNodesWithCode(req.Data, 20)
-	if s.ChatPrompt != nil {
-		return s.ChatPrompt.Execute(map[string]interface{}{
-			"Query":   req.Query,
-			"Context": context,
-		})
-	}
-	return fmt.Sprintf("%s\n\n%s", req.Query, context), nil
-}
-
-func (s *AIService) buildPrunePrompt(req AIRequest) (string, error) {
-	nodes := formatNodeList(req.Data)
-	if s.PrunePrompt != nil {
-		return s.PrunePrompt.Execute(map[string]interface{}{
-			"Nodes": nodes,
-		})
-	}
-	return "", fmt.Errorf("prune.prompt not loaded")
-}
-
-func (s *AIService) buildSummaryPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
-	nodes := formatNodesSimple(req.Data, 15)
-	return s.BuildPrompt(ctx, store, fmt.Sprintf("Provide a 2-3 sentence architectural summary for file \"%s\".\nSymbols:\n%s", req.Query, nodes), "")
-}
-
-func (s *AIService) buildNarrativePrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
-	names := extractNodeNames(req.Data)
-	return s.BuildPrompt(ctx, store, fmt.Sprintf("Explain the high-level logic flow for these components: %s. Keep it concise.", names), "")
-}
-
-func (s *AIService) buildResolveSymbolPrompt(req AIRequest) (string, error) {
-	candidates := extractStringList(req.Data, 30)
-	if s.ResolveSymbolPrompt != nil {
-		return s.ResolveSymbolPrompt.Execute(map[string]interface{}{
-			"Query":      req.Query,
-			"Candidates": candidates,
-		})
-	}
-	return "", fmt.Errorf("resolve_symbol.prompt not loaded")
-}
-
-func (s *AIService) buildPathEndpointsPrompt(req AIRequest) (string, error) {
-	candidates := extractStringList(req.Data, 50)
-	if s.PathEndpointsPrompt != nil {
-		return s.PathEndpointsPrompt.Execute(map[string]interface{}{
-			"Query":      req.Query,
-			"Candidates": candidates,
-		})
-	}
-	return "", fmt.Errorf("path_endpoints.prompt not loaded")
-}
-
-func (s *AIService) buildDatalogPrompt(req AIRequest) (string, error) {
-	predicatesList := formatPredicatesList(req.Data)
-	if s.DatalogPrompt != nil {
-		return s.DatalogPrompt.Execute(map[string]interface{}{
-			"Query":      req.Query,
-			"SymbolID":   req.SymbolID,
-			"Predicates": predicatesList,
-		})
-	}
-	return "", fmt.Errorf("datalog.prompt not loaded")
-}
-
-func (s *AIService) buildPathNarrativePrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
-	pathStr := extractPathString(req.Data)
-	if s.PathNarrativePrompt != nil {
-		promptStr, err := s.PathNarrativePrompt.Execute(map[string]interface{}{
-			"Query": req.Query,
-			"Path":  pathStr,
-		})
-		if err == nil {
-			return s.BuildPrompt(ctx, store, promptStr, "")
-		}
-	}
-	return s.BuildPrompt(ctx, store, fmt.Sprintf("Explain flow: %s. Path: %s", req.Query, pathStr), "")
-}
-
-func (s *AIService) buildSmartSearchPrompt(req AIRequest) (string, error) {
-	nodes := formatGraphResults(req.Data, "nodes")
-	links := formatGraphResults(req.Data, "links")
-
-	if s.SmartSearchPrompt != nil {
-		return s.SmartSearchPrompt.Execute(map[string]interface{}{
-			"Nodes": nodes,
-			"Links": links,
-			"Query": req.Query,
-		})
-	}
-	return "", fmt.Errorf("smart_search.prompt not loaded")
-}
-
-func (s *AIService) buildMultiFileSummaryPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
-	fileIDs := make([]string, 0)
-	if list, ok := req.Data.([]interface{}); ok {
-		for _, item := range list {
-			if s, ok := item.(string); ok {
-				fileIDs = append(fileIDs, s)
-			}
-		}
-	}
-
-	if len(fileIDs) > 20 {
-		fileIDs = fileIDs[:20]
-	}
-
-	var contextBuilder strings.Builder
-	contextBuilder.WriteString("## Context\n")
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	sem := make(chan struct{}, 10) // limit concurrent goroutines
-
-	for _, fileID := range fileIDs {
-		wg.Add(1)
-		go func(id string) {
-			defer wg.Done()
-			sem <- struct{}{}        // acquire
-			defer func() { <-sem }() // release
-
-			var localSb strings.Builder
-			localCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			defer cancel()
-
-			if err := s.appendSymbolContext(localCtx, store, id, &localSb); err != nil {
-				logger.Warn("Failed to get context for symbol", "symbolID", id, "error", err)
-			} else {
-				mu.Lock()
-				contextBuilder.WriteString(localSb.String())
-				mu.Unlock()
-			}
-		}(fileID)
-	}
-	wg.Wait()
-
-	if s.MultiFilePrompt != nil {
-		return s.MultiFilePrompt.Execute(map[string]interface{}{
-			"Context": contextBuilder.String(),
-			"Query":   req.Query,
-		})
-	}
-	return "", fmt.Errorf("multi_file.prompt not loaded")
-}
-
-func (s *AIService) buildRefactorPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
-	var sb strings.Builder
-	sb.WriteString("You are an expert Software Architect. Analyze the following code and suggest refactoring improvements.\n\n")
-	sb.WriteString(fmt.Sprintf("## Query: %s\n\n", req.Query))
-	if err := s.appendSymbolContext(ctx, store, req.SymbolID, &sb); err != nil {
-		sb.WriteString("No code context available.\n")
-	}
-	sb.WriteString("\nProvide specific, actionable refactoring suggestions with code examples.")
-	return sb.String(), nil
-}
-
-func (s *AIService) buildTestGenerationPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
-	var sb strings.Builder
-	sb.WriteString("You are an expert Software Engineer. Generate comprehensive unit tests for the following code.\n\n")
-	sb.WriteString(fmt.Sprintf("## Query: %s\n\n", req.Query))
-	if err := s.appendSymbolContext(ctx, store, req.SymbolID, &sb); err != nil {
-		sb.WriteString("No code context available.\n")
-	}
-	sb.WriteString("\nGenerate tests covering: normal cases, edge cases, and error conditions.")
-	return sb.String(), nil
-}
-
-func (s *AIService) buildSecurityAuditPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
-	var sb strings.Builder
-	sb.WriteString("You are a Security Expert. Perform a security audit on the following code.\n\n")
-	sb.WriteString(fmt.Sprintf("## Query: %s\n\n", req.Query))
-	if err := s.appendSymbolContext(ctx, store, req.SymbolID, &sb); err != nil {
-		sb.WriteString("No code context available.\n")
-	}
-	sb.WriteString("\nIdentify potential vulnerabilities including: injection, authentication, authorization, data exposure, and configuration issues.")
-	return sb.String(), nil
-}
-
-func (s *AIService) buildPerformancePrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
-	var sb strings.Builder
-	sb.WriteString("You are a Performance Engineer. Analyze the following code for performance issues.\n\n")
-	sb.WriteString(fmt.Sprintf("## Query: %s\n\n", req.Query))
-	if err := s.appendSymbolContext(ctx, store, req.SymbolID, &sb); err != nil {
-		sb.WriteString("No code context available.\n")
-	}
-	sb.WriteString("\nIdentify bottlenecks, unnecessary allocations, inefficient algorithms, and suggest optimizations.")
-	return sb.String(), nil
-}
-
-func formatNodesWithCode(data interface{}, limit int) string {
-	return common.FormatNodesWithCode(data, limit)
-}
-
-func formatNodesSimple(data interface{}, limit int) string {
-	return common.FormatNodesSimple(data, limit)
-}
-
-func formatPredicatesList(data interface{}) string {
-	return common.FormatPredicatesList(data)
-}
-
-func formatNodeList(data interface{}) string {
-	return common.FormatNodeList(data)
-}
-
-func formatGraphResults(data interface{}, key string) string {
-	m, ok := data.(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	list, ok := m[key].([]interface{})
-	if !ok {
-		return ""
-	}
-	var sb strings.Builder
-	if key == "nodes" {
-		for i, item := range list {
-			if node, ok := item.(map[string]interface{}); ok {
-				name, _ := node["name"].(string)
-				kind, _ := node["kind"].(string)
-				id, _ := node["id"].(string)
-				sb.WriteString(fmt.Sprintf("%d. **%s** (Type: %s)\n   ID: `%s`\n", i+1, name, kind, id))
-			}
-		}
-	} else if key == "links" {
-		for i, item := range list {
-			if link, ok := item.(map[string]interface{}); ok {
-				source, _ := link["source"].(string)
-				target, _ := link["target"].(string)
-				relation, _ := link["relation"].(string)
-				if relation == "" {
-					relation = config.PredicateCalls
-				}
-				sb.WriteString(fmt.Sprintf("%d. `%s` **%s** `%s`\n", i+1, source, relation, target))
-			}
-		}
-	}
-	return sb.String()
-}
-
-func extractNodeNames(data interface{}) string {
-	return common.ExtractNodeNames(data)
-}
-
-func extractStringList(data interface{}, limit int) string {
-	return common.ExtractStringList(data, limit)
-}
-
-func extractPathString(data interface{}) string {
-	return common.ExtractPathString(data)
-}
-
-var symbolRegex = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9_.\/]{3,}\b`)
-
-func extractPotentialSymbols(query string) []string {
-	return symbolRegex.FindAllString(query, -1)
+	return promptbuilder.BuildPrompt(req.Task, ctx, store, s.prompts, data)
 }
 
 func (s *AIService) BuildPrompt(ctx context.Context, store *meb.MEBStore, query string, symbolID string) (string, error) {
@@ -826,7 +471,7 @@ func (s *AIService) BuildPrompt(ctx context.Context, store *meb.MEBStore, query 
 }
 
 func (s *AIService) buildSemanticContext(ctx context.Context, store *meb.MEBStore, query string, contextBuilder *strings.Builder) error {
-	words := extractPotentialSymbols(query)
+	words := ooda.ExtractPotentialSymbols(query)
 	if len(words) == 0 {
 		return nil
 	}
@@ -882,8 +527,8 @@ func (s *AIService) fetchMatchedSymbolContexts(ctx context.Context, store *meb.M
 }
 
 func (s *AIService) formatPromptOutput(context string, query string) (string, error) {
-	if s.DefaultContextPrompt != nil {
-		return s.DefaultContextPrompt.Execute(map[string]interface{}{
+	if s.prompts.DefaultContext != nil {
+		return s.prompts.DefaultContext.Execute(map[string]interface{}{
 			"Context": context,
 			"Query":   query,
 		})
@@ -954,11 +599,7 @@ func (s *AIService) querySymbolRelationships(ctx context.Context, store *meb.MEB
 func (s *AIService) formatSymbolContext(symbolID string, content string, inbound, outbound, defines []map[string]any, sb *strings.Builder) {
 	sb.WriteString(fmt.Sprintf("\n### Symbol: %s\n", symbolID))
 	sb.WriteString("```\n")
-	if len(content) > 2000 {
-		sb.WriteString(content[:2000] + "\n... (truncated)")
-	} else {
-		sb.WriteString(content)
-	}
+	sb.WriteString(common.SymbolContext(content))
 	sb.WriteString("\n```\n")
 
 	if len(defines) > 0 {
@@ -1185,7 +826,7 @@ func (s *AIService) HandleAsk(ctx context.Context, req AskRequest) (*AskResponse
 	}
 
 	// Periodic cleanup of expired cache entries (every 100 requests)
-	if len(s.responseCache) > 500 {
+	if len(s.responseCache) > common.MaxExecutorCacheCleanup {
 		go func() {
 			select {
 			case <-s.stopCh:

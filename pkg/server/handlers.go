@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/duynguyendang/gca/pkg/logger"
 	mebpkg "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/service"
 	"github.com/duynguyendang/gca/pkg/service/ai"
 	"github.com/gin-gonic/gin"
 )
@@ -1030,11 +1032,12 @@ func (s *Server) handleEnrichCalledBy(c *gin.Context) {
 //   - error: error message if any
 func (s *Server) handleAsk(c *gin.Context) {
 	var req struct {
-		ProjectID string `json:"project_id"`
-		Query     string `json:"query"`
-		SymbolID  string `json:"symbol_id"`
-		Depth     int    `json:"depth"`
-		Context   string `json:"context"`
+		ProjectID           string                `json:"project_id"`
+		Query               string                `json:"query"`
+		SymbolID            string                `json:"symbol_id"`
+		Depth               int                   `json:"depth"`
+		Context             string                `json:"context"`
+		ConversationHistory []ai.ConversationTurn `json:"conversation_history"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1052,11 +1055,12 @@ func (s *Server) handleAsk(c *gin.Context) {
 	}
 
 	askReq := ai.AskRequest{
-		ProjectID: req.ProjectID,
-		Query:     req.Query,
-		SymbolID:  req.SymbolID,
-		Depth:     req.Depth,
-		Context:   req.Context,
+		ProjectID:           req.ProjectID,
+		Query:               req.Query,
+		SymbolID:            req.SymbolID,
+		Depth:               req.Depth,
+		Context:             req.Context,
+		ConversationHistory: req.ConversationHistory,
 	}
 
 	resp, err := s.aiService.HandleAsk(c.Request.Context(), askReq)
@@ -1343,13 +1347,14 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 	}
 
 	// Compute per-file debt scores.
-	// Smell weights: circular=10, god_file=5, layer_violation=3, security=8, default=2
+	// Smell weights — must match policies/smells/scoring.mg
 	smellWeight := map[string]int{
-		"circular_dependency": 10,
-		"god_file":            5,
-		"layer_violation":     3,
-		"hub_anomaly":         3,
-		"security_risk":       8,
+		"circular_dependency": config.SmellWeightCircularDependency,
+		"circular_transitive": config.SmellWeightCircularTransitive,
+		"god_file":            config.SmellWeightGodFile,
+		"layer_violation":     config.SmellWeightLayerViolation,
+		"hub_anomaly":         config.SmellWeightHubAnomaly,
+		"security_risk":       config.SmellWeightUnsanitizedDB,
 	}
 	getWeight := func(smell string) int {
 		for prefix, w := range smellWeight {
@@ -1357,7 +1362,7 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 				return w
 			}
 		}
-		return 2
+		return config.SmellWeightDefault
 	}
 
 	var files []FileHealthV2
@@ -1403,4 +1408,433 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 		TotalArchDebt:       totalArchDebt,
 		Files:               files,
 	})
+}
+
+type SurpriseFactor struct {
+	Type  string  `json:"type"`
+	Score float64 `json:"score"`
+}
+
+type SurpriseEdge struct {
+	Source  string           `json:"source"`
+	Target  string           `json:"target"`
+	Score   float64          `json:"score"`
+	Factors []SurpriseFactor `json:"factors"`
+	SrcFile string           `json:"src_file,omitempty"`
+	TgtFile string           `json:"tgt_file,omitempty"`
+}
+
+type SurpriseResponse struct {
+	Edges       []SurpriseEdge `json:"edges"`
+	TotalCount  int            `json:"total_count"`
+	HighCount   int            `json:"high_count"`
+	MediumCount int            `json:"medium_count"`
+	LowCount    int            `json:"low_count"`
+}
+
+func (s *Server) handleSurpriseAnalysis(c *gin.Context) {
+	projectID := c.Query("project")
+	if projectID == "" {
+		projects, err := s.graphService.ListProjects()
+		if err == nil && len(projects) > 0 {
+			projectID = projects[0].ID
+		}
+	}
+	if projectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing project parameter"})
+		return
+	}
+
+	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
+	if err != nil {
+		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
+		return
+	}
+
+	type surpriseResult struct {
+		Subject      string
+		Target       string
+		SurpriseType string
+		Score        string
+	}
+
+	var surpriseResults []surpriseResult
+
+	query := `triples(Subject, "has_surprise", Type), triples(Subject, "calls", Target)`
+	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, query); err == nil {
+		for _, r := range results {
+			if subject, ok := r["Subject"].(string); ok {
+				if target, ok := r["Target"].(string); ok {
+					if stype, ok := r["Type"].(string); ok {
+						surpriseResults = append(surpriseResults, surpriseResult{
+							Subject:      subject,
+							Target:       target,
+							SurpriseType: stype,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	// Also query for surprise score facts (composite scores)
+	scoreQuery := `triples(Subject, "has_surprise_score", ScoreStr)`
+	scoreMap := make(map[string]float64)
+	if scoreResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, scoreQuery); err == nil {
+		for _, r := range scoreResults {
+			if subject, ok := r["Subject"].(string); ok {
+				if scoreStr, ok := r["ScoreStr"].(string); ok {
+					var score float64
+					fmt.Sscanf(scoreStr, "%f", &score)
+					scoreMap[subject] = score
+				}
+			}
+		}
+	}
+
+	// Aggregate by edge (Subject->Target)
+	edgeMap := make(map[string]*SurpriseEdge)
+	for _, sr := range surpriseResults {
+		key := sr.Subject + "->" + sr.Target
+		if _, exists := edgeMap[key]; !exists {
+			edgeMap[key] = &SurpriseEdge{
+				Source:  sr.Subject,
+				Target:  sr.Target,
+				Factors: []SurpriseFactor{},
+			}
+		}
+		factorScore := 0.0
+		switch sr.SurpriseType {
+		case "surprise_cross_community":
+			factorScore = 0.30
+		case "surprise_cross_language":
+			factorScore = 0.20
+		case "surprise_peripheral_hub":
+			factorScore = 0.20
+		case "surprise_cross_test_boundary":
+			factorScore = 0.25
+		default:
+			factorScore = 0.10
+		}
+		edgeMap[key].Factors = append(edgeMap[key].Factors, SurpriseFactor{
+			Type:  sr.SurpriseType,
+			Score: factorScore,
+		})
+	}
+
+	var edges []SurpriseEdge
+	for _, e := range edgeMap {
+		var totalScore float64
+		for _, f := range e.Factors {
+			totalScore += f.Score
+		}
+		if totalScore > 1.0 {
+			totalScore = 1.0
+		}
+		e.Score = totalScore
+		edges = append(edges, *e)
+	}
+
+	// Sort by score descending
+	for i := 0; i < len(edges); i++ {
+		for j := i + 1; j < len(edges); j++ {
+			if edges[j].Score > edges[i].Score {
+				edges[i], edges[j] = edges[j], edges[i]
+			}
+		}
+	}
+
+	highCount, mediumCount, lowCount := 0, 0, 0
+	for _, e := range edges {
+		if e.Score >= 0.5 {
+			highCount++
+		} else if e.Score >= 0.2 {
+			mediumCount++
+		} else {
+			lowCount++
+		}
+	}
+
+	c.JSON(http.StatusOK, SurpriseResponse{
+		Edges:       edges,
+		TotalCount:  len(edges),
+		HighCount:   highCount,
+		MediumCount: mediumCount,
+		LowCount:    lowCount,
+	})
+}
+
+type KnowledgeGapItem struct {
+	Symbol   string `json:"symbol"`
+	GapType  string `json:"gap_type"`
+	Severity string `json:"severity"`
+	Detail   string `json:"detail"`
+	Degree   int    `json:"degree,omitempty"`
+}
+
+type KnowledgeGapsResponse struct {
+	IsolatedNodes      []KnowledgeGapItem `json:"isolated_nodes"`
+	UntestedHotspots   []KnowledgeGapItem `json:"untested_hotspots"`
+	ThinCommunities    []KnowledgeGapItem `json:"thin_communities"`
+	SingleFileClusters []KnowledgeGapItem `json:"single_file_clusters"`
+	TotalCount         int                `json:"total_count"`
+}
+
+func (s *Server) handleKnowledgeGaps(c *gin.Context) {
+	projectID := c.Query("project")
+	if projectID == "" {
+		projects, err := s.graphService.ListProjects()
+		if err == nil && len(projects) > 0 {
+			projectID = projects[0].ID
+		}
+	}
+	if projectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing project parameter"})
+		return
+	}
+
+	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
+	if err != nil {
+		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
+		return
+	}
+
+	resp := KnowledgeGapsResponse{
+		IsolatedNodes:      []KnowledgeGapItem{},
+		UntestedHotspots:   []KnowledgeGapItem{},
+		ThinCommunities:    []KnowledgeGapItem{},
+		SingleFileClusters: []KnowledgeGapItem{},
+	}
+
+	// Query degree facts
+	inDegMap := make(map[string]int)
+	outDegMap := make(map[string]int)
+	if inResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, `triples(S, "has_in_degree", D)`); err == nil {
+		for _, r := range inResults {
+			if s, ok := r["S"].(string); ok {
+				if d, ok := r["D"].(string); ok {
+					var deg int
+					fmt.Sscanf(d, "%d", &deg)
+					inDegMap[s] = deg
+				}
+			}
+		}
+	}
+	if outResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, `triples(S, "has_out_degree", D)`); err == nil {
+		for _, r := range outResults {
+			if s, ok := r["S"].(string); ok {
+				if d, ok := r["D"].(string); ok {
+					var deg int
+					fmt.Sscanf(d, "%d", &deg)
+					outDegMap[s] = deg
+				}
+			}
+		}
+	}
+
+	// Query cluster facts
+	clusterMap := make(map[string]string)
+	if clusterResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, `triples(S, "belongs_to_cluster", C)`); err == nil {
+		for _, r := range clusterResults {
+			if s, ok := r["S"].(string); ok {
+				if c, ok := r["C"].(string); ok {
+					clusterMap[s] = c
+				}
+			}
+		}
+	}
+
+	// Isolated nodes: degree <= 1
+	allSymbols := make(map[string]bool)
+	for s := range inDegMap {
+		allSymbols[s] = true
+	}
+	for s := range outDegMap {
+		allSymbols[s] = true
+	}
+	for sym := range allSymbols {
+		in := inDegMap[sym]
+		out := outDegMap[sym]
+		if in+out <= 1 {
+			severity := "low"
+			if in+out == 0 {
+				severity = "medium"
+			}
+			resp.IsolatedNodes = append(resp.IsolatedNodes, KnowledgeGapItem{
+				Symbol:   sym,
+				GapType:  "isolated",
+				Severity: severity,
+				Detail:   fmt.Sprintf("Degree: %d (in=%d, out=%d)", in+out, in, out),
+				Degree:   in + out,
+			})
+		}
+	}
+
+	// Untested hotspots: degree >= 5 and not a test symbol
+	if testResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, `triples(S, "is_test_symbol", "true")`); err == nil {
+		testSymbols := make(map[string]bool)
+		for _, r := range testResults {
+			if s, ok := r["S"].(string); ok {
+				testSymbols[s] = true
+			}
+		}
+		for sym := range allSymbols {
+			if testSymbols[sym] {
+				continue
+			}
+			in := inDegMap[sym]
+			out := outDegMap[sym]
+			if in+out >= 5 {
+				resp.UntestedHotspots = append(resp.UntestedHotspots, KnowledgeGapItem{
+					Symbol:   sym,
+					GapType:  "untested_hotspot",
+					Severity: "high",
+					Detail:   fmt.Sprintf("Degree: %d (in=%d, out=%d) - no test coverage", in+out, in, out),
+					Degree:   in + out,
+				})
+			}
+		}
+	}
+
+	// Count cluster sizes
+	clusterSizes := make(map[string]int)
+	for _, c := range clusterMap {
+		clusterSizes[c]++
+	}
+
+	// Thin communities: cluster size < 3
+	thinClusters := make(map[string]bool)
+	for c, size := range clusterSizes {
+		if size > 0 && size < 3 {
+			thinClusters[c] = true
+		}
+	}
+	for sym, c := range clusterMap {
+		if thinClusters[c] {
+			resp.ThinCommunities = append(resp.ThinCommunities, KnowledgeGapItem{
+				Symbol:   sym,
+				GapType:  "thin_community",
+				Severity: "low",
+				Detail:   fmt.Sprintf("Cluster %s has only %d member(s)", c, clusterSizes[c]),
+			})
+		}
+	}
+
+	// Single-file clusters: all members in same file
+	// Query in_file facts
+	fileMap := make(map[string]string)
+	if fileResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, `triples(S, "in_file", F)`); err == nil {
+		for _, r := range fileResults {
+			if s, ok := r["S"].(string); ok {
+				if f, ok := r["F"].(string); ok {
+					fileMap[s] = f
+				}
+			}
+		}
+	}
+	// Group cluster members by (cluster, file)
+	clusterFileGroups := make(map[string]map[string]bool)
+	for sym, c := range clusterMap {
+		f := fileMap[sym]
+		if f == "" {
+			continue
+		}
+		key := c + "|" + f
+		if clusterFileGroups[key] == nil {
+			clusterFileGroups[key] = make(map[string]bool)
+		}
+		clusterFileGroups[key][sym] = true
+	}
+	for key, members := range clusterFileGroups {
+		if len(members) >= 3 {
+			parts := strings.Split(key, "|")
+			clusterID := parts[0]
+			filePath := parts[1]
+			for sym := range members {
+				resp.SingleFileClusters = append(resp.SingleFileClusters, KnowledgeGapItem{
+					Symbol:   sym,
+					GapType:  "single_file_community",
+					Severity: "medium",
+					Detail:   fmt.Sprintf("Cluster %s has %d symbols all in %s", clusterID, len(members), filePath),
+				})
+			}
+		}
+	}
+
+	resp.TotalCount = len(resp.IsolatedNodes) + len(resp.UntestedHotspots) + len(resp.ThinCommunities) + len(resp.SingleFileClusters)
+	c.JSON(http.StatusOK, resp)
+}
+
+type GraphDiffRequest struct {
+	BeforeSnapshot string `json:"before_snapshot_path"`
+	AfterSnapshot  string `json:"after_snapshot_path"`
+	ProjectID      string `json:"project_id"`
+	BeforeID       string `json:"before_id"`
+	AfterID        string `json:"after_id"`
+}
+
+func (s *Server) handleGraphDiff(c *gin.Context) {
+	var req GraphDiffRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "details": err.Error()})
+		return
+	}
+
+	diffService := service.NewGraphDiffService()
+	var beforeSnap, afterSnap *service.GraphSnapshot
+	var err error
+
+	if req.BeforeSnapshot != "" {
+		beforeSnap, err = diffService.LoadSnapshot(req.BeforeSnapshot)
+		if err != nil {
+			handleError(c, errors.NewAppError(http.StatusBadRequest, "failed to load before snapshot", err))
+			return
+		}
+	} else if req.ProjectID != "" && req.BeforeID != "" {
+		store, err := s.manager.GetStore(req.ProjectID)
+		if err != nil {
+			handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to get store", err))
+			return
+		}
+		snap, err := diffService.TakeSnapshot(c.Request.Context(), store, req.ProjectID)
+		if err != nil {
+			handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to take snapshot", err))
+			return
+		}
+		beforeSnap = snap
+	}
+
+	if req.AfterSnapshot != "" {
+		afterSnap, err = diffService.LoadSnapshot(req.AfterSnapshot)
+		if err != nil {
+			handleError(c, errors.NewAppError(http.StatusBadRequest, "failed to load after snapshot", err))
+			return
+		}
+	} else if req.ProjectID != "" {
+		store, err := s.manager.GetStore(req.ProjectID)
+		if err != nil {
+			handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to get store", err))
+			return
+		}
+		afterSnap, err = diffService.TakeSnapshot(c.Request.Context(), store, req.ProjectID)
+		if err != nil {
+			handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to take snapshot", err))
+			return
+		}
+	}
+
+	if beforeSnap == nil && afterSnap == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "must provide either snapshots or project_id"})
+		return
+	}
+
+	if beforeSnap == nil {
+		beforeSnap = &service.GraphSnapshot{Nodes: map[string]service.NodeSnap{}, Edges: map[string]service.EdgeSnap{}, Communities: map[string]int{}}
+	}
+	if afterSnap == nil {
+		afterSnap = &service.GraphSnapshot{Nodes: map[string]service.NodeSnap{}, Edges: map[string]service.EdgeSnap{}, Communities: map[string]int{}}
+	}
+
+	diff := diffService.DiffSnapshots(beforeSnap, afterSnap)
+	c.JSON(http.StatusOK, diff)
 }

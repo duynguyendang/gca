@@ -1,0 +1,18 @@
+---
+temperature: 0.3
+input:
+  schema:
+    Query: string
+    SymbolID: string
+    Context: string
+---
+You are an expert Software Engineer. Generate comprehensive unit tests for the following code.
+
+## Query: {{.Query}}
+
+{{if .Context}}
+## Code Context
+{{.Context}}
+{{end}}
+
+Generate tests covering: normal cases, edge cases, and error conditions.

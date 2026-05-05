@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -16,7 +15,7 @@ import (
 )
 
 // TemplateStore manages query templates in the Analytical Store.
-// It parses .dl policy files and stores their templates and metadata as triples.
+// It parses .mg policy files and stores their templates and metadata as triples.
 type TemplateStore struct {
 	storeManager *manager.StoreManager
 }
@@ -31,72 +30,42 @@ func NewTemplateStore(storeManager *manager.StoreManager) *TemplateStore {
 	}
 }
 
-// LoadPolicyFiles parses all .dl files in the given directory
-// and stores the templates as triples in the Analytical Store.
-func (ts *TemplateStore) LoadPolicyFiles(ctx context.Context, dir string) error {
-	// Get Analytical Store
+// LoadPolicyFiles parses init.dl manifest and stores templates as triples.
+func (ts *TemplateStore) LoadPolicyFiles(ctx context.Context, initPath string) error {
 	store, err := ts.storeManager.GetAnalyticalStore("")
 	if err != nil {
 		return fmt.Errorf("failed to get analytical store: %w", err)
 	}
 
-	entries, err := os.ReadDir(dir)
+	manifest, err := LoadManifest(initPath)
 	if err != nil {
-		return fmt.Errorf("failed to read directory: %w", err)
+		return fmt.Errorf("failed to load init.dl: %w", err)
 	}
-
-	// Sort for deterministic loading
-	sortEntries(entries)
 
 	var templatesLoaded int
+	for _, filePath := range manifest.FilePaths {
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			return fmt.Errorf("failed to read %s: %w", filePath, err)
+		}
 
-	if err := ts.loadTemplatesFromDir(ctx, store, dir, &templatesLoaded); err != nil {
-		return err
-	}
+		templates, err := ts.parseTemplateFile(string(content))
+		if err != nil {
+			return fmt.Errorf("failed to parse %s: %w", filePath, err)
+		}
 
-	log.Printf("Loaded %d templates from %s", templatesLoaded, dir)
-	return nil
-}
-
-// loadTemplatesFromDir recursively loads all .dl files from a directory
-func (ts *TemplateStore) loadTemplatesFromDir(ctx context.Context, store *externmeb.MEBStore, dir string, count *int) error {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return fmt.Errorf("failed to read directory %s: %w", dir, err)
-	}
-
-	sortEntries(entries)
-
-	for _, entry := range entries {
-		filePath := filepath.Join(dir, entry.Name())
-		if entry.IsDir() {
-			if err := ts.loadTemplatesFromDir(ctx, store, filePath, count); err != nil {
-				return err
-			}
-		} else if strings.HasSuffix(entry.Name(), ".dl") {
-			content, err := os.ReadFile(filePath)
-			if err != nil {
-				return fmt.Errorf("failed to read %s: %w", entry.Name(), err)
-			}
-
-			templates, err := ts.parseTemplateFile(string(content))
-			if err != nil {
-				return fmt.Errorf("failed to parse %s: %w", entry.Name(), err)
-			}
-
-			for _, tmpl := range templates {
-				if err := ts.storeTemplate(ctx, store, tmpl); err != nil {
-					return fmt.Errorf("failed to store template %s: %w", tmpl.ID, err)
-				}
-				(*count)++
+		for _, tmpl := range templates {
+			if err := ts.storeTemplate(ctx, store, tmpl); err != nil {
+				return fmt.Errorf("failed to store template %s: %w", tmpl.ID, err)
 			}
 		}
 	}
 
+	log.Printf("Loaded %d templates from init.dl manifest", templatesLoaded)
 	return nil
 }
 
-// parseTemplateFile extracts query templates from .dl file content.
+// parseTemplateFile extracts query templates from .mg file content.
 func (ts *TemplateStore) parseTemplateFile(content string) ([]*QueryTemplate, error) {
 	var templates []*QueryTemplate
 

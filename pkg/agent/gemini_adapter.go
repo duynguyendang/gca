@@ -6,20 +6,19 @@ import (
 	"os"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 )
 
-// ModelInterface is what the agent needs from the AI service.
-type ModelInterface interface {
-	GenerateContent(ctx context.Context, prompt string) (string, error)
-}
-
-// GeminiAdapter implements ModelInterface using Genkit.
+// GeminiAdapter implements the common.LLMClient interface using Genkit.
 type GeminiAdapter struct {
 	g            *genkit.Genkit
 	defaultModel string
 }
+
+// Verify that GeminiAdapter implements common.LLMClient at compile time.
+var _ common.LLMClient = (*GeminiAdapter)(nil)
 
 // NewGeminiAdapter creates a new adapter from environment variables.
 func NewGeminiAdapter(ctx context.Context) (*GeminiAdapter, error) {

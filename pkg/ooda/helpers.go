@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/meb"
 )
@@ -11,11 +12,11 @@ import (
 type OODAConfig struct {
 	StoreManager StoreManager
 	PromptLoader PromptLoader
-	Model        Model
+	Model        common.LLMClient
 	Policy       Policy
 }
 
-func NewOODAConfig(storeManager StoreManager, promptLoader PromptLoader, model Model) *OODAConfig {
+func NewOODAConfig(storeManager StoreManager, promptLoader PromptLoader, model common.LLMClient) *OODAConfig {
 	return &OODAConfig{
 		StoreManager: storeManager,
 		PromptLoader: promptLoader,

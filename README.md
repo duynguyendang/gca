@@ -1,29 +1,98 @@
 # GCA (Gem Code Analysis)
 
-**Master Your Codebase Complexity** — GCA uncovers hidden relationships and architectural patterns, enabling safer refactoring and instant onboarding for complex systems.
+**The Shared Brain for Code** — One knowledge graph. Two interfaces. Infinite clarity.
 
-## Why GCA?
+GCA ingests your codebase into a queryable knowledge graph, then exposes it through:
+- 🧑‍💻 **GCA Explorer** — Interactive frontend for human exploration (graph visualization, AI chat, health dashboard)
+- 🤖 **MCP Server** — Model Context Protocol interface for structured code queries (compatible with Cursor, Claude Desktop, and other MCP clients)
 
-Reading code is easy; understanding its impact is hard. Traditional tools give you symbols and text search, but they fail to explain the "why" and the "what if" of a codebase.
+## Your Codebase. Your Rules.
 
-GCA solves this by transforming your source code into a **Semantic Knowledge Graph**. It doesn't just find keywords; it understands how components interact, allowing you to:
+Most tools ship with hardcoded rules. Your architecture? Ignored. Your conventions? Ignored. Your team? Forced to adopt someone else's opinions.
 
-- **Navigate with Certainty**: Map full call trees and detect circular dependencies instantly.
-- **Refactor without Fear**: Precisely calculate the "blast radius" of any change.
-- **Onboard in Minutes**: Let AI narrate the architectural flow of a new repository using grounded graph data.
+**GCA treats rules as data.** Architecture smells, health scoring, query templates, even how AI understands your code — all defined in plain Datalog files. Add a new smell for your monorepo? Write a `.mg` file. No recompile. No SDK. No Go code.
 
-## The Core Advantage: Neuro-Symbolic AI
+```prolog
+% policies/smells/api_without_auth.mg
+query_metadata("smell_unauth_api", "Detect API handlers without authentication").
+query_metadata("smell_unauth_api", "severity", "high").
 
-GCA combines the **rigorous logic** of Datalog (via the Mangle engine) with the **intuitive reasoning** of modern LLMs. This "Neuro-Symbolic" approach ensures that AI insights are not just "hallucinations" but are grounded in the actual facts of your code's structure.
+query("smell_unauth_api", Handler, Callee) :-
+    triples(Handler, "has_tag", "public_api"),
+    triples(Handler, "calls", Callee),
+    Callee != "auth.Authenticate".
+```
+Restart `./gca server`. The smell auto-appears in the dashboard and API.
+
+## Define Your Rules in Datalog
+
+GCA is powered by **Google Mangle** — a Datalog engine that evaluates rules at query time. Every rule is just a `.mg` file. The rules are the product.
+
+### Add a Smell Detection Rule
+
+```prolog
+% policies/smells/my_smell.mg
+query_metadata("smell_my_pattern", "Detect X in your codebase").
+query_metadata("smell_my_pattern", "severity", "high").
+
+query("smell_my_pattern", Subject, Object) :-
+    triples(Subject, "calls", Object),
+    triples(Object, "has_kind", "database").
+```
+
+### Adjust Health Scoring
+
+```prolog
+% policies/smells/scoring.mg
+% Change penalty weights — no rebuild needed
+smell_weight("circular_dependency", 25).  % bump from 10 to 25
+smell_weight("layer_violation", 12).       % bump from 8 to 12
+```
+
+### Teach AI a New Query Pattern
+
+```prolog
+% policies/intent_templates.mg
+intent_template("find_dead_code", "default",
+    `triples(?s, "has_kind", "func"), not triples(_, "calls", ?s)`).
+```
+
+## The Rule Stack
+
+Every layer of GCA's intelligence is a Datalog policy you can edit:
+
+| Layer | Files | What You Control |
+|-------|-------|-----------------|
+| **Architecture Smells** | `policies/smells/*.mg` (17 total) | Circular deps, god files, hub anomalies, layer violations, security risks, surprise scoring, knowledge gaps |
+| **Health Scoring** | `policies/smells/scoring.mg` | Penalty weights per smell, hub thresholds, composite health score (0–100) |
+| **Query Registry** | `policies/queries.mg` | Pre-defined queries auto-exposed as REST endpoints |
+| **Intent Templates** | `policies/intent_templates.mg` | Natural language → Datalog mapping for AI |
+| **Memory Rules** | `policies/memory/*.mg` | Fact promotion/eviction policies |
+
+## Use Cases
+
+- **Auto-scan architecture smells** — 17 smell policies run on every ingest; results surface in the health dashboard
+- **Onboard to any codebase** — AI narrates the architecture using centrality data and smell reports
+- **Enforce team coding rules** — define layer boundaries, API contracts, auth requirements in `.mg` files
+- **Validate PRs** — ephemeral store ingests diffs; smell policies run only on changed files
+- **Custom health metrics** — adjust scoring weights to match your team's priorities
+- **Teach AI new queries** — add intent templates without touching Go code
+- **Query code via MCP** — connect MCP-compatible tools to explore codebase structure
+
+## Neuro-Symbolic AI
+
+GCA combines the **rigorous logic** of Datalog (via the Mangle engine) with the **intuitive reasoning** of modern LLMs. This "Neuro-Symbolic" approach ensures that AI insights are grounded in the actual facts of your code's structure — not hallucinations.
+
+The AI reads diagnostic reports from the Analytical Store, then executes precise Datalog queries against the Source Store. Every answer traces back to actual code.
 
 ## Built for Production
 
 GCA runs efficiently on modest hardware — no external databases or services required:
 
 | Capability | Details |
-| --------- | ------- |
+| --------- | --------- |
 | **Low Memory Mode** | `LOW_MEM=true` ingests large projects on limited RAM |
-| **Single Binary** | Graph store, vector embeddings, and source content — all in one BadgerDB instance |
+| **Single Binary** | Graph, vector, and source content — all in one MEB instance |
 | **Zero External Dependencies** | No Elasticsearch, no Neo4j, no Redis — just Go and BadgerDB |
 | **Disk Persistence** | Facts and vectors survive restarts |
 | **Efficient Storage** | Dictionary compression reduces memory 10x |
@@ -84,7 +153,7 @@ Powered by Firebase Genkit with support for multiple providers:
 
 - **Unified NL Pipeline**: Natural language → Datalog → LLM answer
 - **Graph Centrality**: Symbols ranked by architectural significance (entry points, hubs, interfaces)
-- **Intent Classification**: 14+ task types (insight, narrative, resolve_symbol, etc.)
+- **Intent Classification**: 11 task types (insight, narrative, resolve_symbol, etc.)
 - **Path Narratives**: Traces and explains interaction flows
 - **Context-Aware Prompts**: Injects local symbols, relations, and documentation
 - **Circuit Breaker**: AI service resilience with automatic failover
@@ -95,10 +164,11 @@ Powered by Firebase Genkit with support for multiple providers:
 - **Multi-Language Support**: Go, Python, TypeScript, JavaScript via tree-sitter
 - **High-Fidelity Extraction**: Preserves structure, documentation, and relationships
 - **Parallel Processing**: Worker pools for fast ingestion (1000+ files/min)
-- **Incremental Updates**: Re-ingest only changed files
+- **Incremental Updates**: Re-ingest only changed files via git diff
 - **Symbol Resolution**: Resolves callee names to symbol IDs for accurate cross-references
 - **Idempotent Virtual Facts**: Safe re-runs with duplicate prevention
 - **Analytics Versioning**: Skip redundant computations on re-ingestion
+- **Auto-Scan Smells**: All `policies/smells/*.mg` rules run automatically post-ingest via `analyzer.go`
 
 ## Why This Matters for Code Understanding
 
@@ -115,7 +185,11 @@ The following features are planned for future releases:
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| Generate Integration Tests | 🔴 TODO | AI-powered integration test generation |
+| Architecture Smell Detection | ✅ DONE | 17 policy files: circular deps, god files, hub anomalies, layer violations, security risks, surprise scoring, knowledge gaps |
+| Code Health Dashboard | ✅ DONE | SVG health score, risk leaderboard, metrics radar, smells list |
+| Graph Diff for PR Reviews | ✅ DONE | Snapshot comparison and set-difference for code state changes |
+| MCP Server | ✅ DONE | Model Context Protocol server for structured code queries |
+| Generate Integration Tests | 🟡 TODO | AI-powered integration test generation |
 | Automated Code Review | 🟡 TODO | PR analysis for bugs and security issues |
 | Dependency Migration Advisor | 🟡 TODO | Impact analysis for library upgrades |
 | Incident Debugging Assistant | 🟡 TODO | Trace errors to source code locations |
@@ -125,7 +199,6 @@ The following features are planned for future releases:
 | Test Impact Analysis | 🟡 TODO | Map changed files to affected tests |
 | Onboarding Assistant | 🟡 TODO | Guided tours of code architecture |
 | Framework Migration | 🟢 TODO | Convert code between languages/frameworks |
-| Architecture Smell Detection | ✅ DONE | Detect circular deps, hub anomalies, layer violations via Datalog |
 | Idempotent Analytics | ✅ DONE | Safe re-runs without duplicate facts |
 | AI Circuit Breaker | ✅ DONE | Graceful degradation on AI failures |
 
@@ -139,7 +212,7 @@ The following features are planned for future releases:
 
 ### Querying
 
-- `POST /api/v1/query` — Execute Datalog queries
+- `POST /api/v1/query` — Execute Datalog queries (any `.mg` file in `policies/` auto-registers)
 - `GET /api/v1/semantic-search` — Vector similarity search
 
 ### Graph Exploration
@@ -172,41 +245,71 @@ The following features are planned for future releases:
 ```
 gca/
 ├── cmd/                        # CLI entry points
-│   ├── ingest.go              # Ingest command
-│   ├── mcp.go                 # MCP server command
-│   ├── repl.go                # REPL command
-│   ├── root.go                # Root command
-│   └── server.go              # Server command
+│   ├── root.go                 # Root command, global flags, store creation
+│   ├── ingest.go               # Ingest command
+│   ├── analyze.go              # Post-ingest analysis command
+│   ├── mcp.go                  # MCP server command
+│   ├── repl.go                 # Interactive REPL command
+│   └── server.go               # HTTP server command
 ├── pkg/
-│   ├── config/                 # Configuration constants
-│   ├── constants.go           # Predicate constants (defines, calls, etc.)
+│   ├── agent/                  # Multi-step reasoning agent (orchestrator, planner, executor, reflector)
+│   ├── common/                 # Shared utilities (format, hash, path, query, truncate, errors)
+│   ├── config/                 # Configuration constants, tag rules, attention heuristics
+│   │   ├── constants.go       # Predicate constants (defines, calls, imports, etc.)
+│   │   ├── attention.go       # IsAttentionWorthyName heuristics
+│   │   └── tag_rules.go       # TagRule, ProjectTagConfig, pattern matching
 │   ├── datalog/               # Datalog parser & executor
+│   │   ├── parser.go           # Parse, SmartSplit
+│   │   ├── enhanced.go        # ParseEnhanced, ApplyModifiers, ApplyAggregation
+│   │   └── optimizer.go       # QueryOptimizer, predicate pushdown
+│   ├── ephemeral/             # RAM-only session store for PR reviews
+│   ├── export/                # D3 graph export
 │   ├── ingest/                # Code ingestion pipeline
-│   │   ├── extractor.go       # tree-sitter AST extraction
-│   │   ├── ingest.go          # Parallel worker orchestration
-│   │   ├── incremental.go     # Incremental updates
-│   │   ├── resolve.go         # Symbol resolution & call graph building
-│   │   └── virtual.go         # Virtual predicate enrichment
-│   ├── meb/                   # MEB store wrapper
+│   │   ├── extractor.go      # tree-sitter AST extraction (1131 lines)
+│   │   ├── ingest.go          # Parallel worker orchestration (527 lines)
+│   │   ├── resolve.go         # Symbol resolution & call graph (464 lines)
+│   │   ├── virtual.go         # Virtual predicate enrichment (394 lines)
+│   │   ├── incremental.go     # Incremental updates (521 lines)
+│   │   └── git.go             # Git diff for incremental ingest
+│   ├── llmconfig/             # Multi-LLM provider configuration
+│   ├── logger/                # Structured slog-based logging
+│   ├── mcp/                   # Model Context Protocol server (476 lines)
+│   ├── meb/                   # Unified graph + vector + document store
 │   ├── ooda/                  # OODA cognitive loop
-│   │   ├── ooda.go            # Core types (GCAFrame, GCALoop)
-│   │   ├── observer.go        # Intent classification + centrality
-│   │   ├── orienter.go        # Context retrieval
-│   │   ├── decider.go         # Prompt building
-│   │   └── verifier_actor.go  # Policy enforcement
+│   │   ├── ooda.go           # Core types (GCAFrame, GCALoop)
+│   │   ├── observer.go       # Intent classification + centrality
+│   │   ├── decider.go        # Prompt building with PromptBuilder
+│   │   ├── verifier_actor.go # Policy enforcement, GeminiActor
+│   │   └── helpers.go        # Helper utilities
+│   ├── promptbuilder/         # Shared prompt assembly (15 task builders)
+│   ├── prompts/               # Prompt template loader
+│   ├── registry/              # GenePool query registry & template store
+│   ├── repl/                  # Interactive CLI (523 lines)
+│   ├── server/                # HTTP API handlers (1409 lines in handlers.go)
+│   │   └── server.go         # Gin router, middleware, CORS, rate limiting
 │   ├── service/               # Business logic layer
-│   │   ├── ai/                # AI service (Genkit-based)
-│   │   ├── graph.go           # Graph operations
-│   │   ├── graph_xref.go      # Cross-reference analysis
-│   │   ├── centrality.go      # Graph centrality computation
-│   │   ├── pathfinder.go      # Weighted path finding
-│   │   └── clustering.go      # Graph clustering (Leiden)
-│   ├── server/                # HTTP API handlers
-│   ├── repl/                  # Interactive CLI
-│   └── mcp/                   # Model Context Protocol server
-└── internal/
-    └── manager/               # Multi-project store manager
+│   │   ├── ai/               # AI service (GeminiAdapter, intent, query_gen, synthesize)
+│   │   ├── graph.go          # Graph operations
+│   │   ├── graph_xref.go     # Cross-reference analysis (who-calls, what-calls)
+│   │   ├── graph_pathfinder.go # Weighted path finding (686 lines)
+│   │   ├── graph_queries.go  # Semantic search, cycle detection
+│   │   ├── graph_backbone.go # Backbone extraction
+│   │   ├── graph_clustering.go # Community detection, hybrid clustering
+│   │   ├── graph_hydration.go # Lazy node hydration
+│   │   ├── graph_diff.go     # Snapshot comparison for PR reviews
+│   │   ├── centrality.go     # Degree & PageRank centrality
+│   │   ├── clustering.go     # Cluster operations
+│   │   └── pathfinder.go     # Path finding with weighting
+│   └── telemetry/             # Observability wrappers
+├── internal/
+│   └── manager/               # Multi-project store manager (StoreManager, EphemeralStore)
+├── policies/                   # Datalog policy files
+│   ├── smells/               # 17 smell detection policies
+│   └── memory/               # Memory promotion rules
+└── prompts/                   # LLM prompt templates (*.prompt files)
 ```
+
+> **GCA Explorer** is the frontend React application. See [gca-fe/](https://github.com/duynguyendang/gca-fe) for the interactive graph UI.
 
 ## Installation
 
@@ -260,9 +363,34 @@ LOW_MEM=true ./gca ingest ./my-project ./data/my-project
 # > .exit
 ```
 
-### MCP Server
+## MCP Integration (Beta)
+
+GCA exposes its knowledge graph through the [Model Context Protocol](https://modelcontextprotocol.io), enabling MCP-compatible tools to query codebase structure.
+
+### Tools
+
+| Tool | What You Can Query |
+|------|-------------------|
+| `search_nodes` | Find symbols or files matching a pattern |
+| `get_outgoing_edges` | List what a symbol calls |
+| `get_incoming_edges` | List what calls a symbol |
+| `scan_facts` | Raw Datalog queries against the graph |
+| `get_clusters` | Detect logical communities (Leiden algorithm) |
+| `trace_impact_path` | Shortest path between two symbols |
+| `get_node_metadata` | Metadata for a symbol (kind, package, tags) |
+
+### Resources
+
+| URI | Description |
+|-----|-------------|
+| `gca://graph/summary` | Project statistics (fact count, etc.) |
+| `gca://files/{path}` | Source code content |
+| `gca://schema/conventions` | Architectural conventions and node types |
+
+### Usage
 
 ```bash
+# Start the MCP server (stdio mode — connect via any MCP client)
 ./gca mcp ./data/my-project
 ```
 
@@ -316,15 +444,18 @@ export LOW_MEM=true                # Low-memory mode
 
 ### Architecture Smell Detection Queries
 
-GCA includes pre-defined Datalog queries for detecting architectural problems:
+GCA ships with 17 policy files across `policies/smells/` for architecture smell detection:
 
-| Smell | Query Template | Severity |
-|-------|----------------|----------|
-| Circular Dependencies | `triples(A, "calls", B), triples(B, "calls", A), A != B` | High |
-| Hub Anomaly | `triples(File, "calls", _), triples(Caller, "calls", File), File != Caller` | Medium |
-| Layer Violation | `triples(File, "imports", Target), triples(File, "has_tag", LayerTag), triples(Target, "has_tag", "backend"), LayerTag != "backend"` | High |
-| Files with Imports | `triples(File, "imports", Pkg)` | Low |
-| Files with Definitions | `triples(File, "defines", Symbol)` | Low |
+| Smell | File | Severity |
+|-------|------|----------|
+| Circular Dependencies (direct) | `circular.mg` | High |
+| Transitive Cycles (3-step, 4-step) | `circular.mg` | High |
+| God File / God Module | `god_file.mg` | Medium |
+| Hub Anomaly | `hub.mg` | Medium |
+| Layer Violation | `layer.mg` | High |
+| Unsanitized DB Access (recursive) | `security.mg` | Critical |
+| Surprise Coupling (cross-community) | `surprise.mg` | Medium |
+| Knowledge Gaps (isolated nodes, untested hotspots) | `knowledge_gaps.mg` | Low–High |
 
 Execute via `/api/v1/query`:
 ```bash
@@ -332,6 +463,8 @@ curl -X POST "http://localhost:8080/api/v1/query?project=myproject" \
   -H "Content-Type: application/json" \
   -d '{"query":"smell_circular_direct"}'
 ```
+
+All smells contribute to composite health scoring via `policies/smells/scoring.mg` — edit the weights there, no rebuild needed.
 
 ## Performance
 

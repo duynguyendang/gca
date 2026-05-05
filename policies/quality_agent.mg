@@ -1,0 +1,1 @@
+% GCA Technical Debt & Quality Agent - GenePool Rules

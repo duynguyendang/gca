@@ -109,3 +109,134 @@ func TestD3Transformer(t *testing.T) {
 		t.Errorf("Expected 0 nodes filtered out, got %d", len(graphTest.Nodes))
 	}
 }
+
+func TestD3LinkConfidence_AST(t *testing.T) {
+	cfg := &store.Config{
+		InMemory:       true,
+		DataDir:        "",
+		DictDir:        "",
+		BlockCacheSize: 10 << 20,
+		IndexCacheSize: 10 << 20,
+		LRUCacheSize:   1000,
+	}
+	s, err := meb.NewMEBStore(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer s.Close()
+
+	transformer := NewD3Transformer(s)
+	results := []map[string]any{
+		{"?s": "/pkg/a.go:FuncA", "?p": "calls", "?o": "/pkg/b.go:FuncB", "_source": "ast"},
+	}
+	graph, err := transformer.Transform(context.Background(), `triples(?s, ?p, ?o)`, results)
+	if err != nil {
+		t.Fatalf("Transform failed: %v", err)
+	}
+	if len(graph.Links) != 1 {
+		t.Fatalf("Expected 1 link, got %d", len(graph.Links))
+	}
+	link := graph.Links[0]
+	if link.Confidence != 0.95 {
+		t.Errorf("Expected Confidence 0.95 for ast, got %f", link.Confidence)
+	}
+	if link.ConfidenceTier != "EXTRACTED" {
+		t.Errorf("Expected ConfidenceTier EXTRACTED, got %s", link.ConfidenceTier)
+	}
+}
+
+func TestD3LinkConfidence_Virtual(t *testing.T) {
+	cfg := &store.Config{
+		InMemory:       true,
+		DataDir:        "",
+		DictDir:        "",
+		BlockCacheSize: 10 << 20,
+		IndexCacheSize: 10 << 20,
+		LRUCacheSize:   1000,
+	}
+	s, err := meb.NewMEBStore(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer s.Close()
+
+	transformer := NewD3Transformer(s)
+	results := []map[string]any{
+		{"?s": "/pkg/a.go:FuncA", "?p": "calls", "?o": "/pkg/b.go:FuncB", "_source": "virtual"},
+	}
+	graph, err := transformer.Transform(context.Background(), `triples(?s, ?p, ?o)`, results)
+	if err != nil {
+		t.Fatalf("Transform failed: %v", err)
+	}
+	link := graph.Links[0]
+	if link.Confidence != 0.75 {
+		t.Errorf("Expected Confidence 0.75 for virtual, got %f", link.Confidence)
+	}
+	if link.ConfidenceTier != "INFERRED" {
+		t.Errorf("Expected ConfidenceTier INFERRED, got %s", link.ConfidenceTier)
+	}
+}
+
+func TestD3LinkConfidence_Inference(t *testing.T) {
+	cfg := &store.Config{
+		InMemory:       true,
+		DataDir:        "",
+		DictDir:        "",
+		BlockCacheSize: 10 << 20,
+		IndexCacheSize: 10 << 20,
+		LRUCacheSize:   1000,
+	}
+	s, err := meb.NewMEBStore(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer s.Close()
+
+	transformer := NewD3Transformer(s)
+	results := []map[string]any{
+		{"?s": "/pkg/a.go:FuncA", "?p": "calls", "?o": "/pkg/b.go:FuncB", "_source": "inference"},
+	}
+	graph, err := transformer.Transform(context.Background(), `triples(?s, ?p, ?o)`, results)
+	if err != nil {
+		t.Fatalf("Transform failed: %v", err)
+	}
+	link := graph.Links[0]
+	if link.Confidence != 0.5 {
+		t.Errorf("Expected Confidence 0.5 for inference, got %f", link.Confidence)
+	}
+	if link.ConfidenceTier != "AMBIGUOUS" {
+		t.Errorf("Expected ConfidenceTier AMBIGUOUS, got %s", link.ConfidenceTier)
+	}
+}
+
+func TestD3LinkConfidence_Missing(t *testing.T) {
+	cfg := &store.Config{
+		InMemory:       true,
+		DataDir:        "",
+		DictDir:        "",
+		BlockCacheSize: 10 << 20,
+		IndexCacheSize: 10 << 20,
+		LRUCacheSize:   1000,
+	}
+	s, err := meb.NewMEBStore(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer s.Close()
+
+	transformer := NewD3Transformer(s)
+	results := []map[string]any{
+		{"?s": "/pkg/a.go:FuncA", "?p": "calls", "?o": "/pkg/b.go:FuncB"},
+	}
+	graph, err := transformer.Transform(context.Background(), `triples(?s, ?p, ?o)`, results)
+	if err != nil {
+		t.Fatalf("Transform failed: %v", err)
+	}
+	link := graph.Links[0]
+	if link.Confidence != 0.95 {
+		t.Errorf("Expected default Confidence 0.95, got %f", link.Confidence)
+	}
+	if link.ConfidenceTier != "EXTRACTED" {
+		t.Errorf("Expected default ConfidenceTier EXTRACTED, got %s", link.ConfidenceTier)
+	}
+}

@@ -26,11 +26,6 @@ const (
 	MaxFileDepthLimit     = 2
 )
 
-// Cache configuration
-const (
-	CacheTTLSeconds = 300 // 5 minutes default cache TTL
-)
-
 // Graph clustering thresholds
 const (
 	MinNodesForClustering = 500
@@ -88,7 +83,7 @@ const (
 
 // Policy and GenePool paths
 const (
-	GenePoolPath = "policies/queries.dl" // Single file mode
+	GenePoolPath = "policies/init.dl" // Seed manifest — single source of truth
 	PolicyPath   = "policies"
 )
 
@@ -101,9 +96,11 @@ const (
 
 // Architectural tag constants for security smell detection
 const (
-	TagPublicAPI = "public_api"
-	TagSanitizer = "sanitizer"
-	TagDatabase  = "database"
+	TagPublicAPI  = "public_api"
+	TagSanitizer  = "sanitizer"
+	TagDatabase   = "database"
+	TagTestFile   = "test_file"
+	TagTestSymbol = "test_symbol"
 )
 
 // Additional predicates
@@ -128,6 +125,7 @@ const (
 	PredicateCalledBy        = "called_by"
 	PredicateHasName         = "has_name"
 	PredicateHasSecurityRisk = "has_security_risk"
+	PredicateLastCommitSHA   = "last_commit_sha"
 )
 
 // Centrality configuration
@@ -142,11 +140,28 @@ const (
 	CentralityBoostInterface = 1.3 // Boost for interface-like patterns
 )
 
+// Hub and analysis thresholds
+const (
+	HubClassificationThreshold    = 5  // Min callers to classify as hub
+	CentralityHighConnectThreshold  = 10 // Min calls to flag high-connectivity symbol
+)
+
 // Virtual Attention Sink configuration
 const (
 	VirtualAttentionThreshold = 0.05  // Minimum centrality score (0-1) to include symbol
 	MaxAttentionSymbols       = 8     // Maximum symbols to include in prompt context
 	StickyOnlyMode            = false // If true, query only GlobalTopicID (skip Window)
+)
+
+// Smell weight constants — must match policies/smells/scoring.mg
+const (
+	SmellWeightCircularDependency = 10
+	SmellWeightCircularTransitive  = 15
+	SmellWeightLayerViolation     = 8
+	SmellWeightGodFile            = 6
+	SmellWeightHubAnomaly         = 4
+	SmellWeightUnsanitizedDB      = 50
+	SmellWeightDefault            = 2
 )
 
 // SkippedDirectories lists directory names excluded from filesystem walks during ingestion.

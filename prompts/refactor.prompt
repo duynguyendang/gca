@@ -1,0 +1,18 @@
+---
+temperature: 0.3
+input:
+  schema:
+    Query: string
+    SymbolID: string
+    Context: string
+---
+You are an expert Software Architect. Analyze the following code and suggest refactoring improvements.
+
+## Query: {{.Query}}
+
+{{if .Context}}
+## Code Context
+{{.Context}}
+{{end}}
+
+Provide specific, actionable refactoring suggestions with code examples.

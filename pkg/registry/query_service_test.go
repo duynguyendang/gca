@@ -20,7 +20,7 @@ func TestQueryRegistry_LoadQueriesFromGenePool(t *testing.T) {
 	registry := NewQueryRegistry(client.Engine())
 
 	// Load queries from GenePool
-	err = registry.LoadQueriesFromGenePool(context.Background(), "../../policies/queries.dl")
+	err = registry.LoadQueriesFromGenePool(context.Background(), "../../policies/init.dl")
 	if err != nil {
 		t.Logf("Warning: Failed to load queries from GenePool (file may not exist): %v", err)
 		// This is expected in test environments where the policy file doesn't exist
@@ -52,7 +52,7 @@ func TestQueryRegistry_GetQuery(t *testing.T) {
 	registry := NewQueryRegistry(client.Engine())
 
 	// Load queries from GenePool
-	err = registry.LoadQueriesFromGenePool(context.Background(), "../../policies/queries.dl")
+	err = registry.LoadQueriesFromGenePool(context.Background(), "../../policies/init.dl")
 	if err != nil {
 		t.Skip("Skipping test: GenePool policies not available")
 		return
@@ -90,7 +90,7 @@ func TestQueryRegistry_ExecuteQuery(t *testing.T) {
 	registry := NewQueryRegistry(client.Engine())
 
 	// Load queries from GenePool
-	err = registry.LoadQueriesFromGenePool(context.Background(), "../../policies/queries.dl")
+	err = registry.LoadQueriesFromGenePool(context.Background(), "../../policies/init.dl")
 	if err != nil {
 		t.Skip("Skipping test: GenePool policies not available")
 		return
@@ -123,7 +123,7 @@ func TestQueryRegistry_ListQueriesByCategory(t *testing.T) {
 	registry := NewQueryRegistry(client.Engine())
 
 	// Load queries from GenePool
-	err = registry.LoadQueriesFromGenePool(context.Background(), "../../policies/queries.dl")
+	err = registry.LoadQueriesFromGenePool(context.Background(), "../../policies/init.dl")
 	if err != nil {
 		t.Skip("Skipping test: GenePool policies not available")
 		return
