@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -60,63 +59,27 @@ func NewQueryRegistry(engine core.Evaluator) *QueryRegistry {
 	}
 }
 
-// LoadQueriesFromGenePool loads query definitions from Datalog policy files or directory
-func (r *QueryRegistry) LoadQueriesFromGenePool(ctx context.Context, policyPath string) error {
+// LoadQueriesFromGenePool loads query definitions from init.dl manifest
+func (r *QueryRegistry) LoadQueriesFromGenePool(ctx context.Context, initPath string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	info, err := os.Stat(policyPath)
+	manifest, err := LoadManifest(initPath)
 	if err != nil {
-		return fmt.Errorf("failed to stat policy path: %w", err)
+		return fmt.Errorf("failed to load init.dl: %w", err)
 	}
 
-	if info.IsDir() {
-		// Load all .dl files from directory at init time
-		entries, err := os.ReadDir(policyPath)
+	for _, filePath := range manifest.FilePaths {
+		content, err := os.ReadFile(filePath)
 		if err != nil {
-			return fmt.Errorf("failed to read policy directory: %w", err)
-		}
-
-		// Sort for deterministic loading order
-		sortEntries(entries)
-
-		loadedFiles := []string{}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".dl") {
-				continue
-			}
-			filePath := filepath.Join(policyPath, entry.Name())
-			content, err := os.ReadFile(filePath)
-			if err != nil {
-				return fmt.Errorf("failed to read %s: %w", entry.Name(), err)
-			}
-			if err := r.engine.LoadPolicy(ctx, string(content)); err != nil {
-				return fmt.Errorf("failed to load %s: %w", entry.Name(), err)
-			}
-			loadedFiles = append(loadedFiles, entry.Name())
-		}
-
-		// Also load subdirectories recursively
-		for _, entry := range entries {
-			if entry.IsDir() {
-				subPath := filepath.Join(policyPath, entry.Name())
-				if err := r.loadDlsFromDir(ctx, subPath, &loadedFiles); err != nil {
-					return err
-				}
-			}
-		}
-
-		log.Printf("Loaded %d policy files from %s", len(loadedFiles), policyPath)
-	} else {
-		// Single file mode (backward compatible)
-		content, err := os.ReadFile(policyPath)
-		if err != nil {
-			return fmt.Errorf("failed to read policy file: %w", err)
+			return fmt.Errorf("failed to read %s: %w", filePath, err)
 		}
 		if err := r.engine.LoadPolicy(ctx, string(content)); err != nil {
-			return fmt.Errorf("failed to load query policies: %w", err)
+			return fmt.Errorf("failed to load %s: %w", filePath, err)
 		}
 	}
+
+	log.Printf("Loaded %d policy files from init.dl manifest", len(manifest.FilePaths))
 
 	// Extract query metadata and build definitions
 	// Query format: query_metadata("name", "description")
@@ -216,38 +179,8 @@ func (r *QueryRegistry) LoadQueriesFromGenePool(ctx context.Context, policyPath 
 	return nil
 }
 
-// loadDlsFromDir recursively loads all .dl files from a directory
-func (r *QueryRegistry) loadDlsFromDir(ctx context.Context, dirPath string, loadedFiles *[]string) error {
-	entries, err := os.ReadDir(dirPath)
-	if err != nil {
-		return fmt.Errorf("failed to read directory %s: %w", dirPath, err)
-	}
-
-	// Sort for deterministic loading order
-	sortEntries(entries)
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			subPath := filepath.Join(dirPath, entry.Name())
-			if err := r.loadDlsFromDir(ctx, subPath, loadedFiles); err != nil {
-				return err
-			}
-		} else if strings.HasSuffix(entry.Name(), ".dl") {
-			filePath := filepath.Join(dirPath, entry.Name())
-			content, err := os.ReadFile(filePath)
-			if err != nil {
-				return fmt.Errorf("failed to read %s: %w", entry.Name(), err)
-			}
-			if err := r.engine.LoadPolicy(ctx, string(content)); err != nil {
-				return fmt.Errorf("failed to load %s: %w", entry.Name(), err)
-			}
-			*loadedFiles = append(*loadedFiles, entry.Name())
-		}
-	}
-	return nil
-}
-
 // sortEntries sorts directory entries by name for deterministic loading
+// Kept for test use (TestSortEntries in query_registry_test.go)
 func sortEntries(entries []os.DirEntry) {
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Name() < entries[j].Name()

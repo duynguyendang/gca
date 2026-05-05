@@ -1,0 +1,1 @@
+% GCA Impact Analysis Agent - GenePool Rules

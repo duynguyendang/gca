@@ -1,0 +1,1 @@
+% GCA Performance & Scalability Agent - GenePool Rules

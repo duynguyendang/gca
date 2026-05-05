@@ -9,14 +9,14 @@ import (
 
 func TestSmellPolicyFiles_Exist(t *testing.T) {
 	smellFiles := []string{
-		"surprise.dl",
-		"knowledge_gaps.dl",
-		"god_file.dl",
-		"hub.dl",
-		"circular.dl",
-		"layer.dl",
-		"security.dl",
-		"scoring.dl",
+		"surprise.mg",
+		"knowledge_gaps.mg",
+		"god_file.mg",
+		"hub.mg",
+		"circular.mg",
+		"layer.mg",
+		"security.mg",
+		"scoring.mg",
 	}
 	policyDir := filepath.Join("..", "..", "policies", "smells")
 
@@ -52,7 +52,7 @@ func TestSmellPolicyFiles_DefineQueryMetadata(t *testing.T) {
 	}
 
 	for _, entry := range files {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".dl") {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".mg") {
 			continue
 		}
 		content, err := os.ReadFile(filepath.Join(policyDir, entry.Name()))
@@ -67,9 +67,9 @@ func TestSmellPolicyFiles_DefineQueryMetadata(t *testing.T) {
 }
 
 func TestSmellPolicyFiles_SurpriseHasExpectedQueries(t *testing.T) {
-	content, err := os.ReadFile(filepath.Join("..", "..", "policies", "smells", "surprise.dl"))
+	content, err := os.ReadFile(filepath.Join("..", "..", "policies", "smells", "surprise.mg"))
 	if err != nil {
-		t.Skipf("surprise.dl not found: %v", err)
+		t.Skipf("surprise.mg not found: %v", err)
 	}
 	s := string(content)
 	expectedQueries := []string{
@@ -83,15 +83,15 @@ func TestSmellPolicyFiles_SurpriseHasExpectedQueries(t *testing.T) {
 	}
 	for _, q := range expectedQueries {
 		if !strings.Contains(s, "query_metadata(\""+q+"\"") {
-			t.Errorf("surprise.dl missing query_metadata for %q", q)
+			t.Errorf("surprise.mg missing query_metadata for %q", q)
 		}
 	}
 }
 
 func TestSmellPolicyFiles_KnowledgeGapsHasExpectedQueries(t *testing.T) {
-	content, err := os.ReadFile(filepath.Join("..", "..", "policies", "smells", "knowledge_gaps.dl"))
+	content, err := os.ReadFile(filepath.Join("..", "..", "policies", "smells", "knowledge_gaps.mg"))
 	if err != nil {
-		t.Skipf("knowledge_gaps.dl not found: %v", err)
+		t.Skipf("knowledge_gaps.mg not found: %v", err)
 	}
 	s := string(content)
 	expectedQueries := []string{
@@ -104,7 +104,7 @@ func TestSmellPolicyFiles_KnowledgeGapsHasExpectedQueries(t *testing.T) {
 	}
 	for _, q := range expectedQueries {
 		if !strings.Contains(s, "query_metadata(\""+q+"\"") {
-			t.Errorf("knowledge_gaps.dl missing query_metadata for %q", q)
+			t.Errorf("knowledge_gaps.mg missing query_metadata for %q", q)
 		}
 	}
 }

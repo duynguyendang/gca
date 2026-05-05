@@ -83,7 +83,7 @@ const (
 
 // Policy and GenePool paths
 const (
-	GenePoolPath = "policies/queries.dl" // Single file mode
+	GenePoolPath = "policies/init.dl" // Seed manifest — single source of truth
 	PolicyPath   = "policies"
 )
 
@@ -153,7 +153,7 @@ const (
 	StickyOnlyMode            = false // If true, query only GlobalTopicID (skip Window)
 )
 
-// Smell weight constants — must match policies/smells/scoring.dl
+// Smell weight constants — must match policies/smells/scoring.mg
 const (
 	SmellWeightCircularDependency = 10
 	SmellWeightCircularTransitive  = 15

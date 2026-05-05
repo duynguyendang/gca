@@ -209,9 +209,19 @@ func (a *Analyzer) clearAnalyticalData(ctx context.Context, projectID string) er
 
 	predicatesToClear := []string{
 		"has_smell",
+		"has_smell_type",
+		"has_smell_category",
+		"has_smell_severity",
 		"has_hub_score",
 		"is_entry_point",
 		"has_centrality",
+		"has_in_degree",
+		"has_out_degree",
+		"belongs_to_cluster",
+		"has_surprise",
+		"has_knowledge_gap",
+		"has_category",
+		"has_severity",
 	}
 
 	for _, pred := range predicatesToClear {
@@ -356,12 +366,15 @@ func (a *Analyzer) RunPostIngestAnalysis(ctx context.Context, projectID string) 
 		logger.Warn("Failed to clear old analytical data", "error", err)
 	}
 
-	if err := a.executeRulesFromTemplates(ctx, projectID); err != nil {
-		logger.Warn("Template rule execution failed", "error", err)
-	}
-
+	// computeCentrality MUST run before executeRulesFromTemplates.
+	// Templates like surprise.mg and knowledge_gaps.mg query facts written by
+	// computeCentrality (has_in_degree, has_out_degree, belongs_to_cluster).
 	if err := a.computeCentrality(ctx, projectID); err != nil {
 		logger.Warn("Centrality computation failed", "error", err)
+	}
+
+	if err := a.executeRulesFromTemplates(ctx, projectID); err != nil {
+		logger.Warn("Template rule execution failed", "error", err)
 	}
 
 	if err := a.setAnalyticsVersion(analyticalStore); err != nil {
@@ -700,8 +713,8 @@ func detectCommunitiesLeidenLocal(nodes []clusterNode) *clusterResult {
 }
 
 // detectSmells runs smell detection queries and writes results to Analytical Store.
-// Smell templates are loaded from the TemplateStore (backed by policies/smells/*.dl).
-// This makes smell detection fully Datalog-driven - adding new smells requires only .dl files.
+// Smell templates are loaded from the TemplateStore (backed by policies/smells/*.mg).
+// This makes smell detection fully Datalog-driven - adding new smells requires only .mg files.
 func (a *Analyzer) detectSmells(ctx context.Context, projectID string) error {
 	sourceStore, err := a.storeManager.GetSourceStore(projectID)
 	if err != nil {

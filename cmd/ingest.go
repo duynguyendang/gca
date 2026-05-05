@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/duynguyendang/gca/internal/manager"
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/ingest"
 	"github.com/duynguyendang/gca/pkg/registry"
 	"github.com/spf13/cobra"
@@ -109,7 +110,7 @@ Arguments:
 			defer storeManager.CloseAll()
 
 			templateStore := registry.NewTemplateStore(storeManager)
-			if err := templateStore.LoadPolicyFiles(ctx, "policies"); err != nil {
+			if err := templateStore.LoadPolicyFiles(ctx, config.GenePoolPath); err != nil {
 				log.Printf("Warning: failed to load policy files: %v", err)
 			}
 
