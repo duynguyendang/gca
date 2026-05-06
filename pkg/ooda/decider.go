@@ -75,9 +75,9 @@ func (d *GraphDecider) Decide(ctx context.Context, frame *GCAFrame) error {
 
 func (d *GraphDecider) buildPrompt(ctx context.Context, store *meb.MEBStore, frame *GCAFrame) (string, error) {
 	data := map[string]interface{}{
-		"input":    frame.Input,
-		"symbolID": frame.SymbolID,
-		"data":     frame.Data,
+		"Query":    frame.Input,
+		"SymbolID": frame.SymbolID,
+		"Data":     frame.Data,
 	}
 	return promptbuilder.BuildPrompt(string(frame.Task), ctx, store, d.prompts, data)
 }

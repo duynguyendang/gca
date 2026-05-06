@@ -195,6 +195,17 @@ func (s *GraphService) enrichNodes(ctx context.Context, store *meb.MEBStore, gra
 			}
 		}
 	}
+
+	for fact := range store.ScanContext(ctx, "", "belongs_to_cluster", "") {
+		if clusterStr, ok := fact.Object.(string); ok {
+			if idx := nodeIndex(graph.Nodes, fact.Subject); idx >= 0 {
+				if graph.Nodes[idx].Metadata == nil {
+					graph.Nodes[idx].Metadata = make(map[string]string)
+				}
+				graph.Nodes[idx].Metadata["cluster_id"] = clusterStr
+			}
+		}
+	}
 	return nil
 }
 
@@ -241,4 +252,13 @@ func (s *GraphService) mapChildren(hydrated []HydratedSymbol) []export.D3Node {
 		}
 	}
 	return nodes
+}
+
+func nodeIndex(nodes []export.D3Node, id string) int {
+	for i, n := range nodes {
+		if n.ID == id {
+			return i
+		}
+	}
+	return -1
 }

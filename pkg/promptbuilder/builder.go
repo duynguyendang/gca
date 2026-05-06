@@ -23,12 +23,12 @@ func BuildDatalogPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet,
 }
 
 func BuildChatPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, data interface{}) (string, error) {
-	if ps.Chat != nil {
-		m, ok := data.(map[string]interface{})
-		if !ok {
-			return ps.Chat.Execute(data)
-		}
+	var m map[string]interface{}
+	if md, ok := data.(map[string]interface{}); ok {
+		m = md
+	}
 
+	if ps.Chat != nil {
 		var contextBuilder strings.Builder
 		contextBuilder.WriteString("## Context\n")
 
@@ -58,14 +58,33 @@ func BuildChatPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, da
 			}
 		}
 
+		var query string
+		if q := m["Query"]; q != nil {
+			query = fmt.Sprintf("%v", q)
+		} else if q := m["input"]; q != nil {
+			query = fmt.Sprintf("%v", q)
+		}
+
 		templateData := map[string]interface{}{
-			"Query":   m["Query"],
+			"Query":   query,
 			"Context": contextBuilder.String(),
 		}
 		return ps.Chat.Execute(templateData)
 	}
+
 	var sb strings.Builder
 	sb.WriteString("Chat analysis:\n")
+	if m != nil {
+		var query string
+		if q := m["Query"]; q != nil {
+			query = fmt.Sprintf("%v", q)
+		} else if q := m["input"]; q != nil {
+			query = fmt.Sprintf("%v", q)
+		}
+		if query != "" {
+			sb.WriteString(fmt.Sprintf("Query: %s\n\n", query))
+		}
+	}
 	sb.WriteString(FormatNodesSimple(data, 20))
 	return sb.String(), nil
 }

@@ -193,6 +193,10 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/api/v1/analysis/surprise", s.handleSurpriseAnalysis)
 	s.router.GET("/api/v1/analysis/knowledge-gaps", s.handleKnowledgeGaps)
 	s.router.POST("/api/v1/graph/diff", s.handleGraphDiff)
+
+	// Snapshot Endpoints
+	s.router.POST("/api/v1/graph/snapshots", s.handleCreateSnapshot)
+	s.router.GET("/api/v1/graph/snapshots", s.handleListSnapshots)
 }
 
 // AI Handler

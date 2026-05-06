@@ -3,8 +3,11 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/duynguyendang/gca/pkg/config"
@@ -1837,4 +1840,113 @@ func (s *Server) handleGraphDiff(c *gin.Context) {
 
 	diff := diffService.DiffSnapshots(beforeSnap, afterSnap)
 	c.JSON(http.StatusOK, diff)
+}
+
+type SnapshotInfo struct {
+	ID        string    `json:"id"`
+	Path      string    `json:"path"`
+	Timestamp time.Time `json:"timestamp"`
+	NodeCount int       `json:"node_count"`
+	EdgeCount int       `json:"edge_count"`
+}
+
+type CreateSnapshotRequest struct {
+	ProjectID string `json:"project_id" binding:"required"`
+	Label     string `json:"label"`
+}
+
+func (s *Server) handleCreateSnapshot(c *gin.Context) {
+	var req CreateSnapshotRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "details": err.Error()})
+		return
+	}
+
+	if err := ValidateProjectID(req.ProjectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
+		return
+	}
+
+	store, err := s.manager.GetStore(req.ProjectID)
+	if err != nil {
+		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to get store", err))
+		return
+	}
+
+	diffService := service.NewGraphDiffService()
+	snap, err := diffService.TakeSnapshot(c.Request.Context(), store, req.ProjectID)
+	if err != nil {
+		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to take snapshot", err))
+		return
+	}
+
+	snapshotsDir := filepath.Join(s.sourceDir, req.ProjectID, "snapshots")
+	if err := os.MkdirAll(snapshotsDir, 0755); err != nil {
+		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to create snapshots directory", err))
+		return
+	}
+
+	snapshotID := fmt.Sprintf("snap_%d", time.Now().UnixNano())
+	if req.Label != "" {
+		snapshotID = fmt.Sprintf("snap_%s_%d", req.Label, time.Now().UnixNano())
+	}
+	snapshotPath := filepath.Join(snapshotsDir, snapshotID+".json")
+
+	if err := diffService.SaveSnapshot(snap, snapshotPath); err != nil {
+		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to save snapshot", err))
+		return
+	}
+
+	c.JSON(http.StatusCreated, SnapshotInfo{
+		ID:        snapshotID,
+		Path:      snapshotPath,
+		Timestamp: snap.Timestamp,
+		NodeCount: snap.NodeCount,
+		EdgeCount: snap.EdgeCount,
+	})
+}
+
+func (s *Server) handleListSnapshots(c *gin.Context) {
+	projectID := c.Query("project")
+	if err := ValidateProjectID(projectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
+		return
+	}
+
+	snapshotsDir := filepath.Join(s.sourceDir, projectID, "snapshots")
+	entries, err := os.ReadDir(snapshotsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			c.JSON(http.StatusOK, []SnapshotInfo{})
+			return
+		}
+		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to read snapshots directory", err))
+		return
+	}
+
+	diffService := service.NewGraphDiffService()
+	snapshots := make([]SnapshotInfo, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		snapPath := filepath.Join(snapshotsDir, entry.Name())
+		snap, err := diffService.LoadSnapshot(snapPath)
+		if err != nil {
+			continue
+		}
+		id := entry.Name()
+		if len(id) > 5 {
+			id = id[:len(id)-5]
+		}
+		snapshots = append(snapshots, SnapshotInfo{
+			ID:        id,
+			Path:      snapPath,
+			Timestamp: snap.Timestamp,
+			NodeCount: snap.NodeCount,
+			EdgeCount: snap.EdgeCount,
+		})
+	}
+
+	c.JSON(http.StatusOK, snapshots)
 }

@@ -589,15 +589,18 @@ func (a *Analyzer) writeCommunityFacts(ctx context.Context, sourceStore, analyti
 
 	factCount := 0
 	for nodeID, clusterID := range result.NodeCluster {
-		fact := meb.Fact{
+		clusterFact := meb.Fact{
 			Subject:   nodeID,
 			Predicate: "belongs_to_cluster",
 			Object:    fmt.Sprintf("cluster_%d", clusterID),
 		}
-		if err := analyticalStore.AddFact(fact); err != nil {
-			logger.Warn("Failed to add cluster fact", "node", nodeID, "error", err)
+		if err := sourceStore.AddFact(clusterFact); err != nil {
+			logger.Warn("Failed to add cluster fact to source store", "node", nodeID, "error", err)
 		} else {
 			factCount++
+		}
+		if err := analyticalStore.AddFact(clusterFact); err != nil {
+			logger.Warn("Failed to add cluster fact to analytical store", "node", nodeID, "error", err)
 		}
 	}
 
