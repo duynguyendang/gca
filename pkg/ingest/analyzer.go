@@ -89,6 +89,10 @@ func (a *Analyzer) RunStaticAnalysis(ctx context.Context, projectID string) erro
 		logger.Warn("Failed to clear old analytical data", "error", err)
 	}
 
+	if err := a.computeCentrality(ctx, projectID); err != nil {
+		logger.Warn("Centrality computation failed", "error", err)
+	}
+
 	if err := a.executeRulesFromTemplates(ctx, projectID); err != nil {
 		logger.Warn("Template rule execution failed", "error", err)
 	}
@@ -164,6 +168,14 @@ func (a *Analyzer) emitFactFromTemplate(store *meb.MEBStore, result map[string]a
 	} else if s, ok := result["A"].(string); ok {
 		subject = s
 	} else if s, ok := result["Subject"].(string); ok {
+		subject = s
+	} else if s, ok := result["Source"].(string); ok {
+		subject = s
+	} else if s, ok := result["Target"].(string); ok {
+		subject = s
+	} else if s, ok := result["Symbol"].(string); ok {
+		subject = s
+	} else if s, ok := result["Cluster"].(string); ok {
 		subject = s
 	}
 

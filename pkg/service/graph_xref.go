@@ -102,10 +102,13 @@ func (s *GraphService) GetWhoCalls(ctx context.Context, projectID, symbolID stri
 		}
 
 		graph.Links = append(graph.Links, export.D3Link{
-			Source:   caller,
-			Target:   symbolID,
-			Relation: config.PredicateCalledBy,
-			Type:     "backward",
+			Source:             caller,
+			Target:              symbolID,
+			Relation:            config.PredicateCalledBy,
+			Type:                "backward",
+			Confidence:          0.95,
+			ConfidenceTier:      "EXTRACTED",
+			SourceProvenance:    "ast",
 		})
 	}
 
@@ -160,10 +163,13 @@ func (s *GraphService) GetWhatCalls(ctx context.Context, projectID, symbolID str
 		}
 
 		graph.Links = append(graph.Links, export.D3Link{
-			Source:   symbolID,
-			Target:   callee,
-			Relation: config.PredicateCalls,
-			Type:     "forward",
+			Source:             symbolID,
+			Target:              callee,
+			Relation:            config.PredicateCalls,
+			Type:                "forward",
+			Confidence:          0.95,
+			ConfidenceTier:      "EXTRACTED",
+			SourceProvenance:    "ast",
 		})
 	}
 
@@ -292,10 +298,13 @@ func (s *GraphService) GetWhoCallsFocusedGraph(ctx context.Context, projectID, s
 		}
 
 		graph.Links = append(graph.Links, export.D3Link{
-			Source:   caller,
-			Target:   symbolID,
-			Relation: config.PredicateCalledBy,
-			Type:     "backward",
+			Source:             caller,
+			Target:              symbolID,
+			Relation:            config.PredicateCalledBy,
+			Type:                "backward",
+			Confidence:          0.95,
+			ConfidenceTier:      "EXTRACTED",
+			SourceProvenance:    "ast",
 		})
 	}
 
@@ -364,10 +373,13 @@ func (s *GraphService) GetWhatCallsFocusedGraph(ctx context.Context, projectID, 
 		}
 
 		graph.Links = append(graph.Links, export.D3Link{
-			Source:   symbolID,
-			Target:   callee,
-			Relation: config.PredicateCalls,
-			Type:     "forward",
+			Source:             symbolID,
+			Target:              callee,
+			Relation:            config.PredicateCalls,
+			Type:                "forward",
+			Confidence:          0.95,
+			ConfidenceTier:      "EXTRACTED",
+			SourceProvenance:    "ast",
 		})
 	}
 

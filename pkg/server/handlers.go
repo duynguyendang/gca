@@ -12,6 +12,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/export"
+	"github.com/duynguyendang/gca/pkg/ingest"
 	"github.com/duynguyendang/gca/pkg/logger"
 	mebpkg "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/service"
@@ -1949,4 +1950,50 @@ func (s *Server) handleListSnapshots(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, snapshots)
+}
+
+type IncrementalIngestRequest struct {
+	ProjectID  string `json:"project_id" binding:"required"`
+	SourceDir  string `json:"source_dir" binding:"required"`
+	FromCommit string `json:"from_commit"`
+	ToCommit   string `json:"to_commit"`
+	SkipEmbed  bool   `json:"skip_embed"`
+}
+
+func (s *Server) handleIncrementalIngest(c *gin.Context) {
+	var req IncrementalIngestRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "details": err.Error()})
+		return
+	}
+
+	if err := ValidateProjectID(req.ProjectID); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
+		return
+	}
+
+	store, err := s.manager.GetStore(req.ProjectID)
+	if err != nil {
+		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to get store", err))
+		return
+	}
+
+	opts := &ingest.IngestOptions{
+		SkipEmbeddings: req.SkipEmbed,
+		FromCommit:     req.FromCommit,
+		ToCommit:       req.ToCommit,
+	}
+
+	state := ingest.NewIngestState()
+	if err := ingest.RunIncrementalWithOptions(store, req.ProjectID, req.SourceDir, state, opts); err != nil {
+		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to run incremental ingest", err))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"project_id":  req.ProjectID,
+		"status":     "completed",
+		"symbols":    len(state.SymbolTable),
+		"files":      len(state.FileIndex),
+	})
 }

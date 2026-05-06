@@ -197,6 +197,9 @@ func (s *Server) setupRoutes() {
 	// Snapshot Endpoints
 	s.router.POST("/api/v1/graph/snapshots", s.handleCreateSnapshot)
 	s.router.GET("/api/v1/graph/snapshots", s.handleListSnapshots)
+
+	// Ingest Endpoints
+	s.router.POST("/api/v1/ingest/incremental", s.handleIncrementalIngest)
 }
 
 // AI Handler
