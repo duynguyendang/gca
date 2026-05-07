@@ -59,14 +59,14 @@ func NewQueryRegistry(engine core.Evaluator) *QueryRegistry {
 	}
 }
 
-// LoadQueriesFromGenePool loads query definitions from init.dl manifest
+// LoadQueriesFromGenePool loads query definitions from init.mg manifest
 func (r *QueryRegistry) LoadQueriesFromGenePool(ctx context.Context, initPath string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	manifest, err := LoadManifest(initPath)
 	if err != nil {
-		return fmt.Errorf("failed to load init.dl: %w", err)
+		return fmt.Errorf("failed to load init.mg: %w", err)
 	}
 
 	for _, filePath := range manifest.FilePaths {
@@ -79,7 +79,7 @@ func (r *QueryRegistry) LoadQueriesFromGenePool(ctx context.Context, initPath st
 		}
 	}
 
-	log.Printf("Loaded %d policy files from init.dl manifest", len(manifest.FilePaths))
+	log.Printf("Loaded %d policy files from init.mg manifest", len(manifest.FilePaths))
 
 	// Extract query metadata and build definitions
 	// Query format: query_metadata("name", "description")

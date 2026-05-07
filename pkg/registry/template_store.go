@@ -30,7 +30,7 @@ func NewTemplateStore(storeManager *manager.StoreManager) *TemplateStore {
 	}
 }
 
-// LoadPolicyFiles parses init.dl manifest and stores templates as triples.
+// LoadPolicyFiles parses init.mg manifest and stores templates as triples.
 func (ts *TemplateStore) LoadPolicyFiles(ctx context.Context, initPath string) error {
 	store, err := ts.storeManager.GetAnalyticalStore("")
 	if err != nil {
@@ -39,7 +39,7 @@ func (ts *TemplateStore) LoadPolicyFiles(ctx context.Context, initPath string) e
 
 	manifest, err := LoadManifest(initPath)
 	if err != nil {
-		return fmt.Errorf("failed to load init.dl: %w", err)
+		return fmt.Errorf("failed to load init.mg: %w", err)
 	}
 
 	var templatesLoaded int
@@ -61,7 +61,7 @@ func (ts *TemplateStore) LoadPolicyFiles(ctx context.Context, initPath string) e
 		}
 	}
 
-	log.Printf("Loaded %d templates from init.dl manifest", templatesLoaded)
+	log.Printf("Loaded %d templates from init.mg manifest", templatesLoaded)
 	return nil
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/ingest"
 	"github.com/duynguyendang/gca/pkg/logger"
 	mebpkg "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/ooda"
 	"github.com/duynguyendang/gca/pkg/service"
 	"github.com/duynguyendang/gca/pkg/service/ai"
 	"github.com/gin-gonic/gin"
@@ -1318,9 +1319,25 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 		return
 	}
 
-	// Build file -> smells mapping and compute per-file scores.
+	// Build file -> smells mapping and pre-computed health debt.
 	fileSmells := make(map[string][]string)
 	fileHubScore := make(map[string]int)
+	fileDebt := make(map[string]int)
+
+	// Pre-computed health debt facts from scoring.mg
+	debtQuery := `triples(Subject, "has_health_debt", Debt)`
+	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, debtQuery); err == nil {
+		for _, r := range results {
+			subject, _ := r["Subject"].(string)
+			debtStr, _ := r["Debt"].(string)
+			if subject == "" || debtStr == "" {
+				continue
+			}
+			if debt, err := strconv.Atoi(debtStr); err == nil {
+				fileDebt[subject] = debt
+			}
+		}
+	}
 
 	// Smells: triples(Subject, "has_smell", Object)
 	smellQuery := `triples(Subject, "has_smell", Object)`
@@ -1351,7 +1368,7 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 	}
 
 	// Compute per-file debt scores.
-	// Smell weights — must match policies/smells/scoring.mg
+	// Use pre-computed debt when available, fall back to hardcoded weights for backward compat.
 	smellWeight := map[string]int{
 		"circular_dependency": config.SmellWeightCircularDependency,
 		"circular_transitive": config.SmellWeightCircularTransitive,
@@ -1379,7 +1396,6 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 		secIssues := 0
 
 		for _, s := range smells {
-			debt += getWeight(s)
 			if strings.HasPrefix(s, "security_risk") || strings.HasPrefix(s, "unsanitized") {
 				secIssues++
 				totalSecurity++
@@ -1387,8 +1403,17 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 				archSmells = append(archSmells, s)
 			}
 		}
-		if hub, ok := fileHubScore[file]; ok {
-			debt += hub
+
+		// Use pre-computed debt if available, else sum weights + hub
+		if preComputedDebt, ok := fileDebt[file]; ok {
+			debt = preComputedDebt
+		} else {
+			for _, s := range smells {
+				debt += getWeight(s)
+			}
+			if hub, ok := fileHubScore[file]; ok {
+				debt += hub
+			}
 		}
 
 		files = append(files, FileHealthV2{
@@ -1398,6 +1423,19 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 			ArchSmells:     archSmells,
 		})
 		totalArchDebt += debt
+	}
+
+	// Add files that have pre-computed debt but no smells detected
+	for file, debt := range fileDebt {
+		if _, exists := fileSmells[file]; !exists {
+			files = append(files, FileHealthV2{
+				FileName:       file,
+				TotalDebtScore: debt,
+				SecurityIssues: 0,
+				ArchSmells:     []string{},
+			})
+			totalArchDebt += debt
+		}
 	}
 
 	// Overall score: 100 minus total arch debt (capped at 0)
@@ -1996,4 +2034,39 @@ func (s *Server) handleIncrementalIngest(c *gin.Context) {
 		"symbols":    len(state.SymbolTable),
 		"files":      len(state.FileIndex),
 	})
+}
+
+type TestGenerateRequest struct {
+	Target string `json:"target"`
+	Query  string `json:"query"`
+	Depth  int    `json:"depth"`
+}
+
+func (s *Server) handleTestGenerate(c *gin.Context) {
+	projectID := c.Param("projectId")
+	if projectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "project_id is required"})
+		return
+	}
+
+	var req TestGenerateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "details": err.Error()})
+		return
+	}
+
+	aiReq := ai.AIRequest{
+		ProjectID: projectID,
+		Task:      string(ooda.TaskTestGeneration),
+		Query:     req.Query,
+		SymbolID:  req.Target,
+	}
+
+	result, err := s.aiService.HandleRequestOODA(c.Request.Context(), aiReq)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "test generation failed", "details": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"answer": result})
 }

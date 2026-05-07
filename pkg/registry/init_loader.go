@@ -10,7 +10,7 @@ import (
 
 const (
 	LoadPolicyDirective = "load_policy"
-	DefaultInitFile     = "policies/init.dl"
+	DefaultInitFile     = "policies/init.mg"
 )
 
 type PolicyManifest struct {
@@ -39,7 +39,7 @@ func LoadManifest(initPath string) (*PolicyManifest, error) {
 
 	data, err := os.ReadFile(absInit)
 	if err != nil {
-		return nil, fmt.Errorf("init.dl not found or unreadable (strict mode): %w", err)
+		return nil, fmt.Errorf("init.mg not found or unreadable (strict mode): %w", err)
 	}
 
 	policyDir := filepath.Dir(absInit)
@@ -80,7 +80,7 @@ func LoadManifest(initPath string) (*PolicyManifest, error) {
 	}
 
 	if len(manifest.FilePaths) == 0 {
-		return nil, fmt.Errorf("no load_policy directives found in init.dl")
+		return nil, fmt.Errorf("no load_policy directives found in init.mg")
 	}
 
 	return manifest, nil

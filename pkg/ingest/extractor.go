@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/config"
@@ -252,7 +253,7 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 
 // processMarkdownFile handles markdown file extraction.
 func (e *TreeSitterExtractor) processMarkdownFile(relPath string, content []byte) *AnalysisBundle {
-	return &AnalysisBundle{
+	bundle := &AnalysisBundle{
 		Documents: []Document{{
 			ID:      string(relPath),
 			Content: content,
@@ -267,6 +268,113 @@ func (e *TreeSitterExtractor) processMarkdownFile(relPath string, content []byte
 			{Subject: string(relPath), Predicate: config.PredicateInPackage, Object: config.DefaultPackageRoot},
 		},
 	}
+
+	contentStr := string(content)
+	bundle.Facts = append(bundle.Facts, extractDocumentedByFacts(relPath, contentStr)...)
+	bundle.Facts = append(bundle.Facts, extractHeaderFacts(relPath, contentStr)...)
+
+	return bundle
+}
+
+var tripleBacktickRE = regexp.MustCompile("(?s)```[\\x00-\\xFF]*?```")
+var backtickRE = regexp.MustCompile("`([^`]+)`")
+
+var headerRE = regexp.MustCompile(`(?m)^#{1,3}\s+(.+)$`)
+
+func extractHeaderFacts(mdFile string, content string) []meb.Fact {
+	var facts []meb.Fact
+	matches := headerRE.FindAllStringSubmatchIndex(content, -1)
+	for _, match := range matches {
+		if len(match) < 4 {
+			continue
+		}
+		start, end := match[2], match[3]
+		if start == -1 || end == -1 || start >= len(content) || end > len(content) {
+			continue
+		}
+		headerText := strings.TrimSpace(content[start:end])
+		if len(headerText) > 0 {
+			facts = append(facts, meb.Fact{
+				Subject:   mdFile,
+				Predicate: config.PredicateDocumentedHeader,
+				Object:    headerText,
+			})
+		}
+	}
+	return facts
+}
+
+func extractDocumentedByFacts(mdFile string, content string) []meb.Fact {
+	var facts []meb.Fact
+
+	withoutFenced := tripleBacktickRE.ReplaceAllString(content, "")
+	matches := backtickRE.FindAllStringSubmatchIndex(withoutFenced, -1)
+	for _, match := range matches {
+		if len(match) < 4 {
+			continue
+		}
+		start, end := match[2], match[3]
+		if start == -1 || end == -1 || start >= len(content) || end > len(content) {
+			continue
+		}
+		ident := content[start:end]
+		ident = strings.TrimSpace(ident)
+		ident = strings.TrimRight(ident, ".,;:!?)]}")
+
+		if len(ident) < 2 {
+			continue
+		}
+		if looksLikePath(ident) || looksLikeURL(ident) {
+			continue
+		}
+
+		if symbolID := findSymbolForIdentifier(ident, currentState.SymbolTable); symbolID != "" {
+			facts = append(facts, meb.Fact{
+				Subject:   symbolID,
+				Predicate: config.PredicateDocumentedBy,
+				Object:    mdFile,
+			})
+		}
+	}
+
+	return facts
+}
+
+func findSymbolForIdentifier(ident string, symbolTable map[string]string) string {
+	if symbolTable == nil {
+		return ""
+	}
+
+	if id, ok := symbolTable[ident]; ok {
+		return id
+	}
+
+	for name, id := range symbolTable {
+		if strings.HasSuffix(name, "."+ident) {
+			return id
+		}
+	}
+
+	if strings.Contains(ident, ".") {
+		parts := strings.Split(ident, ".")
+		last := parts[len(parts)-1]
+		for name, id := range symbolTable {
+			if strings.HasSuffix(name, "."+last) {
+				return id
+			}
+		}
+	}
+
+	return ""
+}
+
+func looksLikePath(s string) bool {
+	return regexp.MustCompile(`^[\./\\]|^[a-zA-Z]:|^[a-zA-Z0-9_/.-]+\.[a-zA-Z]{2,}`).MatchString(s)
+}
+
+func looksLikeURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") ||
+		strings.HasPrefix(s, "ftp://") || strings.HasPrefix(s, "file://")
 }
 
 // processSymbols generates documents and facts for extracted symbols.

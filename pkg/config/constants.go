@@ -83,7 +83,7 @@ const (
 
 // Policy and GenePool paths
 const (
-	GenePoolPath = "policies/init.dl" // Seed manifest — single source of truth
+	GenePoolPath = "policies/init.mg" // Seed manifest — single source of truth
 	PolicyPath   = "policies"
 )
 
@@ -107,6 +107,8 @@ const (
 const (
 	PredicateName       = "name"
 	PredicateReferences = "references"
+	PredicateDocumentedBy   = "documented_by"
+	PredicateDocumentedHeader = "documented_header"
 )
 
 // Special values
@@ -125,6 +127,8 @@ const (
 	PredicateCalledBy        = "called_by"
 	PredicateHasName         = "has_name"
 	PredicateHasSecurityRisk = "has_security_risk"
+	PredicateHasHealthScore  = "has_health_score"
+	PredicateHasHealthDebt   = "has_health_debt"
 	PredicateLastCommitSHA   = "last_commit_sha"
 )
 

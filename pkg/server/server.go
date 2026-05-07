@@ -200,6 +200,9 @@ func (s *Server) setupRoutes() {
 
 	// Ingest Endpoints
 	s.router.POST("/api/v1/ingest/incremental", s.handleIncrementalIngest)
+
+	// Test Generation Endpoint
+	s.router.POST("/api/v1/projects/:projectId/test/generate", s.handleTestGenerate)
 }
 
 // AI Handler

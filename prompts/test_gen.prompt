@@ -15,4 +15,6 @@ You are an expert Software Engineer. Generate comprehensive unit tests for the f
 {{.Context}}
 {{end}}
 
+Review the following design headers. If any header matches the business logic of the target API, incorporate its context into your test cases.
+
 Generate tests covering: normal cases, edge cases, and error conditions.

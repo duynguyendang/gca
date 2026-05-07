@@ -43,6 +43,7 @@ func NewGraphDecider(storeManager StoreManager, promptLoader PromptLoader) *Grap
 		Insight:        loadPrompt("insight.prompt"),
 		Summary:        loadPrompt("summary.prompt"),
 		Narrative:      loadPrompt("narrative.prompt"),
+		TestGen:        loadPrompt("test_gen.prompt"),
 	}
 
 	return d
@@ -74,6 +75,14 @@ func (d *GraphDecider) Decide(ctx context.Context, frame *GCAFrame) error {
 }
 
 func (d *GraphDecider) buildPrompt(ctx context.Context, store *meb.MEBStore, frame *GCAFrame) (string, error) {
+	if frame.Task == TaskTestGeneration {
+		tgc, err := buildTestGenContext(ctx, store, frame)
+		if err != nil {
+			return "", fmt.Errorf("build test gen context: %w", err)
+		}
+		return buildTestGenerationPrompt(d.prompts.TestGen, tgc)
+	}
+
 	data := map[string]interface{}{
 		"Query":    frame.Input,
 		"SymbolID": frame.SymbolID,
