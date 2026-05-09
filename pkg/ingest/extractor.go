@@ -459,6 +459,14 @@ func (e *TreeSitterExtractor) addFacts(bundle *AnalysisBundle, relPath string, r
 			Predicate: ref.Predicate,
 			Object:    ref.Object,
 		})
+		// Store line number for call/reference facts, keyed to the specific callee
+		if ref.Line > 0 && (ref.Predicate == config.PredicateCalls || ref.Predicate == config.PredicateReferences || ref.Predicate == config.PredicateImports) {
+			bundle.Facts = append(bundle.Facts, meb.Fact{
+				Subject:   string(subj),
+				Predicate: config.PredicateCallsLine,
+				Object:    fmt.Sprintf("%s:%d", ref.Object, ref.Line),
+			})
+		}
 	}
 }
 

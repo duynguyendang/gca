@@ -8,6 +8,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/duynguyendang/gca/pkg/ingest"
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/meb"
 )
 
 func (s *GraphService) GetCallers(ctx context.Context, projectID, symbolID string, maxDepth int) ([]string, error) {
@@ -60,6 +61,11 @@ func (s *GraphService) GetWhoCalls(ctx context.Context, projectID, symbolID stri
 		return nil, err
 	}
 
+	store, err := s.getStore(projectID)
+	if err != nil {
+		return nil, err
+	}
+
 	graph := &export.D3Graph{
 		Nodes: []export.D3Node{},
 		Links: []export.D3Link{},
@@ -101,14 +107,17 @@ func (s *GraphService) GetWhoCalls(ctx context.Context, projectID, symbolID stri
 			nodeSet[symbolID] = true
 		}
 
+		lineNum := getCallerLine(ctx, store, caller, symbolID)
+
 		graph.Links = append(graph.Links, export.D3Link{
-			Source:             caller,
-			Target:              symbolID,
-			Relation:            config.PredicateCalledBy,
-			Type:                "backward",
-			Confidence:          0.95,
-			ConfidenceTier:      "EXTRACTED",
-			SourceProvenance:    "ast",
+			Source:           caller,
+			Target:           symbolID,
+			Relation:         config.PredicateCalledBy,
+			Type:             "backward",
+			Confidence:       0.95,
+			ConfidenceTier:   "EXTRACTED",
+			SourceProvenance: "ast",
+			Line:             lineNum,
 		})
 	}
 
@@ -117,6 +126,11 @@ func (s *GraphService) GetWhoCalls(ctx context.Context, projectID, symbolID stri
 
 func (s *GraphService) GetWhatCalls(ctx context.Context, projectID, symbolID string, maxDepth int) (*export.D3Graph, error) {
 	callees, err := s.GetCallees(ctx, projectID, symbolID, maxDepth)
+	if err != nil {
+		return nil, err
+	}
+
+	store, err := s.getStore(projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -144,6 +158,8 @@ func (s *GraphService) GetWhatCalls(ctx context.Context, projectID, symbolID str
 		nodeSet[symbolID] = true
 	}
 
+	lineMap := buildCalleeLineMap(ctx, store, symbolID)
+
 	for _, callee := range callees {
 		if !nodeSet[callee] {
 			parts := splitSymbolID(callee)
@@ -162,14 +178,17 @@ func (s *GraphService) GetWhatCalls(ctx context.Context, projectID, symbolID str
 			nodeSet[callee] = true
 		}
 
+		lineNum := lineMap[callee]
+
 		graph.Links = append(graph.Links, export.D3Link{
-			Source:             symbolID,
-			Target:              callee,
-			Relation:            config.PredicateCalls,
-			Type:                "forward",
-			Confidence:          0.95,
-			ConfidenceTier:      "EXTRACTED",
-			SourceProvenance:    "ast",
+			Source:           symbolID,
+			Target:           callee,
+			Relation:         config.PredicateCalls,
+			Type:             "forward",
+			Confidence:       0.95,
+			ConfidenceTier:   "EXTRACTED",
+			SourceProvenance: "ast",
+			Line:             lineNum,
 		})
 	}
 
@@ -297,14 +316,18 @@ func (s *GraphService) GetWhoCallsFocusedGraph(ctx context.Context, projectID, s
 			nodeSet[symbolID] = true
 		}
 
+		// Look up the line number for this caller
+		lineNum := getCallerLine(ctx, store, caller, symbolID)
+
 		graph.Links = append(graph.Links, export.D3Link{
 			Source:             caller,
-			Target:              symbolID,
-			Relation:            config.PredicateCalledBy,
-			Type:                "backward",
-			Confidence:          0.95,
-			ConfidenceTier:      "EXTRACTED",
-			SourceProvenance:    "ast",
+			Target:             symbolID,
+			Relation:           config.PredicateCalledBy,
+			Type:               "backward",
+			Confidence:         0.95,
+			ConfidenceTier:     "EXTRACTED",
+			SourceProvenance:   "ast",
+			Line:               lineNum,
 		})
 	}
 
@@ -354,6 +377,8 @@ func (s *GraphService) GetWhatCallsFocusedGraph(ctx context.Context, projectID, 
 		nodeSet[symbolID] = true
 	}
 
+	lineMap := buildCalleeLineMap(ctx, store, symbolID)
+
 	for _, callee := range callees {
 		if !nodeSet[callee] {
 			parts := splitSymbolID(callee)
@@ -372,14 +397,17 @@ func (s *GraphService) GetWhatCallsFocusedGraph(ctx context.Context, projectID, 
 			nodeSet[callee] = true
 		}
 
+		lineNum := lineMap[callee]
+
 		graph.Links = append(graph.Links, export.D3Link{
-			Source:             symbolID,
-			Target:              callee,
-			Relation:            config.PredicateCalls,
-			Type:                "forward",
-			Confidence:          0.95,
-			ConfidenceTier:      "EXTRACTED",
-			SourceProvenance:    "ast",
+			Source:           symbolID,
+			Target:           callee,
+			Relation:         config.PredicateCalls,
+			Type:             "forward",
+			Confidence:       0.95,
+			ConfidenceTier:   "EXTRACTED",
+			SourceProvenance: "ast",
+			Line:             lineNum,
 		})
 	}
 
@@ -513,6 +541,45 @@ func guessKind(symbolName string) string {
 
 func stringsHasPrefix(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
+// getCallerLine looks up the line number for a specific caller->callee edge.
+// It scans for "calls_line" facts that store "callee:line" format.
+func getCallerLine(ctx context.Context, store *meb.MEBStore, caller, callee string) int {
+	for fact, _ := range store.ScanContext(ctx, caller, config.PredicateCallsLine, "") {
+		if lineStr, ok := fact.Object.(string); ok {
+			// Format is "calleeSymbol:lineNumber"
+			if idx := stringsIndex(lineStr, ":"); idx > 0 {
+				storedCallee := lineStr[:idx]
+				if storedCallee == callee {
+					lineNumStr := lineStr[idx+1:]
+					var lineNum int
+					fmt.Sscanf(lineNumStr, "%d", &lineNum)
+					return lineNum
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// buildCalleeLineMap scans all calls_line facts for a subject and builds
+// a map from callee symbol to line number. Callers with many edges share
+// a single scan instead of scanning per edge.
+func buildCalleeLineMap(ctx context.Context, store *meb.MEBStore, subject string) map[string]int {
+	result := make(map[string]int)
+	for fact, _ := range store.ScanContext(ctx, subject, config.PredicateCallsLine, "") {
+		if lineStr, ok := fact.Object.(string); ok {
+			if idx := stringsIndex(lineStr, ":"); idx > 0 {
+				callee := lineStr[:idx]
+				lineNumStr := lineStr[idx+1:]
+				var lineNum int
+				fmt.Sscanf(lineNumStr, "%d", &lineNum)
+				result[callee] = lineNum
+			}
+		}
+	}
+	return result
 }
 
 func (s *GraphService) QueryCalledBy(ctx context.Context, projectID, symbolID string) ([]map[string]any, error) {

@@ -37,6 +37,7 @@ type D3Link struct {
 	SourceProvenance string  `json:"provenance,omitempty"`   // "ast", "virtual", "inference"
 	Confidence       float64 `json:"confidence,omitempty"`    // 0.0-1.0 edge reliability score
 	ConfidenceTier   string  `json:"confidence_tier,omitempty"` // "EXTRACTED", "INFERRED", "AMBIGUOUS"
+	Line             int     `json:"line,omitempty"`          // Source line number (1-based)
 }
 
 // D3Graph represents the full graph structure for D3.js.

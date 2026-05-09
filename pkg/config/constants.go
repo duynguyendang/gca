@@ -109,6 +109,7 @@ const (
 	PredicateReferences = "references"
 	PredicateDocumentedBy   = "documented_by"
 	PredicateDocumentedHeader = "documented_header"
+	PredicateCallsLine  = "calls_line"
 )
 
 // Special values

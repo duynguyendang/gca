@@ -1,7 +1,12 @@
 package service
 
 import (
+	"context"
 	"testing"
+
+	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/meb"
+	"github.com/duynguyendang/meb/store"
 )
 
 func TestSplitSymbolID(t *testing.T) {
@@ -257,4 +262,97 @@ func TestGuessKind(t *testing.T) {
 			}
 		})
 	}
+}
+
+func testStoreWithFacts(t *testing.T, facts []meb.Fact) *meb.MEBStore {
+	cfg := &store.Config{
+		InMemory:       true,
+		DataDir:        "",
+		DictDir:        "",
+		BlockCacheSize: 10 << 20,
+		IndexCacheSize: 10 << 20,
+		LRUCacheSize:   1000,
+	}
+	s, err := meb.NewMEBStore(cfg)
+	if err != nil {
+		t.Fatalf("NewMEBStore: %v", err)
+	}
+	for _, f := range facts {
+		if err := s.AddFact(f); err != nil {
+			t.Fatalf("AddFact: %v", err)
+		}
+	}
+	return s
+}
+
+func TestGetCallerLine(t *testing.T) {
+	facts := []meb.Fact{
+		{Subject: "caller1", Predicate: config.PredicateCallsLine, Object: "foo:42"},
+		{Subject: "caller1", Predicate: config.PredicateCallsLine, Object: "bar:17"},
+		{Subject: "caller1", Predicate: config.PredicateCallsLine, Object: "baz:99"},
+		{Subject: "caller2", Predicate: config.PredicateCallsLine, Object: "foo:10"},
+		{Subject: "caller1", Predicate: config.PredicateCallsLine, Object: "foo:100"},
+	}
+	store := testStoreWithFacts(t, facts)
+	ctx := context.Background()
+
+	tests := []struct {
+		name   string
+		caller string
+		callee string
+		want   int
+	}{
+		{name: "found first match", caller: "caller1", callee: "foo", want: 42},
+		{name: "found different callee same subject", caller: "caller1", callee: "bar", want: 17},
+		{name: "different caller", caller: "caller2", callee: "foo", want: 10},
+		{name: "not found", caller: "caller1", callee: "unknown", want: 0},
+		{name: "missing colon", caller: "caller1", callee: "nocolon", want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getCallerLine(ctx, store, tt.caller, tt.callee)
+			if got != tt.want {
+				t.Errorf("getCallerLine(%q, %q) = %d, want %d", tt.caller, tt.callee, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildCalleeLineMap(t *testing.T) {
+	facts := []meb.Fact{
+		{Subject: "symA", Predicate: config.PredicateCallsLine, Object: "foo:42"},
+		{Subject: "symA", Predicate: config.PredicateCallsLine, Object: "bar:17"},
+		{Subject: "symB", Predicate: config.PredicateCallsLine, Object: "foo:10"},
+	}
+	store := testStoreWithFacts(t, facts)
+	ctx := context.Background()
+
+	t.Run("multiple callees", func(t *testing.T) {
+		m := buildCalleeLineMap(ctx, store, "symA")
+		if m["foo"] != 42 {
+			t.Errorf("foo = %d, want 42", m["foo"])
+		}
+		if m["bar"] != 17 {
+			t.Errorf("bar = %d, want 17", m["bar"])
+		}
+	})
+
+	t.Run("no facts for subject", func(t *testing.T) {
+		m := buildCalleeLineMap(ctx, store, "symC")
+		if len(m) != 0 {
+			t.Errorf("symC map len = %d, want 0", len(m))
+		}
+	})
+
+	t.Run("missing colon skipped", func(t *testing.T) {
+		facts := []meb.Fact{
+			{Subject: "symX", Predicate: config.PredicateCallsLine, Object: "badformat"},
+		}
+		store := testStoreWithFacts(t, facts)
+		m := buildCalleeLineMap(ctx, store, "symX")
+		if len(m) != 0 {
+			t.Errorf("badformat should not produce entry, got len %d", len(m))
+		}
+	})
 }
