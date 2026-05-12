@@ -35,7 +35,7 @@ type HybridCluster struct {
 
 // DetectCommunityHierarchy runs the Leiden algorithm on the graph and returns a hierarchical structure.
 func (s *GraphService) DetectCommunityHierarchy(ctx context.Context, projectID string) (*CommunityHierarchy, error) {
-	graph, err := s.ExportGraph(ctx, projectID, "", false, false)
+	graph, err := s.ExportGraph(ctx, projectID, "", false, false, 0, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func (s *GraphService) GetHybridClusters(ctx context.Context, projectID string, 
 
 // GetClusterGraph applies Leiden clustering to reduce large graphs.
 func (s *GraphService) GetClusterGraph(ctx context.Context, projectID, query string) (*export.D3Graph, error) {
-	fullGraph, err := s.ExportGraph(ctx, projectID, query, true, false)
+	fullGraph, err := s.ExportGraph(ctx, projectID, query, true, false, 0, 0)
 	if err != nil {
 		return nil, err
 	}

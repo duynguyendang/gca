@@ -1,0 +1,24 @@
+# Build artifacts
+build/
+*.db
+*.db.lock
+*.db.wal
+server.log
+
+# Large compiled binaries
+gca
+registry.test
+coverage.out
+
+# IDE and OS artifacts
+.DS_Store
+*.swp
+
+# Test fixtures and coverage
+*.out
+
+# Exclude source-code reference repo if present
+source-code/
+
+# Cloud Build context markers
+.gcloudignore

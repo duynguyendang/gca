@@ -193,7 +193,7 @@ func scanFacts(ctx context.Context, store *meb.MEBStore, subj, pred, obj string)
 	ch := make(chan struct {
 		Fact meb.Fact
 		Err  error
-	}, 1)
+	}, 100)
 
 	go func() {
 		defer close(ch)

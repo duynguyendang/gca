@@ -293,7 +293,7 @@ func (s *GraphService) GetProjectMap(ctx context.Context, projectID string) (*ex
 
 	query := fmt.Sprintf(`triples(?s, "%s", ?o)`, config.PredicateImports)
 
-	graph, err := s.ExportGraph(ctx, projectID, query, false, false)
+	graph, err := s.ExportGraph(ctx, projectID, query, false, false, 0, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -353,13 +353,13 @@ func (s *GraphService) GetFileDetails(ctx context.Context, projectID, fileID str
 
 	mergedGraph := &export.D3Graph{Nodes: []export.D3Node{}, Links: []export.D3Link{}}
 
-	g1, err := s.ExportGraph(ctx, projectID, q1, true, true)
+	g1, err := s.ExportGraph(ctx, projectID, q1, true, true, 0, 0)
 	if err == nil {
 		mergedGraph.Nodes = append(mergedGraph.Nodes, g1.Nodes...)
 		mergedGraph.Links = append(mergedGraph.Links, g1.Links...)
 	}
 
-	g2, err := s.ExportGraph(ctx, projectID, q2, false, true)
+	g2, err := s.ExportGraph(ctx, projectID, q2, false, true, 0, 0)
 	if err == nil {
 		nodeMap := make(map[string]bool)
 		for _, n := range mergedGraph.Nodes {

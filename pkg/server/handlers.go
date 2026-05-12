@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -86,7 +87,7 @@ func (s *Server) handleQuery(c *gin.Context) {
 	}
 
 	// Delegate to service
-	graph, err := s.graphService.ExportGraph(c.Request.Context(), projectID, req.Query, hydrate, lazy)
+	graph, err := s.graphService.ExportGraph(c.Request.Context(), projectID, req.Query, hydrate, lazy, 0, 0)
 	if err != nil {
 		handleError(c, err)
 		return
@@ -775,13 +776,6 @@ func (s *Server) handleGraphPaginated(c *gin.Context) {
 		return
 	}
 
-	// Get the full graph first (in production, this should be optimized to only fetch needed data)
-	graph, err := s.graphService.ExportGraph(c.Request.Context(), projectID, query, true, false)
-	if err != nil {
-		handleError(c, err)
-		return
-	}
-
 	// Parse pagination options
 	cursorStr := c.Query("cursor")
 	limit, _ := strconv.Atoi(c.Query("limit"))
@@ -801,16 +795,38 @@ func (s *Server) handleGraphPaginated(c *gin.Context) {
 		cursor.Limit = limit
 	}
 
-	// Paginate the graph
-	opts := export.GraphPageOptions{
-		Limit:  cursor.Limit,
-		Offset: offset,
+	// Server-side pagination: pass limit/offset to query execution
+	pageLimit := cursor.Limit
+	pageOffset := offset
+
+	graph, err := s.graphService.ExportGraph(c.Request.Context(), projectID, query, true, false, pageLimit, pageOffset)
+	if err != nil {
+		handleError(c, err)
+		return
 	}
 
-	paginatedGraph, errMsg := graph.PaginateGraph(opts)
-	if errMsg != "" {
-		handleError(c, errors.NewAppError(http.StatusInternalServerError, "pagination failed: "+errMsg, nil))
-		return
+	// Determine HasMore: if we received exactly pageLimit rows, there may be more
+	hasMore := len(graph.Nodes) >= pageLimit && pageLimit > 0
+
+	// Build next cursor
+	nextCursor := ""
+	if hasMore {
+		nextOffset := pageOffset + pageLimit
+		cursor := export.GraphCursor{
+			Offset: nextOffset,
+			Limit:  pageLimit,
+		}
+		if buf, err := json.Marshal(cursor); err == nil {
+			nextCursor = string(buf)
+		}
+	}
+
+	paginatedGraph := &export.D3Graph{
+		Nodes:      graph.Nodes,
+		Links:      graph.Links,
+		HasMore:    hasMore,
+		NextCursor: nextCursor,
+		TotalNodes: len(graph.Nodes), // Client can track total via offset
 	}
 	c.JSON(http.StatusOK, paginatedGraph)
 }
@@ -1367,8 +1383,9 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 		}
 	}
 
-	// Compute per-file debt scores.
-	// Use pre-computed debt when available, fall back to hardcoded weights for backward compat.
+	// Build smell weight map from Go constants (these match scoring.mg at runtime).
+	// The scoring.mg rules are executed by the analyzer to produce has_health_debt
+	// facts — smell_weight rules are not stored as facts in the analytical store.
 	smellWeight := map[string]int{
 		"circular_dependency": config.SmellWeightCircularDependency,
 		"circular_transitive": config.SmellWeightCircularTransitive,
@@ -1377,6 +1394,7 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 		"hub_anomaly":         config.SmellWeightHubAnomaly,
 		"security_risk":       config.SmellWeightUnsanitizedDB,
 	}
+
 	getWeight := func(smell string) int {
 		for prefix, w := range smellWeight {
 			if strings.HasPrefix(smell, prefix) {

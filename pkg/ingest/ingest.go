@@ -28,14 +28,16 @@ type IngestOptions struct {
 }
 
 type IngestState struct {
-	SymbolTable map[string]string
-	FileIndex   map[string]bool
+	SymbolTable    map[string]string
+	FileIndex      map[string]bool
+	FileContentCache map[string][]byte
 }
 
 func NewIngestState() *IngestState {
 	return &IngestState{
-		SymbolTable: make(map[string]string),
-		FileIndex:   make(map[string]bool),
+		SymbolTable:      make(map[string]string),
+		FileIndex:        make(map[string]bool),
+		FileContentCache: make(map[string][]byte),
 	}
 }
 
@@ -81,6 +83,7 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 	logger.Info("Pass 1: Collecting symbols and index", "project", projectName)
 	state.SymbolTable = make(map[string]string)
 	state.FileIndex = make(map[string]bool)
+	state.FileContentCache = make(map[string][]byte)
 
 	// Check for project metadata
 	var projectMeta *ProjectMetadata
@@ -139,6 +142,7 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 				logger.Error("Failed to read file", "path", path, "error", readErr)
 				return readErr
 			}
+			state.FileContentCache[relPath] = content
 			symbols, extractErr := ext.ExtractSymbols(path, content, relPath)
 			if extractErr != nil {
 				logger.Error("Failed to extract symbols", "path", path, "error", extractErr)
@@ -309,9 +313,13 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 		relPath = filepath.Join(projectName, relPath)
 	}
 
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return err
+	content, ok := state.FileContentCache[relPath]
+	if !ok {
+		var readErr error
+		content, readErr = os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
 	}
 
 	// Basic Ingestion (Simplified for this task, ensuring prefix is used)

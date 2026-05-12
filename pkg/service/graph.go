@@ -62,7 +62,7 @@ func ensureTimeout(ctx context.Context, timeout time.Duration) (context.Context,
 
 // ExportGraph executes a query and transforms the results into a D3 graph JSON.
 // It also optionally hydrates the nodes with source code.
-func (s *GraphService) ExportGraph(ctx context.Context, projectID, query string, hydrate bool, lazy bool) (*export.D3Graph, error) {
+func (s *GraphService) ExportGraph(ctx context.Context, projectID, query string, hydrate bool, lazy bool, limit, offset int) (*export.D3Graph, error) {
 	ctx, cancel := ensureTimeout(ctx, config.QueryTimeout)
 	defer cancel()
 
@@ -72,9 +72,31 @@ func (s *GraphService) ExportGraph(ctx context.Context, projectID, query string,
 	}
 
 	// 1. Execute Query
-	results, err := gcamdb.Query(ctx, store, query)
+	effectiveLimit := limit
+	if effectiveLimit <= 0 {
+		effectiveLimit = config.QueryResultLimit
+	}
+
+	// If offset is specified, fetch offset+limit rows then slice to get the correct page
+	fetchLimit := effectiveLimit
+	if offset > 0 {
+		fetchLimit = effectiveLimit + offset
+	}
+
+	results, err := gcamdb.QueryWithLimit(ctx, store, query, fetchLimit)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errors.ErrInvalidInput, err)
+	}
+
+	// Apply offset to get the correct page
+	if offset > 0 && offset < len(results) {
+		end := offset + effectiveLimit
+		if end > len(results) {
+			end = len(results)
+		}
+		results = results[offset:end]
+	} else if offset >= len(results) {
+		results = []map[string]any{}
 	}
 
 	// 2. Transform to D3

@@ -233,10 +233,10 @@ func ClassifyIntent(query string) IntentResult {
 
 	// Phase 1: Strong domain-specific indicators (highest priority)
 	score := checkStrongIntentIndicators(queryLower, strongIntentIndicators)
-	if score.Confidence > 0 {
+	if score.Confidence > bestResult.Confidence {
 		bestResult.Intent = score.Intent
 		bestResult.Confidence = score.Confidence
-		return bestResult
+		bestResult.Extracted = score.Extracted
 	}
 
 	// Phase 2: Pattern matching with contextual boosting
@@ -365,24 +365,30 @@ func checkStrongIntentIndicators(query string, indicators map[Intent][]string) I
 		{IntentPerformance, 2, 0.92, 0.85, nil},
 	}
 
+	bestResult := IntentResult{Confidence: -1}
+	bestConf := -1.0
+
 	for _, check := range intentChecks {
 		matchedTerms := countMatchingTerms(query, indicators[check.intent])
+		conf := -1.0
+
 		if matchedTerms >= check.minTerms {
-			return IntentResult{
-				Intent:     check.intent,
-				Confidence: check.confHigh,
-				Extracted:  map[string]string{strings.ToLower(string(check.intent)) + "_terms": query},
-			}
+			conf = check.confHigh
+		} else if check.additional != nil && check.additional(query) && matchedTerms == 1 {
+			conf = check.confLow
 		}
-		if check.additional != nil && check.additional(query) && matchedTerms == 1 {
-			return IntentResult{
+
+		if conf > bestConf {
+			bestConf = conf
+			bestResult = IntentResult{
 				Intent:     check.intent,
-				Confidence: check.confLow,
+				Confidence: conf,
+				Extracted:  map[string]string{strings.ToLower(string(check.intent)) + "_terms": query},
 			}
 		}
 	}
 
-	return IntentResult{Confidence: -1}
+	return bestResult
 }
 
 func countMatchingTerms(query string, terms []string) int {
