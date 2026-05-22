@@ -16,6 +16,9 @@ import (
 // ErrSessionExpired is returned when a session has expired.
 var ErrSessionExpired = errors.New("session expired")
 
+// ErrSessionNotFound is returned when the session does not exist.
+var ErrSessionNotFound = errors.New("session not found")
+
 const (
 	defaultSessionTTL   = 30 * time.Minute
 	maxSessions         = 100
@@ -30,6 +33,8 @@ type EphemeralStore struct {
 	sessions      map[string]*Session
 	defaultTTL    time.Duration
 	stopCh        chan struct{}
+	stopped       bool
+	stopOnce      sync.Once
 	telemetrySink meb.TelemetrySink
 }
 
@@ -126,7 +131,7 @@ func (es *EphemeralStore) GetSession(id string) (*Session, error) {
 
 	session, ok := es.sessions[id]
 	if !ok {
-		return nil, fmt.Errorf("session not found: %s", id)
+		return nil, ErrSessionNotFound
 	}
 	if time.Now().After(session.ExpiresAt) {
 		return nil, ErrSessionExpired
@@ -134,20 +139,40 @@ func (es *EphemeralStore) GetSession(id string) (*Session, error) {
 	return session, nil
 }
 
+// DeleteSession removes a session by ID from the store (without closing).
+func (es *EphemeralStore) DeleteSession(id string) {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	delete(es.sessions, id)
+}
+
 // Close releases the memory for a session.
 func (s *Session) Close() error {
 	return s.Facts.Close()
 }
 
+// ExtendTTL refreshes the session expiry time.
+func (s *Session) ExtendTTL(d time.Duration) {
+	s.ExpiresAt = time.Now().Add(d)
+}
+
 // Close shuts down the EphemeralStore and releases all sessions.
+// It is safe to call multiple times.
 func (es *EphemeralStore) Close() {
-	close(es.stopCh)
-	es.mu.Lock()
-	defer es.mu.Unlock()
-	for _, session := range es.sessions {
-		session.Facts.Close()
-	}
-	es.sessions = make(map[string]*Session)
+	es.stopOnce.Do(func() {
+		es.mu.Lock()
+		if !es.stopped {
+			es.stopped = true
+			close(es.stopCh)
+		}
+		es.mu.Unlock()
+		for _, session := range es.sessions {
+			_ = session.Facts.Close()
+		}
+		es.mu.Lock()
+		es.sessions = make(map[string]*Session)
+		es.mu.Unlock()
+	})
 }
 
 // runSweeper periodically cleans up expired sessions.
@@ -156,6 +181,12 @@ func (es *EphemeralStore) runSweeper() {
 	defer ticker.Stop()
 
 	for {
+		es.mu.RLock()
+		stopped := es.stopped
+		es.mu.RUnlock()
+		if stopped {
+			return
+		}
 		select {
 		case <-es.stopCh:
 			return

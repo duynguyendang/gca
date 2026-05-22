@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/duynguyendang/gca/pkg/ingest"
 )
 
 func TestGCATask_Constants(t *testing.T) {
@@ -396,6 +398,276 @@ func TestExtractPotentialSymbols_ReturnsSymbols(t *testing.T) {
 	for _, sym := range result {
 		if len(sym) < 4 {
 			t.Errorf("Symbol %q too short (min 4 chars)", sym)
+		}
+	}
+}
+
+// --- Neuro-Symbolic Executor tests ---
+
+func TestParseTemplateResponse(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+		wantID   string
+		wantSkip bool
+		wantKey  string
+		wantVal  string
+	}{
+		{
+			name:     "template with single param",
+			response: "TEMPLATE: smell_circular_direct\nPARAMS: File=handlers/auth.go",
+			wantID:   "smell_circular_direct",
+			wantKey:  "File",
+			wantVal:  "handlers/auth.go",
+		},
+		{
+			name:     "template with multiple params",
+			response: "TEMPLATE: query_who_calls\nPARAMS: Symbol=authService, depth=3",
+			wantID:   "query_who_calls",
+			wantKey:  "Symbol",
+			wantVal:  "authService",
+		},
+		{
+			name:     "no template matched",
+			response: "TEMPLATE: none\nREASON: Conversational query",
+			wantSkip: true,
+		},
+		{
+			name:     "template without params",
+			response: "TEMPLATE: smell_hub_anomaly\nPARAMS:",
+			wantID:   "smell_hub_anomaly",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseTemplateResponse(tt.response)
+			if result.Skip != tt.wantSkip {
+				t.Errorf("Skip = %v, want %v", result.Skip, tt.wantSkip)
+			}
+			if result.TemplateID != tt.wantID {
+				t.Errorf("TemplateID = %q, want %q", result.TemplateID, tt.wantID)
+			}
+			if tt.wantKey != "" {
+				val, ok := result.Params[tt.wantKey]
+				if !ok {
+					t.Errorf("Missing param key %q", tt.wantKey)
+				} else if val != tt.wantVal {
+					t.Errorf("Params[%q] = %q, want %q", tt.wantKey, val, tt.wantVal)
+				}
+			}
+		})
+	}
+}
+
+func TestParameterizeTemplate(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		params   map[string]string
+		want     string
+		noChange bool // expect body unchanged when params don't match
+	}{
+		{
+			name:   "single param",
+			body:   `triples(File, "calls", Callee) :- File = "{{File}}"`,
+			params: map[string]string{"File": "handlers/auth.go"},
+			want:   `triples(File, "calls", Callee) :- File = "handlers/auth.go"`,
+		},
+		{
+			name:   "multiple params",
+			body:   `triples({{Symbol}}, "calls", {{Target}})`,
+			params: map[string]string{"Symbol": "main", "Target": "helper"},
+			want:   `triples(main, "calls", helper)`,
+		},
+		{
+			name:     "no params",
+			body:     `triples(File, "calls", _)`,
+			params:   map[string]string{},
+			want:     `triples(File, "calls", _)`,
+			noChange: true,
+		},
+		{
+			name:   "unknown placeholders removed",
+			body:   `triples({{File}}, "calls", {{Symbol}})`,
+			params: map[string]string{"File": "main.go"},
+			want:   `triples(main.go, "calls", )`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parameterizeTemplate(tt.body, tt.params)
+			if got != tt.want {
+				t.Errorf("parameterizeTemplate() = %q, want %q", got, tt.want)
+			}
+			if tt.noChange && got != tt.body {
+				t.Errorf("expected no change, got %q", got)
+			}
+		})
+	}
+}
+
+func TestParameterizeWithFallback(t *testing.T) {
+	// parameterizeWithFallback is best-effort — it extracts the first
+	// symbol-like token from the query. Verify it extracts something
+	// reasonable without panicking (the regex was previously broken in Go).
+	tests := []struct {
+		name        string
+		body        string
+		query       string
+		noRemaining bool // expect no remaining {{}} placeholders
+	}{
+		{
+			name:        "normal query runs without panic",
+			body:        `triples("{{target}}", "calls", _)`,
+			query:       "what calls authService",
+			noRemaining: true,
+		},
+		{
+			name:        "empty query removes placeholders",
+			body:        `triples("{{target}}", "calls", _)`,
+			query:       "",
+			noRemaining: true,
+		},
+		{
+			name:        "unused placeholders stripped",
+			body:        `triples({{File}}, "calls", {{Symbol}})`,
+			query:       "find LoginHandler",
+			noRemaining: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parameterizeWithFallback(tt.body, tt.query)
+			if tt.noRemaining && strings.Contains(got, "{{") {
+				t.Errorf("parameterizeWithFallback(%q, %q) = %q, should have no remaining placeholders", tt.body, tt.query, got)
+			}
+		})
+	}
+}
+
+func TestFormatTemplatesForAI(t *testing.T) {
+	tests := []struct {
+		name      string
+		templates []*ingest.TemplateStoreQuery
+		wantLines int
+	}{
+		{
+			name:      "empty templates",
+			templates: nil,
+			wantLines: 1, // "No templates available."
+		},
+		{
+			name: "single template",
+			templates: []*ingest.TemplateStoreQuery{
+				{ID: "smell_circular_direct", Description: "Detect circular deps", Parameters: []ingest.TemplateParam{
+					{Name: "File", Type: "string"},
+				}},
+			},
+			wantLines: 1,
+		},
+		{
+			name: "multiple templates",
+			templates: []*ingest.TemplateStoreQuery{
+				{ID: "a", Description: "first", Parameters: nil},
+				{ID: "b", Description: "second", Parameters: []ingest.TemplateParam{
+					{Name: "x", Type: "int"},
+				}},
+			},
+			wantLines: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatTemplatesForAI(tt.templates)
+			if tt.templates == nil && result != "No templates available." {
+				t.Errorf("expected 'No templates available.', got %q", result)
+			}
+			if tt.templates != nil {
+				lines := strings.Count(result, "\n") + 1
+				if lines < tt.wantLines {
+					t.Errorf("expected at least %d lines, got %d: %q", tt.wantLines, lines, result)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatTemplatesForAI_ShowsParameters(t *testing.T) {
+	templates := []*ingest.TemplateStoreQuery{
+		{
+			ID:          "smell_circular_direct",
+			Description: "Detect circular deps",
+			Parameters: []ingest.TemplateParam{
+				{Name: "File", Type: "string"},
+			},
+		},
+		{
+			ID:          "smell_hub",
+			Description: "Detect hub anomalies",
+			Parameters: []ingest.TemplateParam{
+				{Name: "File", Type: "string"},
+				{Name: "Threshold", Type: "int"},
+			},
+		},
+	}
+
+	result := formatTemplatesForAI(templates)
+
+	if !strings.Contains(result, "File (string)") {
+		t.Error("result should contain 'File (string)' for smell_circular_direct")
+	}
+	if !strings.Contains(result, "File (string), Threshold (int)") {
+		t.Error("result should contain 'File (string), Threshold (int)' for smell_hub")
+	}
+}
+
+func TestBuildSynthesisContext(t *testing.T) {
+	result := &NeuroSymbolicResult{
+		TemplateID: "test_template",
+		Query:      `triples(File, "calls", _)`,
+		Results: []map[string]any{
+			{"File": "main.go", "Target": "helper.go"},
+			{"File": "app.go", "Target": "db.go"},
+		},
+	}
+
+	ctx := BuildSynthesisContext("find callers", result, "=== DIAGNOSTIC ===\nmsg\n===")
+
+	if !strings.Contains(ctx, "test_template") {
+		t.Error("context should contain template ID")
+	}
+	if !strings.Contains(ctx, "main.go") {
+		t.Error("context should contain result data")
+	}
+	if !strings.Contains(ctx, "=== DIAGNOSTIC ===") {
+		t.Error("context should include attention sink")
+	}
+	if !strings.Contains(ctx, "Datalog Query:") {
+		t.Error("context should contain query label")
+	}
+}
+
+func TestBuildNeuroSymbolicContext(t *testing.T) {
+	result := &NeuroSymbolicResult{
+		TemplateID: "query_who_calls",
+		Query:      `triples(Symbol, "calls", _)`,
+		Entity:     "authHandler",
+		Reasoning:  "Selected query_who_calls to trace callers",
+		Results: []map[string]any{
+			{"Symbol": "authHandler", "Callee": "dbService"},
+		},
+	}
+
+	ctx := BuildNeuroSymbolicContext("who calls authHandler", result, "=== ATTENTION ===\nentry points: main\n===")
+
+	checks := []string{"query_who_calls", "authHandler", "Selected query_who_calls", "authHandler", "dbService", "=== ATTENTION ==="}
+	for _, check := range checks {
+		if !strings.Contains(ctx, check) {
+			t.Errorf("context should contain %q", check)
 		}
 	}
 }

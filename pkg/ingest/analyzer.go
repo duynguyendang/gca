@@ -97,6 +97,10 @@ func (a *Analyzer) RunStaticAnalysis(ctx context.Context, projectID string) erro
 		logger.Warn("Template rule execution failed", "error", err)
 	}
 
+	if err := a.computeHealthScores(ctx, projectID); err != nil {
+		logger.Warn("Health score computation failed", "error", err)
+	}
+
 	logger.Info("Static analysis completed", "project", projectID)
 	return nil
 }

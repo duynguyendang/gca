@@ -30,11 +30,15 @@ and AI-powered code analysis.`,
 		defer mgr.CloseAll()
 
 		srv := server.NewServer(mgr, sourceDir)
+		defer srv.Close()
 		addr := ":" + port
 
 		httpSrv := &http.Server{
-			Addr:    addr,
-			Handler: srv.Handler(),
+			Addr:         addr,
+			Handler:      srv.Handler(),
+			ReadTimeout:  30 * time.Second,
+			WriteTimeout: 30 * time.Second,
+			IdleTimeout:  60 * time.Second,
 		}
 
 		// Start server in a goroutine

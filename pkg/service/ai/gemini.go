@@ -13,9 +13,11 @@ import (
 
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/ingest"
 	"github.com/duynguyendang/gca/pkg/llmconfig"
 	"github.com/duynguyendang/gca/pkg/logger"
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/nlp"
 	"github.com/duynguyendang/gca/pkg/ooda"
 	"github.com/duynguyendang/gca/pkg/promptbuilder"
 	"github.com/duynguyendang/gca/pkg/prompts"
@@ -672,12 +674,208 @@ func (m *StoreManagerAdapter) GetStore(projectID string) (*meb.MEBStore, error) 
 	return m.service.manager.GetStore(projectID)
 }
 
+func (m *StoreManagerAdapter) GetAnalyticalStore(projectID string) (*meb.MEBStore, error) {
+	return m.service.manager.GetAnalyticalStore(projectID)
+}
+
+// analyticalTemplateStore reads query templates from the Analytical Store via Datalog.
+// It implements ingest.TemplateStoreInterface for the Neuro-Symbolic Executor.
+// Templates are cached for 10 minutes to avoid redundant Datalog queries.
+type analyticalTemplateStore struct {
+	manager  ProjectStoreManager
+	mu       sync.RWMutex
+	cache    map[string]*templateCacheEntry
+	lastLoad time.Time
+}
+
+type templateCacheEntry struct {
+	templates []*ingest.TemplateStoreQuery
+	loadedAt  time.Time
+}
+
+const templateCacheTTL = 10 * time.Minute
+
+func (a *analyticalTemplateStore) GetTemplate(ctx context.Context, projectID, templateID string) (*ingest.TemplateStoreQuery, error) {
+	store, err := a.manager.GetAnalyticalStore(projectID)
+	if err != nil {
+		return nil, fmt.Errorf("get analytical store: %w", err)
+	}
+
+	bodyQuery := fmt.Sprintf(`triples("%s", "query_template", Body)`, templateID)
+	results, err := gcamdb.Query(ctx, store, bodyQuery)
+	if err != nil || len(results) == 0 {
+		return nil, fmt.Errorf("template not found: %s", templateID)
+	}
+
+	tmpl := &ingest.TemplateStoreQuery{ID: templateID}
+	if b, ok := results[0]["Body"].(string); ok {
+		tmpl.Body = b
+	}
+
+	// Fetch metadata
+	catQuery := fmt.Sprintf(`triples("%s", "category", Cat)`, templateID)
+	if catResults, err := gcamdb.Query(ctx, store, catQuery); err == nil && len(catResults) > 0 {
+		if c, ok := catResults[0]["Cat"].(string); ok {
+			tmpl.Category = c
+		}
+	}
+	sevQuery := fmt.Sprintf(`triples("%s", "severity", Sev)`, templateID)
+	if sevResults, err := gcamdb.Query(ctx, store, sevQuery); err == nil && len(sevResults) > 0 {
+		if s, ok := sevResults[0]["Sev"].(string); ok {
+			tmpl.Severity = s
+		}
+	}
+	descQuery := fmt.Sprintf(`triples("%s", "description", Desc)`, templateID)
+	if descResults, err := gcamdb.Query(ctx, store, descQuery); err == nil && len(descResults) > 0 {
+		if d, ok := descResults[0]["Desc"].(string); ok {
+			tmpl.Description = d
+		}
+	}
+	predQuery := fmt.Sprintf(`triples("%s", "Predicate", Pred)`, templateID)
+	if predResults, err := gcamdb.Query(ctx, store, predQuery); err == nil && len(predResults) > 0 {
+		if p, ok := predResults[0]["Pred"].(string); ok {
+			tmpl.Predicate = p
+		}
+	}
+	smellQuery := fmt.Sprintf(`triples("%s", "smell_type", Smell)`, templateID)
+	if smellResults, err := gcamdb.Query(ctx, store, smellQuery); err == nil && len(smellResults) > 0 {
+		if s, ok := smellResults[0]["Smell"].(string); ok {
+			tmpl.SmellType = s
+		}
+	}
+
+	// Fetch parameters
+	paramQuery := fmt.Sprintf(`triples("%s", "param", Param)`, templateID)
+	if paramResults, err := gcamdb.Query(ctx, store, paramQuery); err == nil && len(paramResults) > 0 {
+		for _, pr := range paramResults {
+			if paramStr, ok := pr["Param"].(string); ok && paramStr != "" {
+				parts := strings.SplitN(paramStr, "|", 2)
+				if len(parts) == 2 {
+					tmpl.Parameters = append(tmpl.Parameters, ingest.TemplateParam{
+						Name: parts[0],
+						Type: parts[1],
+					})
+				}
+			}
+		}
+	}
+
+	return tmpl, nil
+}
+
+func (a *analyticalTemplateStore) ListTemplates(ctx context.Context, projectID, category string) ([]*ingest.TemplateStoreQuery, error) {
+	cacheKey := category
+	a.mu.RLock()
+	if entry, ok := a.cache[cacheKey]; ok && time.Since(entry.loadedAt) < templateCacheTTL {
+		templates := entry.templates
+		a.mu.RUnlock()
+		return templates, nil
+	}
+	a.mu.RUnlock()
+
+	store, err := a.manager.GetAnalyticalStore(projectID)
+	if err != nil {
+		return nil, fmt.Errorf("get analytical store: %w", err)
+	}
+
+	var query string
+	if category != "" {
+		query = fmt.Sprintf(`triples(ID, "category", "%s"), triples(ID, "query_template", Body)`, category)
+	} else {
+		query = `triples(ID, "query_template", Body)`
+	}
+
+	results, err := gcamdb.Query(ctx, store, query)
+	if err != nil {
+		return nil, err
+	}
+
+	var templates []*ingest.TemplateStoreQuery
+	seen := make(map[string]int)
+
+	for _, r := range results {
+		id, _ := r["ID"].(string)
+		if id == "" {
+			continue
+		}
+		if existingIdx, ok := seen[id]; ok {
+			if b, ok := r["Body"].(string); ok && b != "" && templates[existingIdx].Body == "" {
+				templates[existingIdx].Body = b
+			}
+			continue
+		}
+		seen[id] = len(templates)
+
+		tmpl := &ingest.TemplateStoreQuery{ID: id}
+		if b, ok := r["Body"].(string); ok {
+			tmpl.Body = b
+		}
+
+		// Fetch metadata per template
+		catQ := fmt.Sprintf(`triples("%s", "category", Cat)`, id)
+		if catR, err := gcamdb.Query(ctx, store, catQ); err == nil && len(catR) > 0 {
+			if c, ok := catR[0]["Cat"].(string); ok {
+				tmpl.Category = c
+			}
+		}
+		sevQ := fmt.Sprintf(`triples("%s", "severity", Sev)`, id)
+		if sevR, err := gcamdb.Query(ctx, store, sevQ); err == nil && len(sevR) > 0 {
+			if s, ok := sevR[0]["Sev"].(string); ok {
+				tmpl.Severity = s
+			}
+		}
+		descQ := fmt.Sprintf(`triples("%s", "description", Desc)`, id)
+		if descR, err := gcamdb.Query(ctx, store, descQ); err == nil && len(descR) > 0 {
+			if d, ok := descR[0]["Desc"].(string); ok {
+				tmpl.Description = d
+			}
+		}
+		predQ := fmt.Sprintf(`triples("%s", "Predicate", Pred)`, id)
+		if predR, err := gcamdb.Query(ctx, store, predQ); err == nil && len(predR) > 0 {
+			if p, ok := predR[0]["Pred"].(string); ok {
+				tmpl.Predicate = p
+			}
+		}
+		smellQ := fmt.Sprintf(`triples("%s", "smell_type", Smell)`, id)
+		if smellR, err := gcamdb.Query(ctx, store, smellQ); err == nil && len(smellR) > 0 {
+			if s, ok := smellR[0]["Smell"].(string); ok {
+				tmpl.SmellType = s
+			}
+		}
+
+		// Fetch parameters
+		paramQ := fmt.Sprintf(`triples("%s", "param", Param)`, id)
+		if paramR, err := gcamdb.Query(ctx, store, paramQ); err == nil && len(paramR) > 0 {
+			for _, pr := range paramR {
+				if paramStr, ok := pr["Param"].(string); ok && paramStr != "" {
+					parts := strings.SplitN(paramStr, "|", 2)
+					if len(parts) == 2 {
+						tmpl.Parameters = append(tmpl.Parameters, ingest.TemplateParam{
+							Name: parts[0],
+							Type: parts[1],
+						})
+					}
+				}
+			}
+		}
+
+		templates = append(templates, tmpl)
+	}
+
+	a.mu.Lock()
+	a.cache[cacheKey] = &templateCacheEntry{templates: templates, loadedAt: time.Now()}
+	a.mu.Unlock()
+
+	return templates, nil
+}
+
 func (s *AIService) HandleRequestOODA(ctx context.Context, req AIRequest) (string, error) {
 	storeManager := &StoreManagerAdapter{service: s}
 	promptLoader := &PromptLoaderAdapter{service: s}
 	model := &AIServiceModelAdapter{service: s}
 
 	config := ooda.NewOODAConfig(storeManager, promptLoader, model)
+	config.TemplateStore = &analyticalTemplateStore{manager: s.manager, cache: make(map[string]*templateCacheEntry)}
 	loop := ooda.NewOODALoopFromConfig(config)
 
 	task := ooda.GCATask(req.Task)
@@ -736,19 +934,25 @@ func (s *AIService) HandleAsk(ctx context.Context, req AskRequest) (*AskResponse
 		return resp, fmt.Errorf("failed to get store: %w", err)
 	}
 
-	// Classify intent with multi-turn context awareness
-	intentResult := ClassifyIntentWithContext(req.Query, req.ConversationHistory)
-	resp.Intent = string(intentResult.Intent)
-	resp.Confidence = intentResult.Confidence
+	// Full NLP pipeline: pronoun expansion → entity resolution → intent classification
+	nlpHistory := convertToNLPHistory(req.ConversationHistory)
+	nlpSvc := nlp.NewNLPService(newNLPEntityStore(store), nil)
+	nlpResult := nlpSvc.ProcessQuery(req.Query, nlpHistory)
 
-	target := intentResult.Target
+	resp.Intent = string(nlpResult.Intent)
+	resp.Confidence = nlpResult.Confidence
+
+	target := ""
+	if len(nlpResult.Entities) > 0 {
+		target = nlpResult.Entities[0].Name
+	}
 	if target == "" && req.SymbolID != "" {
 		target = req.SymbolID
 	}
 
 	// Build conversation context for query generation
 	conversationContext := buildConversationContext(req.ConversationHistory)
-	queryResult, err := GenerateDatalogWithContext(ctx, req.Query, intentResult.Intent, target, store, conversationContext)
+	queryResult, err := GenerateDatalogWithContext(ctx, nlpResult.ExpandedQuery, Intent(nlpResult.Intent), target, store, conversationContext)
 	if err != nil {
 		resp.Query = queryResult.Query
 		resp.Error = fmt.Sprintf("query generation failed: %v", err)
@@ -776,7 +980,7 @@ func (s *AIService) HandleAsk(ctx context.Context, req AskRequest) (*AskResponse
 	resp.Results = results
 
 	// Check cache before AI synthesis
-	cacheKey := s.generateCacheKey(req.Query, intentResult.Intent, results)
+	cacheKey := s.generateCacheKey(req.Query, Intent(nlpResult.Intent), results)
 	if cachedAnswer, cachedSummary, found := s.getCachedResponse(cacheKey); found {
 		logger.Debug("AI response cache hit", "query", req.Query)
 		resp.Answer = cachedAnswer
@@ -797,10 +1001,10 @@ func (s *AIService) HandleAsk(ctx context.Context, req AskRequest) (*AskResponse
 	}
 
 	var synthResult *SynthesisResult
-	if useContextIntents[intentResult.Intent] {
+	if useContextIntents[Intent(nlpResult.Intent)] {
 		// Use LLM with diagnostic context injection
 		llmPrompt := fmt.Sprintf("Based on the following query results for project %s:\n\nQuery: %s\nResults: %v\n\nUser Question: %s\n\nPlease provide a concise summary of the architectural health and any problematic files.",
-			req.ProjectID, resp.Query, formatResultsForLLM(results), req.Query)
+			req.ProjectID, resp.Query, formatResultsForLLM(results), nlpResult.ExpandedQuery)
 		answer, err := s.GenerateTextWithContext(ctx, req.ProjectID, llmPrompt)
 		if err == nil {
 			synthResult = &SynthesisResult{
@@ -812,7 +1016,7 @@ func (s *AIService) HandleAsk(ctx context.Context, req AskRequest) (*AskResponse
 
 	// Fallback to heuristic synthesis if LLM with context failed or not applicable
 	if synthResult == nil {
-		synthResult, _ = SynthesizeAnswer(ctx, intentResult.Intent, req.Query, resp.Query, results, store)
+		synthResult, _ = SynthesizeAnswer(ctx, Intent(nlpResult.Intent), nlpResult.ExpandedQuery, resp.Query, results, store)
 	}
 
 	if synthResult != nil {
@@ -838,4 +1042,19 @@ func (s *AIService) HandleAsk(ctx context.Context, req AskRequest) (*AskResponse
 	}
 
 	return resp, nil
+}
+
+func convertToNLPHistory(history []ConversationTurn) []*nlp.ConversationTurn {
+	result := make([]*nlp.ConversationTurn, len(history))
+	for i := range history {
+		result[i] = &nlp.ConversationTurn{
+			UserInput:    history[i].UserInput,
+			Intent:       history[i].Intent,
+			DatalogQuery: history[i].DatalogQuery,
+			ResultCount:  history[i].ResultCount,
+			Summary:      history[i].Summary,
+			Timestamp:    history[i].Timestamp,
+		}
+	}
+	return result
 }

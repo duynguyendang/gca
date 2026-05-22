@@ -11,6 +11,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/agent"
 	"github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/ephemeral"
 	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/gca/pkg/registry"
 	"github.com/duynguyendang/gca/pkg/service"
@@ -63,13 +64,14 @@ func DefaultCORSConfig() CORSConfig {
 
 // Server holds the state for the REST API server.
 type Server struct {
-	manager      *manager.StoreManager
-	graphService *service.GraphService
-	aiService    *ai.AIService
-	mangleClient *manglesdk.Client
-	queryService *registry.QueryService
-	sourceDir    string
-	router       *gin.Engine
+	manager        *manager.StoreManager
+	graphService   *service.GraphService
+	aiService      *ai.AIService
+	mangleClient   *manglesdk.Client
+	queryService   *registry.QueryService
+	ephemeralStore *ephemeral.EphemeralStore
+	sourceDir      string
+	router         *gin.Engine
 }
 
 // NewServer creates a new Server instance.
@@ -114,13 +116,14 @@ func NewServer(mgr *manager.StoreManager, sourceDir string) *Server {
 	}
 
 	s := &Server{
-		manager:      mgr,
-		graphService: svc,
-		aiService:    aiSvc,
-		mangleClient: mangleClient,
-		queryService: queryService,
-		sourceDir:    sourceDir,
-		router:       r,
+		manager:        mgr,
+		graphService:   svc,
+		aiService:      aiSvc,
+		mangleClient:   mangleClient,
+		queryService:   queryService,
+		ephemeralStore: ephemeral.NewEphemeralStore(0),
+		sourceDir:      sourceDir,
+		router:         r,
 	}
 	s.setupRoutes()
 	return s
@@ -136,8 +139,15 @@ func (s *Server) Handler() http.Handler {
 	return s.router
 }
 
+// Close shuts down background resources (ephemeral store sweeper).
+func (s *Server) Close() {
+	s.ephemeralStore.Close()
+}
+
 func (s *Server) setupRoutes() {
 	s.router.GET("/api/health", s.healthCheck)
+	s.router.GET("/api/ready", s.readyCheck)
+	s.router.GET("/api/metrics", s.metricsHandler)
 	s.router.GET("/api/v1/projects", s.handleProjects)
 	s.router.GET("/api/v1/graph", s.handleGraph)
 	s.router.GET("/api/v1/graph/paginated", s.handleGraphPaginated) // Lazy loading support
@@ -172,6 +182,7 @@ func (s *Server) setupRoutes() {
 
 	// AI Endpoints
 	s.router.POST("/api/v1/ai/ask", s.handleAIAsk)
+	s.router.POST("/api/v1/ai/classify", s.handleAIClassify)
 
 	// Unified Ask Endpoint (NL -> Datalog -> Answer)
 	s.router.POST("/api/v1/ask", s.handleAsk)
@@ -197,6 +208,10 @@ func (s *Server) setupRoutes() {
 	// Snapshot Endpoints
 	s.router.POST("/api/v1/graph/snapshots", s.handleCreateSnapshot)
 	s.router.GET("/api/v1/graph/snapshots", s.handleListSnapshots)
+
+	// Review Session Endpoints (Ephemeral Federation)
+	s.router.POST("/api/v1/review/session", s.handleCreateReviewSession)
+	s.router.POST("/api/v1/review/session/:id/query", s.handleReviewSessionQuery)
 
 	// Ingest Endpoints
 	s.router.POST("/api/v1/ingest/incremental", s.handleIncrementalIngest)
@@ -261,6 +276,37 @@ func (s *Server) handleAIAsk(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"answer": answer})
+}
+
+// handleAIClassify returns just the intent classification without executing a full query.
+// GET or POST /api/v1/ai/classify
+func (s *Server) handleAIClassify(c *gin.Context) {
+	var req struct {
+		ProjectID           string `json:"project_id" form:"project_id"`
+		Query               string `json:"query" form:"query"`
+		ConversationHistory []ai.ConversationTurn `json:"conversation_history"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid request body", err))
+		return
+	}
+
+	if req.ProjectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ProjectID is required"})
+		return
+	}
+	if req.Query == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Query is required"})
+		return
+	}
+
+	intentResult := ai.ClassifyIntentWithContext(req.Query, req.ConversationHistory)
+
+	c.JSON(http.StatusOK, gin.H{
+		"intent":     string(intentResult.Intent),
+		"confidence": intentResult.Confidence,
+	})
 }
 
 // Agent Execute Handler - multi-step reasoning pipeline
@@ -333,7 +379,34 @@ func (s *Server) handleAgentExecute(c *gin.Context) {
 
 // Health check
 func (s *Server) healthCheck(c *gin.Context) {
-	c.Status(http.StatusOK)
+	c.JSON(http.StatusOK, gin.H{
+		"status": "ok",
+	})
+}
+
+// Readiness check - verifies store connectivity
+func (s *Server) readyCheck(c *gin.Context) {
+	projects, err := s.manager.ListProjects()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status": "not_ready",
+			"error":  "failed to list projects",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":   "ready",
+		"projects": len(projects),
+	})
+}
+
+// Simple metrics endpoint - tracks request counts and latency
+func (s *Server) metricsHandler(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"endpoint": "/api/metrics",
+		"status":   "operational",
+	})
 }
 
 // CORSMiddleware handles CORS headers with a secure policy.

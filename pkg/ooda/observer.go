@@ -39,6 +39,7 @@ func scanFactsWithTopicID(ctx context.Context, store *meb.MEBStore, topicID uint
 
 type StoreManager interface {
 	GetStore(projectID string) (*meb.MEBStore, error)
+	GetAnalyticalStore(projectID string) (*meb.MEBStore, error)
 }
 
 type GraphObserver struct {

@@ -511,6 +511,9 @@ func BuildPerformancePrompt(ctx context.Context, store *meb.MEBStore, ps *Prompt
 }
 
 func BuildPrompt(task string, ctx context.Context, store *meb.MEBStore, ps *PromptSet, data interface{}) (string, error) {
+	if ps == nil {
+		return buildFallbackPrompt(task, ctx, store, data)
+	}
 	switch task {
 	case "datalog":
 		return BuildDatalogPrompt(ctx, store, ps, data)
@@ -548,4 +551,12 @@ func BuildPrompt(task string, ctx context.Context, store *meb.MEBStore, ps *Prom
 	default:
 		return BuildDefaultContextPrompt(ctx, store, ps, data)
 	}
+}
+
+func buildFallbackPrompt(task string, ctx context.Context, store *meb.MEBStore, data interface{}) (string, error) {
+	var query string
+	if m, ok := data.(map[string]interface{}); ok {
+		query, _ = m["Query"].(string)
+	}
+	return fmt.Sprintf("User Question: %s\n\nProvide a clear, helpful answer based on the available code context.", query), nil
 }

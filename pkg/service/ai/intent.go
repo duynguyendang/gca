@@ -1,9 +1,8 @@
 package ai
 
 import (
-	"fmt"
-	"regexp"
-	"strings"
+	"github.com/duynguyendang/gca/pkg/nlp/intent"
+	nlptypes "github.com/duynguyendang/gca/pkg/nlp/types"
 )
 
 type Intent string
@@ -22,14 +21,6 @@ const (
 	IntentChat        Intent = "chat"
 )
 
-type IntentResult struct {
-	Intent     Intent
-	Confidence float64
-	Target     string
-	Extracted  map[string]string
-	Features   IntentFeatures
-}
-
 type IntentFeatures struct {
 	HasQuestionWord   bool
 	HasSymbol         bool
@@ -39,678 +30,77 @@ type IntentFeatures struct {
 	CoOccurrenceBonus float64
 }
 
-// intentPatternWithFeatures extends basic pattern with metadata for scoring
-type intentPatternWithFeatures struct {
-	intent            Intent
-	patterns          []string
-	confidence        float64
-	specificityWeight float64 // 0-1, higher = more specific intent indicator
-	domainIndicators  []string
+type IntentResult struct {
+	Intent     Intent
+	Confidence float64
+	Target     string
+	Extracted  map[string]string
+	Features   IntentFeatures
 }
 
-// strongIntentIndicators are keywords that strongly indicate a specific intent
-var strongIntentIndicators = map[Intent][]string{
-	IntentSecurity:    {"sql injection", "xss", "csrf", "authentication", "authorization", "sql-inject", "sanitiz", "vulnerabilit", "audit"},
-	IntentRefactor:    {"refactor", "technical debt", "code smell", "cyclic complexity", "coupling"},
-	IntentTestGen:     {"unit test", "integration test", "test coverage", "write test", "generate test", "jest", "pytest", "go test"},
-	IntentPerformance: {"performance", "bottleneck", "optimize", "memory leak", "cpu", "latency", "slow query"},
-}
+var defaultClassifier = intent.NewClassifier()
 
-// questionWords that indicate interrogative intent
-var questionWords = []string{"who", "what", "where", "when", "why", "how", "which", "whose", "whom"}
-
-// structuralIndicators for computing structural score
-var structuralIndicators = []string{"?", "how do", "how does", "how can", "what is", "what are", "show me", "find all", "list"}
-
-// symbolPattern matches common symbol formats (Package.Type, file/path, CamelCase)
-var symbolPattern = regexp.MustCompile(`([A-Z][a-zA-Z0-9]*\.[A-Z][a-zA-Z0-9]*|[a-zA-Z0-9_]+/[a-zA-Z0-9_./]+|[A-Z][a-z]+[A-Z][a-zA-Z0-9]*)`)
-
-var followUpPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`^(and|but|so|then)\s+`),
-	regexp.MustCompile(`^(why|how|what)\s+`),
-	regexp.MustCompile(`^show\s+(me\s+)?(more|others?|another)`),
-	regexp.MustCompile(`^(just|only)\s+(one|more|a\s+few)`),
-}
-
-var pronounPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`^(it|this|that|them|those)\s+(is|was|are|were|can|does|doesn|should|would)`),
-	regexp.MustCompile(`^(it|this|that)\s+(call|use|invoke|have|has|contain)`),
-	regexp.MustCompile(`^(what|where)\s+(is|are|was)\s+(it|this|that)`),
-}
-
-var intentPatterns = []struct {
-	intent     Intent
-	patterns   []string
-	confidence float64
-}{
-	{
-		IntentWhoCalls,
-		[]string{
-			`who calls?\s+([\w.]+)`,
-			`who invok(?:es|ed|ing)\s+([\w.]+)`,
-			`who us(?:es|ed|ing)\s+([\w.]+)`,
-			`callers? of\s+([\w.]+)`,
-			`find (?:all |the )?callers? (?:of |for )?([\w.]+)`,
-			`all (?:functions |methods )?that call\s+([\w.]+)`,
-			`which (?:functions |methods )?call\s+([\w.]+)`,
-			`who (?:can |could )?call\s+([\w.]+)`,
-		},
-		0.9,
-	},
-	{
-		IntentWhatCalls,
-		[]string{
-			`what does\s+([\w.]+)\s+(?:call|invoke)`,
-			`what (?:functions?|methods?|apis?)?\s+([\w.]+)\s+(?:call|use|invoke)`,
-			`callees? of\s+([\w.]+)`,
-			`(\w+)\s+calls?\s+(?:what|which)`,
-			`what (?:does |is )?([\w.]+) (?:call|calls|invoke|invokes)`,
-			`which (?:functions |methods )?(?:does |is )?([\w.]+) (?:call|calls|invoke)`,
-		},
-		0.85,
-	},
-	{
-		IntentHowReaches,
-		[]string{
-			`how does\s+(\w+)\s+reach`,
-			`how (?:can|could)\s+(\w+)\s+(?:get|call|reach)`,
-			`path from\s+(\w+)\s+to\s+(\w+)`,
-			`connection between\s+(\w+)\s+and\s+(\w+)`,
-			`(?:find|show|trace) (?:the )?path`,
-		},
-		0.8,
-	},
-	{
-		IntentSummarize,
-		[]string{
-			`summarize\s+(\w+)`,
-			`summary of\s+(\w+)`,
-			`overview of\s+(\w+)`,
-			`(?:what is|what's)\s+(\w+)`,
-			`describe\s+(\w+)`,
-		},
-		0.75,
-	},
-	{
-		IntentExplain,
-		[]string{
-			`explain\s+([\w./]+)`,
-			`how (?:does|do|is|was)\s+([\w./]+)`,
-			`(?:tell|give) me (?:about|more info(?:rmation)? about)\s+([\w./]+)`,
-			`(?:tell|show) me (?:how|what|why)`,
-			`how (?:does |do |can )?([\w.]+) (?:work|works|function)`,
-			`what (?:does |do )?([\w.]+) (?:do |does )`,
-			`walk me through\s+([\w./]+)`,
-			`tell me more about\s+([\w./]+)`,
-		},
-		0.7,
-	},
-	{
-		IntentFind,
-		[]string{
-			`find\s+([\w./]+)`,
-			`where is\s+([\w./]+)`,
-			`where (?:does|do|is|are|was|were)\s+([\w./]+)`,
-			`where (?:does|do|is)\s+([\w./]+)\s+(?:defined|located)`,
-			`locate\s+([\w./]+)`,
-			`search for\s+([\w./]+)`,
-			`which (?:file |function |class )?(?:defines |contains |has )?([\w./]+)`,
-			`find (?:where |all )?(?:the )?([\w./]+)`,
-			`where can i find\s+([\w./]+)`,
-		},
-		0.75,
-	},
-	{
-		IntentSecurity,
-		[]string{
-			`security`,
-			`vulnerabilit`,
-			`audit`,
-			`injection`,
-			`authent`,
-			`authoriz`,
-			`permission`,
-			`access control`,
-			`sanitiz`,
-			`sql.?inject`,
-			`xss`,
-			`csrf`,
-			`crypto`,
-			`password`,
-			`secret`,
-			`api.?key`,
-		},
-		0.9,
-	},
-	{
-		IntentRefactor,
-		[]string{
-			`refactor`,
-			`improve`,
-			`reorganiz`,
-			`restructure`,
-			`technical debt`,
-			`simplif`,
-		},
-		0.85,
-	},
-	{
-		IntentTestGen,
-		[]string{
-			`test`,
-			`unit test`,
-			`coverage`,
-			`write.*test`,
-			`generat.*test`,
-		},
-		0.85,
-	},
-	{
-		IntentPerformance,
-		[]string{
-			`performance`,
-			`speed`,
-			`bottleneck`,
-			`optimi`,
-			`slow`,
-			`memory leak`,
-			`complexity`,
-		},
-		0.85,
-	},
-}
+type nlpIntent = intent.Intent
+type nlpFeatures = intent.IntentFeatures
 
 func ClassifyIntent(query string) IntentResult {
-	queryLower := strings.ToLower(query)
-	features := extractIntentFeatures(query, queryLower)
-
-	bestResult := IntentResult{
-		Intent:     IntentChat,
-		Confidence: 0.3,
-		Extracted:  make(map[string]string),
-		Features:   features,
-	}
-
-	// Phase 1: Strong domain-specific indicators (highest priority)
-	score := checkStrongIntentIndicators(queryLower, strongIntentIndicators)
-	if score.Confidence > bestResult.Confidence {
-		bestResult.Intent = score.Intent
-		bestResult.Confidence = score.Confidence
-		bestResult.Extracted = score.Extracted
-	}
-
-	// Phase 2: Pattern matching with contextual boosting
-	for _, ip := range intentPatterns {
-		for _, pattern := range ip.patterns {
-			matches := findSubstringMatch(query, pattern)
-			if matches != nil {
-				confidence := ip.confidence
-
-				// Boost confidence if structural indicators present
-				if features.StructuralScore > 0 {
-					confidence += features.StructuralScore * 0.1
-				}
-
-				// Boost if query length is appropriate for the intent
-				if features.QueryLength > 10 && features.QueryLength < 100 {
-					confidence += 0.05
-				}
-
-				if len(matches) > 1 && matches[1] != "" {
-					confidence += 0.1
-					bestResult.Target = matches[1]
-				}
-
-				if confidence > bestResult.Confidence {
-					bestResult.Intent = ip.intent
-					bestResult.Confidence = confidence
-					bestResult.Extracted = make(map[string]string)
-					for i, m := range matches {
-						if i > 0 {
-							bestResult.Extracted[string(rune('a'+i-1))] = m
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Phase 3: Symbol-based resolution boost
-	if features.HasSymbol && features.QueryLength < 50 {
-		bestResult.Confidence += 0.1
-		if bestResult.Intent == IntentChat {
-			bestResult.Intent = IntentFind
-		}
-	}
-
-	// Phase 4: Question word bonus
-	if features.HasQuestionWord {
-		if bestResult.Intent == IntentChat && features.QueryLength < 80 {
-			bestResult.Confidence = min(bestResult.Confidence+0.15, 0.85)
-		}
-	}
-
-	// Phase 5: Co-occurrence bonus for intent switching based on context
-	if features.CoOccurrenceBonus > 0 {
-		bestResult.Confidence += features.CoOccurrenceBonus
-	}
-
-	// Fallback threshold
-	if bestResult.Confidence < 0.5 {
-		bestResult.Intent = IntentChat
-		bestResult.Confidence = max(0.5, bestResult.Confidence)
-	}
-
-	return bestResult
+	result := defaultClassifier.Classify(query)
+	return toAIIntentResult(result)
 }
 
-func extractIntentFeatures(query, queryLower string) IntentFeatures {
-	f := IntentFeatures{
-		QueryLength: len(query),
-	}
-
-	// Check for question words
-	for _, qw := range questionWords {
-		if strings.HasPrefix(queryLower, qw) || strings.Contains(queryLower, " "+qw+" ") {
-			f.HasQuestionWord = true
-			break
-		}
-	}
-
-	// Check for symbols
-	if symbolPattern.MatchString(query) {
-		f.HasSymbol = true
-	}
-
-	// Structural score: count structural indicators
-	structuralMatches := 0
-	for _, indicator := range structuralIndicators {
-		if strings.Contains(queryLower, indicator) {
-			structuralMatches++
-		}
-	}
-	f.StructuralScore = float64(structuralMatches) / float64(len(structuralIndicators))
-
-	// Domain specificity: shorter queries with technical terms = higher specificity
-	technicalTerms := 0
-	technicalCount := map[string]int{
-		"function": 1, "method": 1, "class": 1, "interface": 1,
-		"api": 1, "endpoint": 1, "route": 1, "handler": 1,
-		"module": 1, "package": 1, "struct": 1, "enum": 1,
-		"database": 1, "query": 1, "cache": 1, "middleware": 1,
-	}
-	for term, weight := range technicalCount {
-		if strings.Contains(queryLower, term) {
-			technicalTerms += weight
-		}
-	}
-	f.DomainSpecificity = float64(technicalTerms) / max(float64(f.QueryLength)/50.0, 1.0)
-
-	return f
-}
-
-func checkStrongIntentIndicators(query string, indicators map[Intent][]string) IntentResult {
-	intentChecks := []struct {
-		intent       Intent
-		minTerms     int
-		confHigh     float64
-		confLow      float64
-		additional  func(string) bool
-	}{
-		{IntentSecurity, 2, 0.95, 0.85, nil},
-		{IntentRefactor, 1, 0.90, 0, nil},
-		{IntentTestGen, 2, 0.93, 0.88, func(q string) bool {
-			return strings.Contains(q, "test") || strings.Contains(q, "coverage")
-		}},
-		{IntentPerformance, 2, 0.92, 0.85, nil},
-	}
-
-	bestResult := IntentResult{Confidence: -1}
-	bestConf := -1.0
-
-	for _, check := range intentChecks {
-		matchedTerms := countMatchingTerms(query, indicators[check.intent])
-		conf := -1.0
-
-		if matchedTerms >= check.minTerms {
-			conf = check.confHigh
-		} else if check.additional != nil && check.additional(query) && matchedTerms == 1 {
-			conf = check.confLow
-		}
-
-		if conf > bestConf {
-			bestConf = conf
-			bestResult = IntentResult{
-				Intent:     check.intent,
-				Confidence: conf,
-				Extracted:  map[string]string{strings.ToLower(string(check.intent)) + "_terms": query},
-			}
-		}
-	}
-
-	return bestResult
-}
-
-func countMatchingTerms(query string, terms []string) int {
-	count := 0
-	for _, term := range terms {
-		if strings.Contains(query, term) {
-			count++
-		}
-	}
-	return count
-}
-
-func min(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-// ClassifyIntentWithContext classifies intent while considering conversation history
 func ClassifyIntentWithContext(query string, history []ConversationTurn) IntentResult {
-	// Base classification
-	result := ClassifyIntent(query)
-
-	// Apply context-based refinements from conversation history
-	if len(history) > 0 {
-		result = refineFromHistory(result, query, history)
-	}
-
-	return result
-}
-
-// refineFromHistory applies contextual refinements based on conversation flow
-func refineFromHistory(result IntentResult, query string, history []ConversationTurn) IntentResult {
-	lastTurn := history[len(history)-1]
-
-	// If user is following up (short query with pronouns), maintain context
-	if isFollowUp(query) {
-		// Boost confidence if we're continuing in same intent
-		if string(result.Intent) == lastTurn.Intent {
-			result.Confidence = min(result.Confidence+0.15, 0.95)
-		}
-
-		// Detect pronoun references to previous targets
-		if pronounRef := detectPronounReference(query); pronounRef != "" {
-			result.Target = pronounRef
-			result.Extracted["pronoun_target"] = pronounRef
-			result.Confidence += 0.1
+	historyTypes := make([]*nlptypes.ConversationTurn, len(history))
+	for i := range history {
+		historyTypes[i] = &nlptypes.ConversationTurn{
+			UserInput:    history[i].UserInput,
+			Intent:       history[i].Intent,
+			DatalogQuery: history[i].DatalogQuery,
+			ResultCount:  history[i].ResultCount,
+			Summary:      history[i].Summary,
+			Timestamp:    history[i].Timestamp,
 		}
 	}
-
-	// Context continuity bonus: if we're doing sequential exploration
-	if len(history) >= 2 {
-		sequentialBonus := calculateSequentialBonus(result.Intent, history)
-		result.Confidence += sequentialBonus
-		result.Features.CoOccurrenceBonus = sequentialBonus
-	}
-
-	// Intent transition detection: user moving from explain to find
-	if canInferTransition(result.Intent, query, history) {
-		result.Intent = IntentFind
-		result.Confidence = 0.75
-	}
-
-	return result
+	result := defaultClassifier.ClassifyWithContext(query, historyTypes)
+	return toAIIntentResult(result)
 }
 
-// isFollowUp detects if the query is a follow-up (short with contextual references)
-func isFollowUp(query string) bool {
-	shortFollowUp := []string{"it", "that", "them", "this", "there", "why", "how", "what", "and then", "also", "another", "more", "else"}
-	queryLower := strings.ToLower(query)
-	trimmed := strings.TrimSpace(query)
-
-	// Short queries that likely reference previous context
-	if len(trimmed) < 30 {
-		for _, phrase := range shortFollowUp {
-			if strings.HasPrefix(queryLower, phrase) {
-				return true
-			}
-		}
-	}
-
-	// Check for implicit follow-up patterns
-	for _, pattern := range followUpPatterns {
-		if pattern.MatchString(queryLower) {
-			return true
-		}
-	}
-
-	return false
+func GetDatalogTemplateForIntent(intent Intent, target string) string {
+	return defaultClassifier.TemplateFor(nlpIntent(intent), target)
 }
 
-// detectPronounReference resolves pronouns to their antecedent from history
-func detectPronounReference(query string) string {
-	queryLower := strings.ToLower(query)
-
-	// Pattern: query starts with pronoun or demonstrative
-	for _, pattern := range pronounPatterns {
-		if pattern.MatchString(queryLower) {
-			return "previous_target"
-		}
+func toAIIntentResult(result intent.IntentResult) IntentResult {
+	extracted := make(map[string]string)
+	for k, v := range result.Extracted {
+		extracted[k] = v
 	}
-
-	return ""
+	var targetStr string
+	if result.ResolvedEntity != nil {
+		targetStr = result.ResolvedEntity.Name
+	}
+	return IntentResult{
+		Intent:     Intent(result.Intent),
+		Confidence: result.Confidence,
+		Target:     targetStr,
+		Extracted:  extracted,
+		Features:   IntentFeatures(result.Features),
+	}
 }
 
-// calculateSequentialBonus detects if the current query continues a pattern
-func calculateSequentialBonus(current Intent, history []ConversationTurn) float64 {
-	if len(history) < 2 {
-		return 0
-	}
-
-	// Count consecutive same-intent queries
-	sameIntentCount := 0
-	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Intent == string(current) {
-			sameIntentCount++
-		} else {
-			break
-		}
-	}
-
-	// Sequential exploration bonus
-	if sameIntentCount >= 2 {
-		return 0.1 * float64(sameIntentCount)
-	}
-
-	// Complementary intent bonus (e.g., explain -> find)
-	prev := Intent(history[len(history)-1].Intent)
-	if isComplementaryIntent(prev, current) {
-		return 0.08
-	}
-
-	return 0
-}
-
-// isComplementaryIntent detects natural intent transitions
-func isComplementaryIntent(prev, curr Intent) bool {
-	transitions := map[Intent][]Intent{
-		IntentExplain:   {IntentFind, IntentWhoCalls, IntentWhatCalls},
-		IntentSummarize: {IntentFind, IntentExplain},
-		IntentFind:      {IntentExplain, IntentWhoCalls},
-		IntentWhoCalls:  {IntentFind, IntentExplain},
-	}
-
-	if candidates, ok := transitions[prev]; ok {
-		for _, c := range candidates {
-			if c == curr {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// canInferTransition detects when user intent shifts based on query patterns
-func canInferTransition(current Intent, query string, history []ConversationTurn) bool {
-	queryLower := strings.ToLower(query)
-
-	// "show me where" after "explain" -> likely wants to find
-	if current == IntentExplain && strings.Contains(queryLower, "where") {
-		return true
-	}
-
-	// "list all" after "what is" -> switch to find
-	if current == IntentExplain && strings.Contains(queryLower, "list all") {
-		return true
-	}
-
-	return false
-}
-
-// buildConversationContext creates a context summary for query generation
 func buildConversationContext(history []ConversationTurn) string {
-	if len(history) == 0 {
-		return ""
-	}
-
-	var ctx strings.Builder
-	ctx.WriteString("Previous conversation:\n")
-
-	// Show last 3 turns max
-	start := 0
-	if len(history) > 3 {
-		start = len(history) - 3
-	}
-
-	for i := start; i < len(history); i++ {
-		turn := history[i]
-		ctx.WriteString(fmt.Sprintf("- Q%d: %s (intent: %s, results: %d)\n",
-			i+1, turn.UserInput, turn.Intent, turn.ResultCount))
-	}
-
-	return ctx.String()
-}
-
-func findSubstringMatch(s, pattern string) []string {
-	singleWord := extractSingleWord(s)
-	if singleWord != "" && containsWord(s, singleWord) {
-		if isLikelyIntent(s, singleWord) {
-			return []string{"", singleWord}
+	historyTypes := make([]*nlptypes.ConversationTurn, len(history))
+	for i := range history {
+		historyTypes[i] = &nlptypes.ConversationTurn{
+			UserInput:    history[i].UserInput,
+			Intent:       history[i].Intent,
+			DatalogQuery: history[i].DatalogQuery,
+			ResultCount:  history[i].ResultCount,
+			Summary:      history[i].Summary,
+			Timestamp:    history[i].Timestamp,
 		}
 	}
-
-	for i := 0; i <= len(s)-3; i++ {
-		end := i + 3
-		for end <= len(s) && !isWordBoundary(s[end-1]) {
-			end++
-		}
-		if end > i+3 {
-			word := s[i : end-1]
-			if isLikelySymbol(word) {
-				return []string{"", word}
-			}
-		}
-	}
-
-	return nil
-}
-
-func extractSingleWord(s string) string {
-	words := strings.Fields(s)
-	if len(words) >= 2 {
-		last := words[len(words)-1]
-		last = strings.Trim(last, "?.!,:;")
-		if len(last) > 2 && len(last) < 50 {
-			return last
-		}
-	}
-	return ""
-}
-
-func containsWord(s, word string) bool {
-	return strings.Contains(s, word) || strings.Contains(s, strings.ToUpper(word))
-}
-
-func isLikelyIntent(s, word string) bool {
-	intentWords := []string{"what", "who", "how", "where", "find", "show", "explain", "describe", "tell"}
-	for _, iw := range intentWords {
-		if strings.Contains(s, iw) {
-			return true
-		}
-	}
-	return len(word) > 4
-}
-
-func isLikelySymbol(word string) bool {
-	if len(word) < 3 {
-		return false
-	}
-	upperCount := 0
-	for _, c := range word {
-		if c >= 'A' && c <= 'Z' {
-			upperCount++
-		}
-	}
-	if upperCount > 1 {
-		return true
-	}
-	if upperCount == 1 && len(word) > 5 {
-		return true
-	}
-	return strings.Contains(word, "_") || strings.Contains(word, "/")
-}
-
-func isWordBoundary(c byte) bool {
-	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '/'
+	return defaultClassifier.BuildConversationContext(historyTypes)
 }
 
 func (r IntentResult) String() string {
 	return string(r.Intent)
-}
-
-var intentTemplateRegistry = map[Intent]func(target string) string{
-	IntentWhoCalls: func(t string) string {
-		if t != "" {
-			return `triples(?caller, "calls", "` + t + `")`
-		}
-		return `triples(?caller, "calls", ?callee)`
-	},
-	IntentWhatCalls: func(t string) string {
-		if t != "" {
-			return `triples("` + t + `", "calls", ?callee)`
-		}
-		return `triples(?caller, "calls", ?callee)`
-	},
-	IntentHowReaches: func(_ string) string {
-		return `{"tool": "find_path", "source": "?source", "target": "?target"}`
-	},
-	IntentSummarize: func(_ string) string {
-		return `triples("?target", "defines", ?sym), triples("?target", "has_doc", ?doc)`
-	},
-	IntentExplain: func(_ string) string {
-		return `triples("?target", "?pred", ?obj)`
-	},
-	IntentFind: func(_ string) string {
-		return `triples(?s, "defines", ?sym), regex(?sym, "?target")`
-	},
-	IntentSecurity: func(_ string) string {
-		return `triples(?s, "references", ?ref), regex(?ref, "password|token|secret|key")`
-	},
-	IntentRefactor: func(_ string) string {
-		return `triples(?f, "defines", ?sym), triples(?sym, "has_doc", ?doc)`
-	},
-	IntentTestGen: func(_ string) string {
-		return `triples(?f, "defines", ?sym)`
-	},
-	IntentPerformance: func(_ string) string {
-		return `triples(?f, "defines", ?sym)`
-	},
-}
-
-func GetDatalogTemplateForIntent(intent Intent, target string) string {
-	if handler, ok := intentTemplateRegistry[intent]; ok {
-		return handler(target)
-	}
-	return `triples(?s, ?p, ?o)`
 }

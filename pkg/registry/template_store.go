@@ -59,6 +59,7 @@ func (ts *TemplateStore) LoadPolicyFiles(ctx context.Context, initPath string) e
 				return fmt.Errorf("failed to store template %s: %w", tmpl.ID, err)
 			}
 		}
+		templatesLoaded += len(templates)
 	}
 
 	log.Printf("Loaded %d templates from init.mg manifest", templatesLoaded)
@@ -259,6 +260,18 @@ func (ts *TemplateStore) storeTemplate(ctx context.Context, store *externmeb.MEB
 		}
 	}
 
+	// Store parameters as "name|type" triples
+	for _, param := range tmpl.Parameters {
+		paramFact := externmeb.Fact{
+			Subject:   tmpl.ID,
+			Predicate: "param",
+			Object:    fmt.Sprintf("%s|%s", param.Name, param.Type),
+		}
+		if err := store.AddFact(paramFact); err != nil {
+			return fmt.Errorf("failed to add param: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -300,6 +313,22 @@ func (ts *TemplateStore) GetTemplate(ctx context.Context, projectID, templateID 
 	descQuery := fmt.Sprintf(`triples("%s", "description", Desc)`, templateID)
 	if descResults, err := queryStore(ctx, store, descQuery); err == nil && len(descResults) > 0 {
 		tmpl.Description = descResults[0]["Desc"]
+	}
+
+	// Query for parameters
+	paramQuery := fmt.Sprintf(`triples("%s", "param", Param)`, templateID)
+	if paramResults, err := queryStore(ctx, store, paramQuery); err == nil && len(paramResults) > 0 {
+		for _, pr := range paramResults {
+			if paramStr := pr["Param"]; paramStr != "" {
+				parts := strings.SplitN(paramStr, "|", 2)
+				if len(parts) == 2 {
+					tmpl.Parameters = append(tmpl.Parameters, ingest.TemplateParam{
+						Name: parts[0],
+						Type: parts[1],
+					})
+				}
+			}
+		}
 	}
 
 	return tmpl, nil
@@ -366,6 +395,22 @@ func (ts *TemplateStore) ListTemplates(ctx context.Context, projectID, category 
 		smellTypeQuery := fmt.Sprintf(`triples("%s", "smell_type", SmellType)`, id)
 		if smellTypeResults, err := queryStore(ctx, store, smellTypeQuery); err == nil && len(smellTypeResults) > 0 {
 			tmpl.SmellType = smellTypeResults[0]["SmellType"]
+		}
+
+		// Get parameters
+		paramQuery := fmt.Sprintf(`triples("%s", "param", Param)`, id)
+		if paramResults, err := queryStore(ctx, store, paramQuery); err == nil && len(paramResults) > 0 {
+			for _, pr := range paramResults {
+				if paramStr := pr["Param"]; paramStr != "" {
+					parts := strings.SplitN(paramStr, "|", 2)
+					if len(parts) == 2 {
+						tmpl.Parameters = append(tmpl.Parameters, ingest.TemplateParam{
+							Name: parts[0],
+							Type: parts[1],
+						})
+					}
+				}
+			}
 		}
 
 		templates = append(templates, tmpl)

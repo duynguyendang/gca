@@ -5,15 +5,17 @@ import (
 	"fmt"
 
 	"github.com/duynguyendang/gca/pkg/common"
+	"github.com/duynguyendang/gca/pkg/ingest"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/meb"
 )
 
 type OODAConfig struct {
-	StoreManager StoreManager
-	PromptLoader PromptLoader
-	Model        common.LLMClient
-	Policy       Policy
+	StoreManager  StoreManager
+	PromptLoader  PromptLoader
+	Model         common.LLMClient
+	Policy        Policy
+	TemplateStore ingest.TemplateStoreInterface
 }
 
 func NewOODAConfig(storeManager StoreManager, promptLoader PromptLoader, model common.LLMClient) *OODAConfig {
@@ -29,6 +31,10 @@ func NewOODALoopFromConfig(config *OODAConfig) *GCALoop {
 	observer := NewGraphObserver(config.StoreManager)
 	orienter := NewGraphOrienter(config.StoreManager)
 	decider := NewGraphDecider(config.StoreManager, config.PromptLoader)
+	decider.SetLLMClient(config.Model)
+	if config.TemplateStore != nil {
+		decider.SetTemplateStore(config.TemplateStore)
+	}
 	verifier := NewPolicyVerifier(config.Policy)
 	actor := NewGeminiActor(config.Model)
 
@@ -55,6 +61,10 @@ func (m *GCAStoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 		return nil, fmt.Errorf("store not found for project: %s", projectID)
 	}
 	return store, nil
+}
+
+func (m *GCAStoreManager) GetAnalyticalStore(projectID string) (*meb.MEBStore, error) {
+	return nil, fmt.Errorf("GCAStoreManager does not support analytical store; use a real StoreManager implementation")
 }
 
 type GCAPromptLoader struct{}

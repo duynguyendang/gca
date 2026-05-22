@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	stdErrors "errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,8 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/duynguyendang/gca/pkg/common/errors"
+	apperrors "github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/ephemeral"
 	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/duynguyendang/gca/pkg/ingest"
 	"github.com/duynguyendang/gca/pkg/logger"
@@ -29,7 +31,7 @@ func (s *Server) handleProjects(c *gin.Context) {
 	projects, err := s.graphService.ListProjects()
 	if err != nil {
 		logger.Error("handleProjects error", "error", err)
-		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to list projects", err))
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to list projects", err))
 		return
 	}
 	c.JSON(http.StatusOK, projects)
@@ -49,14 +51,14 @@ func (s *Server) handleQuery(c *gin.Context) {
 		Query string `json:"query"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Invalid request body", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Invalid request body", err))
 		return
 	}
 
 	// Validate and sanitize query
 	sanitizedQuery, err := ValidateAndSanitizeQuery(req.Query)
 	if err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "query is invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "query is invalid", err))
 		return
 	}
 
@@ -68,7 +70,7 @@ func (s *Server) handleQuery(c *gin.Context) {
 
 	projectID := c.Query("project")
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	lazy := c.Query("lazy") == "true"
@@ -119,11 +121,11 @@ func (s *Server) handleGraph(c *gin.Context) {
 	lazy := c.Query("lazy") == "true"
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	if err := ValidateSymbolID(fileID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "file ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "file ID is required or invalid", err))
 		return
 	}
 
@@ -149,11 +151,11 @@ func (s *Server) handleSource(c *gin.Context) {
 	projectID := c.Query("project")
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	if err := ValidateSymbolID(id); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "symbol/file ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol/file ID is required or invalid", err))
 		return
 	}
 
@@ -200,7 +202,7 @@ func (s *Server) handleSource(c *gin.Context) {
 func (s *Server) handleSummary(c *gin.Context) {
 	projectID := c.Query("project")
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	summary, err := s.graphService.GenerateSummary(projectID)
@@ -229,7 +231,7 @@ func (s *Server) handlePredicates(c *gin.Context) {
 	}
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 
@@ -266,14 +268,14 @@ func (s *Server) handleSymbols(c *gin.Context) {
 	}
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 
 	// Validate and sanitize query parameter
 	query = SanitizeString(query)
 	if len(query) > config.MaxSearchQueryLength {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "query exceeds maximum length", nil))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "query exceeds maximum length", nil))
 		return
 	}
 
@@ -286,7 +288,7 @@ func (s *Server) handleSymbols(c *gin.Context) {
 	if predicate != "" {
 		predicate = SanitizeString(predicate)
 		if len(predicate) > config.MaxPredicateLength {
-			handleError(c, errors.NewAppError(http.StatusBadRequest, "predicate exceeds maximum length", nil))
+			handleError(c, apperrors.NewAppError(http.StatusBadRequest, "predicate exceeds maximum length", nil))
 			return
 		}
 	}
@@ -307,7 +309,7 @@ func (s *Server) handleFiles(c *gin.Context) {
 	prefix := c.Query("prefix")
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 
@@ -319,13 +321,13 @@ func (s *Server) handleFiles(c *gin.Context) {
 		// Check for path traversal attempts - normalize path separators
 		normalized := strings.ReplaceAll(prefix, "\\", "/")
 		if strings.Contains(normalized, "..") {
-			handleError(c, errors.NewAppError(http.StatusBadRequest, "Invalid prefix format", nil))
+			handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Invalid prefix format", nil))
 			return
 		}
 
 		// Check for excessively long prefixes
 		if len(prefix) > config.MaxPrefixLength {
-			handleError(c, errors.NewAppError(http.StatusBadRequest, "prefix exceeds maximum length", nil))
+			handleError(c, apperrors.NewAppError(http.StatusBadRequest, "prefix exceeds maximum length", nil))
 			return
 		}
 	}
@@ -363,7 +365,7 @@ func (s *Server) handleFiles(c *gin.Context) {
 func (s *Server) handleGraphMap(c *gin.Context) {
 	projectID := c.Query("project")
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 
@@ -391,7 +393,7 @@ func (s *Server) handleGraphMap(c *gin.Context) {
 func (s *Server) handleGraphManifest(c *gin.Context) {
 	projectID := c.Query("project")
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 
@@ -410,11 +412,11 @@ func (s *Server) handleFileDetails(c *gin.Context) {
 	fileID := c.Query("file")
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	if err := ValidateSymbolID(fileID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
 		return
 	}
 
@@ -432,11 +434,11 @@ func (s *Server) handleHydrate(c *gin.Context) {
 	projectID := c.Query("project")
 	id := c.Query("id")
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	if err := ValidateSymbolID(id); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
 		return
 	}
 
@@ -453,7 +455,7 @@ func (s *Server) handleHydrate(c *gin.Context) {
 func (s *Server) handleGraphBackbone(c *gin.Context) {
 	projectID := c.Query("project")
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 
@@ -474,11 +476,11 @@ func (s *Server) handleFileCalls(c *gin.Context) {
 	depthStr := c.Query("depth")
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	if err := ValidateSymbolID(id); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
 		return
 	}
 
@@ -506,7 +508,7 @@ func (s *Server) handleFileCalls(c *gin.Context) {
 // handleError is a helper that converts errors to JSON responses.
 // It uses the errors.MapError function to convert errors to AppError with HTTP status codes.
 func handleError(c *gin.Context, err error) {
-	appErr := errors.MapError(err)
+	appErr := apperrors.MapError(err)
 	c.JSON(appErr.Code, gin.H{"error": appErr.Message})
 }
 
@@ -517,15 +519,15 @@ func (s *Server) handleFlowPath(c *gin.Context) {
 	to := c.Query("to")
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	if err := ValidateSymbolID(from); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
 		return
 	}
 	if err := ValidateSymbolID(to); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
 		return
 	}
 
@@ -545,15 +547,15 @@ func (s *Server) handleGraphPath(c *gin.Context) {
 	target := c.Query("target")
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	if err := ValidateSymbolID(source); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
 		return
 	}
 	if err := ValidateSymbolID(target); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
 		return
 	}
 
@@ -587,24 +589,24 @@ func (s *Server) handleSemanticSearch(c *gin.Context) {
 	}
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	if query == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing q parameter", nil))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Missing q parameter", nil))
 		return
 	}
 
 	// Validate and sanitize query
 	query = SanitizeString(query)
 	if len(query) > config.MaxQueryLength {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "query exceeds maximum length", nil))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "query exceeds maximum length", nil))
 		return
 	}
 
 	// Get embedding for query using AI Service
 	if s.aiService == nil {
-		handleError(c, errors.NewAppError(http.StatusServiceUnavailable, "AI service not initialized", nil))
+		handleError(c, apperrors.NewAppError(http.StatusServiceUnavailable, "AI service not initialized", nil))
 		return
 	}
 
@@ -628,18 +630,18 @@ func (s *Server) handleGraphCluster(c *gin.Context) {
 	query := c.Query("query")
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	if query == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing query parameter", nil))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Missing query parameter", nil))
 		return
 	}
 
 	// Validate and sanitize query
 	query = SanitizeString(query)
 	if len(query) > config.MaxQueryLength {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "query exceeds maximum length", nil))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "query exceeds maximum length", nil))
 		return
 	}
 
@@ -658,19 +660,19 @@ func (s *Server) handleGraphSubgraph(c *gin.Context) {
 		Ids []string `json:"ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Invalid request body", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Invalid request body", err))
 		return
 	}
 
 	projectID := c.Query("project")
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 
 	// Validate IDs list
 	if err := ValidateIDs(req.Ids); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
 		return
 	}
 
@@ -687,7 +689,7 @@ func (s *Server) handleGraphSubgraph(c *gin.Context) {
 func (s *Server) handleGraphCommunities(c *gin.Context) {
 	projectID := c.Query("project")
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 
@@ -704,7 +706,7 @@ func (s *Server) handleGraphCommunities(c *gin.Context) {
 func (s *Server) handleHybridCluster(c *gin.Context) {
 	projectID := c.Query("project")
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 
@@ -715,13 +717,13 @@ func (s *Server) handleHybridCluster(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Invalid request body", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Invalid request body", err))
 		return
 	}
 
 	// Validate embedding
 	if err := ValidateEmbedding(req.Embedding); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
 		return
 	}
 
@@ -735,13 +737,13 @@ func (s *Server) handleHybridCluster(c *gin.Context) {
 
 	// Validate limit
 	if err := ValidateLimit(req.Limit, 1000); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
 		return
 	}
 
 	// Validate clusters
 	if err := ValidateClusters(req.Clusters); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
 		return
 	}
 
@@ -768,11 +770,11 @@ func (s *Server) handleGraphPaginated(c *gin.Context) {
 	query := c.Query("query")
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	if query == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing query parameter", nil))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Missing query parameter", nil))
 		return
 	}
 
@@ -783,7 +785,7 @@ func (s *Server) handleGraphPaginated(c *gin.Context) {
 
 	cursor, err := export.ParseCursor(cursorStr)
 	if err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Invalid cursor format", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Invalid cursor format", err))
 		return
 	}
 
@@ -845,11 +847,11 @@ func (s *Server) handleWhoCalls(c *gin.Context) {
 	depth, _ := strconv.Atoi(c.Query("depth"))
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	if symbolID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing symbol parameter", nil))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Missing symbol parameter", nil))
 		return
 	}
 
@@ -892,11 +894,11 @@ func (s *Server) handleWhatCalls(c *gin.Context) {
 	depth, _ := strconv.Atoi(c.Query("depth"))
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	if symbolID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing symbol parameter", nil))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Missing symbol parameter", nil))
 		return
 	}
 
@@ -940,11 +942,11 @@ func (s *Server) handleCheckReachability(c *gin.Context) {
 	depth, _ := strconv.Atoi(c.Query("depth"))
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	if fromID == "" || toID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing from or to parameter", nil))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Missing from or to parameter", nil))
 		return
 	}
 
@@ -966,7 +968,7 @@ func (s *Server) handleDetectCycles(c *gin.Context) {
 	projectID := c.Query("project")
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 
@@ -994,11 +996,11 @@ func (s *Server) handleFindLCA(c *gin.Context) {
 	depth, _ := strconv.Atoi(c.Query("depth"))
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 	if symbolA == "" || symbolB == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Missing a or b parameter", nil))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Missing a or b parameter", nil))
 		return
 	}
 
@@ -1020,7 +1022,7 @@ func (s *Server) handleEnrichCalledBy(c *gin.Context) {
 	projectID := c.Query("project")
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
 		return
 	}
 
@@ -1062,16 +1064,16 @@ func (s *Server) handleAsk(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "Invalid request body", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Invalid request body", err))
 		return
 	}
 
 	if req.ProjectID == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "project_id is required", nil))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project_id is required", nil))
 		return
 	}
 	if req.Query == "" {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "query is required", nil))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "query is required", nil))
 		return
 	}
 
@@ -1086,7 +1088,7 @@ func (s *Server) handleAsk(c *gin.Context) {
 
 	resp, err := s.aiService.HandleAsk(c.Request.Context(), askReq)
 	if err != nil {
-		handleError(c, errors.NewAppError(http.StatusInternalServerError, "internal server error", err))
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "internal server error", err))
 		return
 	}
 
@@ -1159,7 +1161,7 @@ func (s *Server) handleHealthSummary(c *gin.Context) {
 	// Fetch from the Analytical partition where the smells actually live.
 	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
 	if err != nil {
-		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
 		return
 	}
 
@@ -1331,7 +1333,7 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 
 	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
 	if err != nil {
-		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
 		return
 	}
 
@@ -1507,7 +1509,7 @@ func (s *Server) handleSurpriseAnalysis(c *gin.Context) {
 
 	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
 	if err != nil {
-		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
 		return
 	}
 
@@ -1655,7 +1657,7 @@ func (s *Server) handleKnowledgeGaps(c *gin.Context) {
 
 	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
 	if err != nil {
-		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
 		return
 	}
 
@@ -1847,18 +1849,18 @@ func (s *Server) handleGraphDiff(c *gin.Context) {
 	if req.BeforeSnapshot != "" {
 		beforeSnap, err = diffService.LoadSnapshot(req.BeforeSnapshot)
 		if err != nil {
-			handleError(c, errors.NewAppError(http.StatusBadRequest, "failed to load before snapshot", err))
+			handleError(c, apperrors.NewAppError(http.StatusBadRequest, "failed to load before snapshot", err))
 			return
 		}
 	} else if req.ProjectID != "" && req.BeforeID != "" {
 		store, err := s.manager.GetStore(req.ProjectID)
 		if err != nil {
-			handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to get store", err))
+			handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to get store", err))
 			return
 		}
 		snap, err := diffService.TakeSnapshot(c.Request.Context(), store, req.ProjectID)
 		if err != nil {
-			handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to take snapshot", err))
+			handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to take snapshot", err))
 			return
 		}
 		beforeSnap = snap
@@ -1867,18 +1869,18 @@ func (s *Server) handleGraphDiff(c *gin.Context) {
 	if req.AfterSnapshot != "" {
 		afterSnap, err = diffService.LoadSnapshot(req.AfterSnapshot)
 		if err != nil {
-			handleError(c, errors.NewAppError(http.StatusBadRequest, "failed to load after snapshot", err))
+			handleError(c, apperrors.NewAppError(http.StatusBadRequest, "failed to load after snapshot", err))
 			return
 		}
 	} else if req.ProjectID != "" {
 		store, err := s.manager.GetStore(req.ProjectID)
 		if err != nil {
-			handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to get store", err))
+			handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to get store", err))
 			return
 		}
 		afterSnap, err = diffService.TakeSnapshot(c.Request.Context(), store, req.ProjectID)
 		if err != nil {
-			handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to take snapshot", err))
+			handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to take snapshot", err))
 			return
 		}
 	}
@@ -1920,26 +1922,26 @@ func (s *Server) handleCreateSnapshot(c *gin.Context) {
 	}
 
 	if err := ValidateProjectID(req.ProjectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
 		return
 	}
 
 	store, err := s.manager.GetStore(req.ProjectID)
 	if err != nil {
-		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to get store", err))
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to get store", err))
 		return
 	}
 
 	diffService := service.NewGraphDiffService()
 	snap, err := diffService.TakeSnapshot(c.Request.Context(), store, req.ProjectID)
 	if err != nil {
-		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to take snapshot", err))
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to take snapshot", err))
 		return
 	}
 
 	snapshotsDir := filepath.Join(s.sourceDir, req.ProjectID, "snapshots")
 	if err := os.MkdirAll(snapshotsDir, 0755); err != nil {
-		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to create snapshots directory", err))
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to create snapshots directory", err))
 		return
 	}
 
@@ -1950,7 +1952,7 @@ func (s *Server) handleCreateSnapshot(c *gin.Context) {
 	snapshotPath := filepath.Join(snapshotsDir, snapshotID+".json")
 
 	if err := diffService.SaveSnapshot(snap, snapshotPath); err != nil {
-		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to save snapshot", err))
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to save snapshot", err))
 		return
 	}
 
@@ -1966,7 +1968,7 @@ func (s *Server) handleCreateSnapshot(c *gin.Context) {
 func (s *Server) handleListSnapshots(c *gin.Context) {
 	projectID := c.Query("project")
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
 		return
 	}
 
@@ -1977,7 +1979,7 @@ func (s *Server) handleListSnapshots(c *gin.Context) {
 			c.JSON(http.StatusOK, []SnapshotInfo{})
 			return
 		}
-		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to read snapshots directory", err))
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to read snapshots directory", err))
 		return
 	}
 
@@ -2024,13 +2026,13 @@ func (s *Server) handleIncrementalIngest(c *gin.Context) {
 	}
 
 	if err := ValidateProjectID(req.ProjectID); err != nil {
-		handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
 		return
 	}
 
 	store, err := s.manager.GetStore(req.ProjectID)
 	if err != nil {
-		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to get store", err))
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to get store", err))
 		return
 	}
 
@@ -2042,7 +2044,7 @@ func (s *Server) handleIncrementalIngest(c *gin.Context) {
 
 	state := ingest.NewIngestState()
 	if err := ingest.RunIncrementalWithOptions(store, req.ProjectID, req.SourceDir, state, opts); err != nil {
-		handleError(c, errors.NewAppError(http.StatusInternalServerError, "failed to run incremental ingest", err))
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to run incremental ingest", err))
 		return
 	}
 
@@ -2087,4 +2089,100 @@ func (s *Server) handleTestGenerate(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"answer": result})
+}
+
+// handleCreateReviewSession creates an ephemeral review session from a git diff.
+// POST /api/v1/review/session
+// Request: { project_id, diff, base_commit?, head_commit? }
+func (s *Server) handleCreateReviewSession(c *gin.Context) {
+	var req struct {
+		ProjectID  string `json:"project_id"`
+		Diff       string `json:"diff"`
+		BaseCommit string `json:"base_commit,omitempty"`
+		HeadCommit string `json:"head_commit,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request", "details": err.Error()})
+		return
+	}
+	if req.ProjectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "project_id is required"})
+		return
+	}
+	if req.Diff == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "diff is required"})
+		return
+	}
+
+	session, count, err := s.ephemeralStore.ParseDiffAndCreateSession(req.ProjectID, req.Diff)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session", "details": err.Error()})
+		return
+	}
+
+	logger.Info("Review session created",
+		"session_id", session.ID,
+		"project_id", req.ProjectID,
+		"facts", count)
+
+	c.JSON(http.StatusOK, gin.H{
+		"session_id":    session.ID,
+		"project_id":    req.ProjectID,
+		"expires_at":    session.ExpiresAt.Format(time.RFC3339),
+		"facts_parsed":  count,
+		"base_commit":   req.BaseCommit,
+		"head_commit":   req.HeadCommit,
+	})
+}
+
+// handleReviewSessionQuery runs a federated query against an existing review session.
+// POST /api/v1/review/session/:id/query
+// Request: { query, project_id }
+func (s *Server) handleReviewSessionQuery(c *gin.Context) {
+	sessionID := c.Param("id")
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session id is required"})
+		return
+	}
+
+	var req struct {
+		Query     string `json:"query"`
+		ProjectID string `json:"project_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request", "details": err.Error()})
+		return
+	}
+	if req.Query == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "query is required"})
+		return
+	}
+	if req.ProjectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "project_id is required for source/analytical store query"})
+		return
+	}
+
+	fedReq := ephemeral.FederatedQueryRequest{
+		SessionID: sessionID,
+		ProjectID: req.ProjectID,
+		Query:     req.Query,
+	}
+
+	result, err := ephemeral.FederatedQuery(c.Request.Context(), fedReq, s.ephemeralStore, s.manager)
+	if err != nil {
+		if stdErrors.Is(err, ephemeral.ErrSessionExpired) || ephemeral.IsNotFoundError(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	logger.Info("Federated query executed",
+		"session_id", sessionID,
+		"ephemeral", len(result.Ephemeral),
+		"source", len(result.Source),
+		"analytical", len(result.Analytical))
+
+	c.JSON(http.StatusOK, result)
 }
