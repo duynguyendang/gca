@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/duynguyendang/gca/pkg/common"
+	"github.com/duynguyendang/gca/pkg/logger"
 )
 
 type Policy struct {
@@ -164,11 +166,33 @@ func (a *GeminiActor) Act(ctx context.Context, frame *GCAFrame) error {
 		return frame.ExecError
 	}
 
-	response, err := a.model.GenerateContent(ctx, frame.Prompt)
-	if err != nil {
-		frame.ExecError = err
-		frame.Status = VerifyStatusFailed
-		return fmt.Errorf("gemini call failed: %w", err)
+	var response string
+	var err error
+
+	for attempt := 0; attempt < 2; attempt++ {
+		callCtx := ctx
+		if attempt > 0 {
+			logger.Debug("Retrying GeminiActor.Act with fresh context", "attempt", attempt)
+			var cancel context.CancelFunc
+			callCtx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+		}
+
+		response, err = a.model.GenerateContent(callCtx, frame.Prompt)
+		if err == nil {
+			break
+		}
+
+		errStr := err.Error()
+		isContextCanceled := strings.Contains(errStr, "context canceled") ||
+			strings.Contains(errStr, "context deadline exceeded") ||
+			strings.Contains(errStr, "timeout")
+
+		if !isContextCanceled || attempt >= 1 {
+			frame.ExecError = err
+			frame.Status = VerifyStatusFailed
+			return fmt.Errorf("gemini call failed: %w", err)
+		}
 	}
 
 	frame.Response = response

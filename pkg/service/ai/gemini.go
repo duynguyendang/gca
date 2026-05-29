@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -908,7 +909,67 @@ func (s *AIService) HandleRequestOODA(ctx context.Context, req AIRequest) (strin
 	config.TemplateStore = &analyticalTemplateStore{manager: s.manager, cache: make(map[string]*templateCacheEntry)}
 	loop := ooda.NewOODALoopFromConfig(config)
 
-	return ooda.RunOODATask(ctx, loop, req.ProjectID, req.Query, task, req.SymbolID, req.Data)
+	response, err := ooda.RunOODATask(ctx, loop, req.ProjectID, req.Query, task, req.SymbolID, req.Data)
+	if err != nil {
+		return "", err
+	}
+
+	if task == ooda.TaskDatalog {
+		store, storeErr := s.manager.GetStore(req.ProjectID)
+		if storeErr != nil {
+			logger.Debug("Datalog execution skipped: store unavailable", "project", req.ProjectID, "err", storeErr)
+		} else if store != nil {
+			execResp := executeAndFormatDatalogResponse(ctx, response, store)
+			if execResp != "" {
+				return execResp, nil
+			}
+		}
+	}
+
+	return response, nil
+}
+
+func executeAndFormatDatalogResponse(ctx context.Context, response string, store *meb.MEBStore) string {
+	response = strings.TrimSpace(response)
+	if !strings.HasPrefix(response, "triples(") && !strings.Contains(response, ":-") {
+		return ""
+	}
+
+	results, err := gcamdb.Query(ctx, store, response)
+	if err != nil {
+		return fmt.Sprintf("Query generated but execution failed: %v\n\nGenerated query: %s", err, response)
+	}
+
+	if len(results) == 0 {
+		return "No results found for this query.\n\nGenerated query: " + response
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Found %d result(s):\n\n", len(results)))
+
+	count := 0
+	keys := make([]string, 0, len(results))
+	for k := range results[0] {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, r := range results {
+		if count >= 50 {
+			sb.WriteString(fmt.Sprintf("... and %d more\n", len(results)-count))
+			break
+		}
+		var parts []string
+		for _, k := range keys {
+			parts = append(parts, fmt.Sprintf("%s=%v", k, r[k]))
+		}
+		if len(parts) > 0 {
+			sb.WriteString(fmt.Sprintf("  - %s\n", strings.Join(parts, ", ")))
+		}
+		count++
+	}
+
+	sb.WriteString(fmt.Sprintf("\nQuery: %s", response))
+	return sb.String()
 }
 
 type AskRequest struct {
