@@ -388,7 +388,12 @@ func (s *Server) handleAgentExecute(c *gin.Context) {
 	}
 
 	// Wrap the AIService in an adapter that satisfies agent.ModelInterface
-	modelAdapter := ai.NewAIServiceModelAdapter(s.aiService.(*ai.AIService))
+	aiSvc, ok := s.aiService.(*ai.AIService)
+	if !ok {
+		handleError(c, errors.NewAppError(http.StatusInternalServerError, "AI service not available", nil))
+		return
+	}
+	modelAdapter := ai.NewAIServiceModelAdapter(aiSvc)
 	orch := agent.NewOrchestrator(modelAdapter, store)
 
 	predicateNames := []string{

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1177,7 +1178,7 @@ func (s *Server) handleHealthSummary(c *gin.Context) {
 	var smellResults []smellResult
 
 	// Query has_smell_type facts
-	typeQuery := `triples(Subject, "has_smell_type", Type)`
+	typeQuery := config.QuerySmellType
 	if typeResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, typeQuery); err == nil {
 		for _, r := range typeResults {
 			if subject, ok := r["Subject"].(string); ok {
@@ -1192,7 +1193,7 @@ func (s *Server) handleHealthSummary(c *gin.Context) {
 	}
 
 	// Query has_smell_severity facts to get severity
-	severityQuery := `triples(Subject, "has_smell_severity", Severity)`
+	severityQuery := config.QuerySmellSeverity
 	if sevResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, severityQuery); err == nil {
 		severityMap := make(map[string]string)
 		for _, r := range sevResults {
@@ -1248,7 +1249,7 @@ func (s *Server) handleHealthSummary(c *gin.Context) {
 	}
 
 	// Query for hub scores
-	hubQuery := `triples(Subject, "has_hub_score", Score)`
+	hubQuery := config.QueryHubScore
 	hubResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, hubQuery)
 	if err == nil {
 		for _, r := range hubResults {
@@ -1270,7 +1271,7 @@ func (s *Server) handleHealthSummary(c *gin.Context) {
 	}
 
 	// Query for entry points
-	entryQuery := `triples(Subject, "is_entry_point", "true")`
+	entryQuery := config.QueryEntryPoint
 	entryResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, entryQuery)
 	if err == nil {
 		for _, r := range entryResults {
@@ -1344,7 +1345,7 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 	fileDebt := make(map[string]int)
 
 	// Pre-computed health debt facts from scoring.mg
-	debtQuery := `triples(Subject, "has_health_debt", Debt)`
+	debtQuery := config.QueryHealthDebt
 	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, debtQuery); err == nil {
 		for _, r := range results {
 			subject, _ := r["Subject"].(string)
@@ -1359,7 +1360,7 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 	}
 
 	// Smells: triples(Subject, "has_smell", Object)
-	smellQuery := `triples(Subject, "has_smell", Object)`
+	smellQuery := config.QuerySmell
 	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, smellQuery); err == nil {
 		for _, r := range results {
 			subject, _ := r["Subject"].(string)
@@ -1372,7 +1373,7 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 	}
 
 	// Hub scores: triples(Subject, "has_hub_score", Score)
-	hubQuery := `triples(Subject, "has_hub_score", Score)`
+	hubQuery := config.QueryHubScore
 	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, hubQuery); err == nil {
 		for _, r := range results {
 			subject, _ := r["Subject"].(string)
@@ -1523,7 +1524,7 @@ func (s *Server) handleSurpriseAnalysis(c *gin.Context) {
 
 	var surpriseResults []surpriseResult
 
-	query := `triples(Subject, "has_surprise", Type), triples(Subject, "calls", Target)`
+	query := config.QuerySurprise
 	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, query); err == nil {
 		for _, r := range results {
 			if subject, ok := r["Subject"].(string); ok {
@@ -1541,7 +1542,7 @@ func (s *Server) handleSurpriseAnalysis(c *gin.Context) {
 	}
 
 	// Also query for surprise score facts (composite scores)
-	scoreQuery := `triples(Subject, "has_surprise_score", ScoreStr)`
+	scoreQuery := config.QuerySurpriseScore
 	scoreMap := make(map[string]float64)
 	if scoreResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, scoreQuery); err == nil {
 		for _, r := range scoreResults {
@@ -1599,13 +1600,9 @@ func (s *Server) handleSurpriseAnalysis(c *gin.Context) {
 	}
 
 	// Sort by score descending
-	for i := 0; i < len(edges); i++ {
-		for j := i + 1; j < len(edges); j++ {
-			if edges[j].Score > edges[i].Score {
-				edges[i], edges[j] = edges[j], edges[i]
-			}
-		}
-	}
+	sort.Slice(edges, func(i, j int) bool {
+		return edges[j].Score < edges[i].Score
+	})
 
 	highCount, mediumCount, lowCount := 0, 0, 0
 	for _, e := range edges {
@@ -1672,7 +1669,7 @@ func (s *Server) handleKnowledgeGaps(c *gin.Context) {
 	// Query degree facts
 	inDegMap := make(map[string]int)
 	outDegMap := make(map[string]int)
-	if inResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, `triples(S, "has_in_degree", D)`); err == nil {
+	if inResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, config.QueryInDegreeShort); err == nil {
 		for _, r := range inResults {
 			if s, ok := r["S"].(string); ok {
 				if d, ok := r["D"].(string); ok {
@@ -1683,7 +1680,7 @@ func (s *Server) handleKnowledgeGaps(c *gin.Context) {
 			}
 		}
 	}
-	if outResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, `triples(S, "has_out_degree", D)`); err == nil {
+	if outResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, config.QueryOutDegreeShort); err == nil {
 		for _, r := range outResults {
 			if s, ok := r["S"].(string); ok {
 				if d, ok := r["D"].(string); ok {
@@ -1697,7 +1694,7 @@ func (s *Server) handleKnowledgeGaps(c *gin.Context) {
 
 	// Query cluster facts
 	clusterMap := make(map[string]string)
-	if clusterResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, `triples(S, "belongs_to_cluster", C)`); err == nil {
+	if clusterResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, config.QueryClusterShort); err == nil {
 		for _, r := range clusterResults {
 			if s, ok := r["S"].(string); ok {
 				if c, ok := r["C"].(string); ok {
@@ -1734,7 +1731,7 @@ func (s *Server) handleKnowledgeGaps(c *gin.Context) {
 	}
 
 	// Untested hotspots: degree >= 5 and not a test symbol
-	if testResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, `triples(S, "is_test_symbol", "true")`); err == nil {
+	if testResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, config.QueryTestSymbol); err == nil {
 		testSymbols := make(map[string]bool)
 		for _, r := range testResults {
 			if s, ok := r["S"].(string); ok {
@@ -1786,7 +1783,7 @@ func (s *Server) handleKnowledgeGaps(c *gin.Context) {
 	// Single-file clusters: all members in same file
 	// Query in_file facts
 	fileMap := make(map[string]string)
-	if fileResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, `triples(S, "in_file", F)`); err == nil {
+	if fileResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, config.QueryInFile); err == nil {
 		for _, r := range fileResults {
 			if s, ok := r["S"].(string); ok {
 				if f, ok := r["F"].(string); ok {

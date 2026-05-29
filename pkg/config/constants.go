@@ -169,6 +169,28 @@ const (
 	SmellWeightDefault            = 2
 )
 
+// Datalog query constants
+const (
+	QuerySmellType      = `triples(Subject, "has_smell_type", Type)`
+	QuerySmellSeverity  = `triples(Subject, "has_smell_severity", Severity)`
+	QuerySmell          = `triples(Subject, "has_smell", Object)`
+	QueryHubScore       = `triples(Subject, "has_hub_score", Score)`
+	QueryEntryPoint     = `triples(Subject, "is_entry_point", "true")`
+	QueryCentrality     = `triples(Subject, "has_centrality", Score)`
+	QueryInDegree       = `triples(Subject, "has_in_degree", Degree)`
+	QueryOutDegree      = `triples(Subject, "has_out_degree", Degree)`
+	QueryCluster        = `triples(Subject, "belongs_to_cluster", Cluster)`
+	QueryHealthDebt     = `triples(Subject, "has_health_debt", Debt)`
+	QueryHealthScore    = `triples(Subject, "has_health_score", Score)`
+	QuerySurprise       = `triples(Subject, "has_surprise", Type), triples(Subject, "calls", Target)`
+	QuerySurpriseScore  = `triples(Subject, "has_surprise_score", ScoreStr)`
+	QueryInDegreeShort  = `triples(S, "has_in_degree", D)`
+	QueryOutDegreeShort = `triples(S, "has_out_degree", D)`
+	QueryClusterShort   = `triples(S, "belongs_to_cluster", C)`
+	QueryTestSymbol     = `triples(S, "is_test_symbol", "true")`
+	QueryInFile         = `triples(S, "in_file", F)`
+)
+
 // SkippedDirectories lists directory names excluded from filesystem walks during ingestion.
 var SkippedDirectories = []string{"node_modules", ".git", "dist", "build", ".next"}
 

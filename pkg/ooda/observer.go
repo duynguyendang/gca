@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/duynguyendang/gca/internal/manager"
@@ -499,11 +500,7 @@ func isInterfacePattern(symbol string) bool {
 
 // sortByCentralityDesc sorts symbols by centrality score in descending order
 func sortByCentralityDesc(symbols []string, centrality map[string]float64) {
-	for i := 0; i < len(symbols)-1; i++ {
-		for j := i + 1; j < len(symbols); j++ {
-			if centrality[symbols[i]] < centrality[symbols[j]] {
-				symbols[i], symbols[j] = symbols[j], symbols[i]
-			}
-		}
-	}
+	sort.Slice(symbols, func(i, j int) bool {
+		return centrality[symbols[j]] < centrality[symbols[i]]
+	})
 }

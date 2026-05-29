@@ -382,7 +382,10 @@ func (s *AIService) Close() {
 // WaitForCleanup waits for any in-flight cleanup goroutines to complete.
 // This is optional and mainly for testing.
 func (s *AIService) WaitForCleanup() {
-	<-s.cleanupDone
+	select {
+	case <-s.cleanupDone:
+	case <-time.After(5 * time.Second):
+	}
 }
 
 func (s *AIService) GetEmbedding(ctx context.Context, text string) ([]float32, error) {
@@ -536,18 +539,7 @@ func (s *AIService) formatPromptOutput(context string, query string) (string, er
 			"Query":   query,
 		})
 	}
-
-	prompt := fmt.Sprintf(`You are an expert Software Architect assistant.
-Assign context to the user's question using the provided Code and Graph information.
-
-%s
-
-## User Question
-%s
-
-Answer concisely and accurately based on the code provided.`, context, query)
-
-	return prompt, nil
+	return "", fmt.Errorf("default_context prompt not loaded")
 }
 
 func (s *AIService) appendSymbolContext(ctx context.Context, store *meb.MEBStore, symbolID string, sb *strings.Builder) error {

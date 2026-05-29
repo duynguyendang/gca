@@ -156,7 +156,9 @@ func selectTemplateWithAI(ctx context.Context, cfg *NeuroSymbolicConfig, attenti
 	if neuroSymPromptTemplate != nil {
 		promptText, _ = neuroSymPromptTemplate.Execute(data)
 	} else {
-		promptText = buildFallbackSelectPrompt(attentionSink, templatesStr, userQuery)
+		selection.Skip = true
+		selection.Reason = "neuro_symbolic prompt not loaded"
+		return selection, allTemplates, nil
 	}
 
 	llmCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -167,22 +169,6 @@ func selectTemplateWithAI(ctx context.Context, cfg *NeuroSymbolicConfig, attenti
 	}
 
 	return parseTemplateResponse(llmResp), allTemplates, nil
-}
-
-func buildFallbackSelectPrompt(attentionSink, templatesStr, userQuery string) string {
-	return fmt.Sprintf(`You are a Neuro-Symbolic Query Planner.
-
-## Diagnostic Context
-%s
-
-## Available Templates
-%s
-
-## User Query
-"%s"
-
-Select a template or respond with TEMPLATE: none if no template matches.
-Output format: TEMPLATE: <id>, PARAMS: key=val or TEMPLATE: none`, attentionSink, templatesStr, userQuery)
 }
 
 func parameterizeTemplate(templateBody string, params map[string]string) string {

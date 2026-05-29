@@ -55,18 +55,37 @@ type Symbol struct {
 	Package    string
 }
 
-// lineFromOffset calculates line number from byte offset.
-func lineFromOffset(content []byte, offset uint) int {
-	if int(offset) >= len(content) {
-		return 0
+type lineOffsetIndex struct {
+	offsets []uint
+}
+
+func newLineOffsetIndex(content []byte) *lineOffsetIndex {
+	idx := &lineOffsetIndex{offsets: make([]uint, 0, 256)}
+	for i, b := range content {
+		if b == '\n' {
+			idx.offsets = append(idx.offsets, uint(i))
+		}
 	}
-	// Basic implementation
-	return strings.Count(string(content[:offset]), "\n") + 1
+	return idx
+}
+
+func (idx *lineOffsetIndex) line(offset uint) int {
+	lo, hi := 0, len(idx.offsets)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if idx.offsets[mid] < offset {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo + 1
 }
 
 // TreeSitterExtractor handles AST parsing and symbol extraction.
 type TreeSitterExtractor struct {
 	parser *sitter.Parser
+	lineIdx *lineOffsetIndex
 }
 
 // NewTreeSitterExtractor creates a new extractor instance for parsing source code.
@@ -74,6 +93,11 @@ type TreeSitterExtractor struct {
 func NewTreeSitterExtractor() *TreeSitterExtractor {
 	parser := sitter.NewParser()
 	return &TreeSitterExtractor{parser: parser}
+}
+
+func (e *TreeSitterExtractor) lineOf(offset uint) int {
+	if e.lineIdx == nil { return 0 }
+	return e.lineIdx.line(offset)
 }
 
 // GetParser returns the appropriate language parser for the given extension.
@@ -97,6 +121,7 @@ func (e *TreeSitterExtractor) GetParser(ext string) *sitter.Language {
 // Supported languages: Go, Python, JavaScript, TypeScript, JSX, TSX.
 // Returns a list of Symbol structs containing function, class, and type definitions.
 func (e *TreeSitterExtractor) ExtractSymbols(filename string, content []byte, relPath string) ([]Symbol, error) {
+	e.lineIdx = newLineOffsetIndex(content)
 	ext := filepath.Ext(filename)
 	lang := e.GetParser(ext)
 	e.parser.SetLanguage(lang)
@@ -159,6 +184,7 @@ func (e *TreeSitterExtractor) ExtractSymbols(filename string, content []byte, re
 // References include function calls, imports, and string literal references.
 // Returns a list of Reference structs containing subject-predicate-object triples.
 func (e *TreeSitterExtractor) ExtractReferences(filename string, content []byte, relPath string) ([]Reference, error) {
+	e.lineIdx = newLineOffsetIndex(content)
 	ext := filepath.Ext(filename)
 	if ext == ".md" {
 		return nil, nil
@@ -368,8 +394,10 @@ func findSymbolForIdentifier(ident string, symbolTable map[string]string) string
 	return ""
 }
 
+var looksLikePathRe = regexp.MustCompile(`^[\./\\]|^[a-zA-Z]:|^[a-zA-Z0-9_/.-]+\.[a-zA-Z]{2,}`)
+
 func looksLikePath(s string) bool {
-	return regexp.MustCompile(`^[\./\\]|^[a-zA-Z]:|^[a-zA-Z0-9_/.-]+\.[a-zA-Z]{2,}`).MatchString(s)
+	return looksLikePathRe.MatchString(s)
 }
 
 func looksLikeURL(s string) bool {
@@ -483,60 +511,37 @@ func (e *TreeSitterExtractor) derivePackage(relPath string) string {
 
 // deriveTags generates architectural tags based on file path and extension.
 func (e *TreeSitterExtractor) deriveTags(relPath string) []string {
-	var tags []string
+	tagSet := make(map[string]struct{})
 	lower := strings.ToLower(relPath)
 	ext := filepath.Ext(lower)
-
+	addTag := func(tag string) { tagSet[tag] = struct{}{} }
 	if ext == ".go" {
-		tags = append(tags, "backend")
+		addTag("backend")
 	} else if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" {
-		tags = append(tags, "frontend")
+		addTag("frontend")
 	}
-
 	// Directory-based tags
-	if strings.Contains(lower, "cmd/") {
-		tags = append(tags, "cmd")
-	}
-	if strings.Contains(lower, "pkg/") {
-		tags = append(tags, "pkg")
-	}
-	if strings.Contains(lower, "internal/") {
-		tags = append(tags, "internal")
-	}
-	if strings.Contains(lower, "service") {
-		tags = append(tags, "service")
-	}
-	if strings.Contains(lower, "component") {
-		tags = append(tags, "component")
-	}
-	if strings.Contains(lower, "hook") {
-		tags = append(tags, "hook")
-	}
-	if strings.Contains(lower, "util") {
-		tags = append(tags, "util")
-	}
-	if strings.Contains(lower, "context") {
-		tags = append(tags, "context")
-	}
-
-	// Extension-based tags
-	if strings.Contains(lower, "test") || strings.HasSuffix(lower, "_test.go") || strings.HasSuffix(lower, ".test.ts") {
-		tags = append(tags, "test")
-	}
-
-	// Layer tags
+	if strings.Contains(lower, "cmd/") { addTag("cmd") }
+	if strings.Contains(lower, "pkg/") { addTag("pkg") }
+	if strings.Contains(lower, "internal/") { addTag("internal") }
+	if strings.Contains(lower, "service") { addTag("service") }
+	if strings.Contains(lower, "component") { addTag("component") }
+	if strings.Contains(lower, "hook") { addTag("hook") }
+	if strings.Contains(lower, "util") { addTag("util") }
+	if strings.Contains(lower, "context") { addTag("context") }
+	if strings.Contains(lower, "test") || strings.HasSuffix(lower, "_test.go") || strings.HasSuffix(lower, ".test.ts") { addTag("test") }
 	if strings.HasSuffix(lower, ".tsx") || strings.HasSuffix(lower, ".jsx") {
-		tags = append(tags, "frontend", "ui")
+		addTag("frontend")
+		addTag("ui")
 	} else if strings.HasSuffix(lower, ".ts") || strings.HasSuffix(lower, ".js") {
-		tags = append(tags, "frontend") // loosely assummed unless node backend
-	}
-	if strings.HasSuffix(lower, ".go") {
-		tags = append(tags, "backend")
+		addTag("frontend")
 	}
 	if strings.HasSuffix(lower, ".py") {
-		tags = append(tags, "backend", "python")
+		addTag("backend")
+		addTag("python")
 	}
-
+	tags := make([]string, 0, len(tagSet))
+	for tag := range tagSet { tags = append(tags, tag) }
 	return tags
 }
 
@@ -613,7 +618,7 @@ func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relP
 						Subject:   currentScope,
 						Predicate: config.PredicateCalls,
 						Object:    callee,
-						Line:      lineFromOffset(content, n.StartByte()),
+						Line:      e.lineOf( n.StartByte()),
 					})
 				}
 			}
@@ -630,7 +635,7 @@ func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relP
 				Subject:   subj,
 				Predicate: config.PredicateReferences,
 				Object:    strVal,
-				Line:      lineFromOffset(content, n.StartByte()),
+				Line:      e.lineOf( n.StartByte()),
 			})
 		}
 	case "type_identifier":
@@ -640,7 +645,7 @@ func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relP
 				Subject:   currentScope,
 				Predicate: config.PredicateReferences,
 				Object:    name,
-				Line:      lineFromOffset(content, n.StartByte()),
+				Line:      e.lineOf( n.StartByte()),
 			})
 		}
 	case "qualified_type_identifier":
@@ -650,7 +655,7 @@ func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relP
 				Subject:   currentScope,
 				Predicate: config.PredicateReferences,
 				Object:    name,
-				Line:      lineFromOffset(content, n.StartByte()),
+				Line:      e.lineOf( n.StartByte()),
 			})
 		}
 	}
@@ -682,8 +687,8 @@ func (e *TreeSitterExtractor) extractPythonNode(n *sitter.Node, content []byte, 
 				Signature:  sig,
 				DocComment: doc,
 				Content:    n.Utf8Text(content),
-				StartLine:  lineFromOffset(content, n.StartByte()),
-				EndLine:    lineFromOffset(content, n.EndByte()),
+				StartLine:  e.lineOf( n.StartByte()),
+				EndLine:    e.lineOf( n.EndByte()),
 			})
 		}
 	case "class_definition":
@@ -706,8 +711,8 @@ func (e *TreeSitterExtractor) extractPythonNode(n *sitter.Node, content []byte, 
 				Signature:  sig,
 				DocComment: doc,
 				Content:    n.Utf8Text(content),
-				StartLine:  lineFromOffset(content, n.StartByte()),
-				EndLine:    lineFromOffset(content, n.EndByte()),
+				StartLine:  e.lineOf( n.StartByte()),
+				EndLine:    e.lineOf( n.EndByte()),
 			})
 		}
 	}
@@ -738,7 +743,7 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 					Subject:   relPath,
 					Predicate: config.PredicateImports,
 					Object:    resolvedImp,
-					Line:      lineFromOffset(content, n.StartByte()),
+					Line:      e.lineOf( n.StartByte()),
 				})
 			} else if child.Kind() == "aliased_import" {
 				name := child.ChildByFieldName("name")
@@ -749,7 +754,7 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 						Subject:   relPath,
 						Predicate: config.PredicateImports,
 						Object:    resolvedImp,
-						Line:      lineFromOffset(content, n.StartByte()),
+						Line:      e.lineOf( n.StartByte()),
 					})
 				}
 			}
@@ -764,7 +769,7 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 				Subject:   relPath,
 				Predicate: config.PredicateImports,
 				Object:    resolvedMod,
-				Line:      lineFromOffset(content, n.StartByte()),
+				Line:      e.lineOf( n.StartByte()),
 			})
 		}
 	case "call":
@@ -777,7 +782,7 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 						Subject:   currentScope,
 						Predicate: config.PredicateCalls,
 						Object:    callee,
-						Line:      lineFromOffset(content, n.StartByte()),
+						Line:      e.lineOf( n.StartByte()),
 					})
 				}
 			}
@@ -891,8 +896,8 @@ func (e *TreeSitterExtractor) addGenericSymbol(name, symType, receiver string, n
 		Signature:  sig,
 		DocComment: doc,
 		Content:    n.Utf8Text(content),
-		StartLine:  lineFromOffset(content, n.StartByte()),
-		EndLine:    lineFromOffset(content, n.EndByte()),
+		StartLine:  e.lineOf( n.StartByte()),
+		EndLine:    e.lineOf( n.EndByte()),
 	})
 	return id
 }
@@ -923,7 +928,7 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 				Subject:   relPath,
 				Predicate: config.PredicateImports,
 				Object:    resolvedSrc,
-				Line:      lineFromOffset(content, n.StartByte()),
+				Line:      e.lineOf( n.StartByte()),
 			})
 		}
 	case "call_expression":
@@ -936,7 +941,7 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 						Subject:   currentScope,
 						Predicate: config.PredicateCalls,
 						Object:    callee,
-						Line:      lineFromOffset(content, n.StartByte()),
+						Line:      e.lineOf( n.StartByte()),
 					})
 				}
 			}
@@ -952,7 +957,7 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 				Subject:   subj,
 				Predicate: config.PredicateReferences,
 				Object:    strVal,
-				Line:      lineFromOffset(content, n.StartByte()),
+				Line:      e.lineOf( n.StartByte()),
 			})
 		}
 	case "string_fragment":
@@ -967,7 +972,7 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 				Subject:   subj,
 				Predicate: config.PredicateReferences,
 				Object:    strVal,
-				Line:      lineFromOffset(content, n.StartByte()),
+				Line:      e.lineOf( n.StartByte()),
 			})
 		}
 	}
@@ -985,7 +990,7 @@ func (e *TreeSitterExtractor) addImportRef(content []byte, node *sitter.Node, re
 			Subject:   relPath,
 			Predicate: config.PredicateImports,
 			Object:    impPath,
-			Line:      lineFromOffset(content, node.StartByte()),
+			Line:      e.lineOf( node.StartByte()),
 		})
 	}
 }
@@ -1018,8 +1023,8 @@ func (e *TreeSitterExtractor) extractFunction(n *sitter.Node, content []byte, re
 		Signature:  signature,
 		DocComment: doc,
 		Content:    n.Utf8Text(content),
-		StartLine:  lineFromOffset(content, n.StartByte()),
-		EndLine:    lineFromOffset(content, n.EndByte()),
+		StartLine:  e.lineOf( n.StartByte()),
+		EndLine:    e.lineOf( n.EndByte()),
 		Package:    pkgName,
 	}
 }
@@ -1052,8 +1057,8 @@ func (e *TreeSitterExtractor) extractMethod(n *sitter.Node, content []byte, relP
 		Signature:  signature,
 		DocComment: doc,
 		Content:    n.Utf8Text(content),
-		StartLine:  lineFromOffset(content, n.StartByte()),
-		EndLine:    lineFromOffset(content, n.EndByte()),
+		StartLine:  e.lineOf( n.StartByte()),
+		EndLine:    e.lineOf( n.EndByte()),
 		Package:    pkgName,
 	}
 }
@@ -1084,8 +1089,8 @@ func (e *TreeSitterExtractor) extractType(spec *sitter.Node, decl *sitter.Node, 
 		Signature:  fmt.Sprintf("type %s %s", name, kind),
 		DocComment: doc,
 		Content:    spec.Utf8Text(content),
-		StartLine:  lineFromOffset(content, spec.StartByte()),
-		EndLine:    lineFromOffset(content, spec.EndByte()),
+		StartLine:  e.lineOf( spec.StartByte()),
+		EndLine:    e.lineOf( spec.EndByte()),
 		Package:    pkgName,
 	}
 }

@@ -113,7 +113,7 @@ func expandVariables(query string, session *ExecutionSession) string {
 func reflectAndCorrect(ctx context.Context, cfg Config, step *PlanStep, session *ExecutionSession, plannerPrompt *prompts.Prompt) (string, error) {
 	reflectPromptFile, err := prompts.LoadPrompt("prompts/reflect.prompt")
 	if err != nil || reflectPromptFile == nil {
-		return reflectWithInlinePrompt(ctx, cfg, step)
+		return "", fmt.Errorf("failed to load reflect.prompt: %w", err)
 	}
 
 	promptStr, err := reflectPromptFile.Execute(map[string]interface{}{
@@ -122,7 +122,7 @@ func reflectAndCorrect(ctx context.Context, cfg Config, step *PlanStep, session 
 		"Query":  step.Query,
 	})
 	if err != nil {
-		return reflectWithInlinePrompt(ctx, cfg, step)
+		return "", fmt.Errorf("failed to execute reflect prompt template: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -131,47 +131,6 @@ func reflectAndCorrect(ctx context.Context, cfg Config, step *PlanStep, session 
 	resp, err := genkit.Generate(ctx, cfg.Genkit,
 		ai.WithModelName(cfg.Model),
 		ai.WithPrompt(promptStr),
-	)
-	if err != nil {
-		return "", err
-	}
-
-	if resp.Text() == "" {
-		return "", fmt.Errorf("no response from LLM")
-	}
-
-	clean := strings.TrimSpace(resp.Text())
-	clean = strings.TrimPrefix(clean, "```datalog")
-	clean = strings.TrimPrefix(clean, "```")
-	clean = strings.TrimSuffix(clean, "```")
-	return strings.TrimSpace(clean), nil
-}
-
-// reflectWithInlinePrompt is a fallback when the reflect.prompt file can't be loaded.
-func reflectWithInlinePrompt(ctx context.Context, cfg Config, step *PlanStep) (string, error) {
-	reflectPrompt := fmt.Sprintf(`You are the GCA Lead Architect debugging a failed query step.
-
-Step %d: %s
-Query: %s
-Result: NO RESULTS or ERROR
-
-The query returned no results or failed. Suggest a revised Datalog query that might work better.
-
-Consider:
-1. Are the predicate names correct?
-2. Are variables used consistently?
-3. Is the regex pattern valid?
-4. Could the query be too restrictive?
-
-Return ONLY the revised Datalog query, nothing else. No explanations, no markdown.`,
-		step.ID, step.Task, step.Query)
-
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	resp, err := genkit.Generate(ctx, cfg.Genkit,
-		ai.WithModelName(cfg.Model),
-		ai.WithPrompt(reflectPrompt),
 	)
 	if err != nil {
 		return "", err
