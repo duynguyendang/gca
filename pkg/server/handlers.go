@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	apperrors "github.com/duynguyendang/gca/pkg/common/errors"
@@ -2080,6 +2081,7 @@ func (s *Server) handleTestGenerate(c *gin.Context) {
 		Task:      string(ooda.TaskTestGeneration),
 		Query:     req.Query,
 		SymbolID:  req.Target,
+		Data:      map[string]any{"depth": req.Depth},
 	}
 
 	result, err := s.aiService.HandleRequestOODA(c.Request.Context(), aiReq)
@@ -2089,6 +2091,99 @@ func (s *Server) handleTestGenerate(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"answer": result})
+}
+
+type TestGenerateAllRequest struct {
+	Depth int `json:"depth"`
+}
+
+type TestGenerateAllResponse struct {
+	Results   map[string]string         `json:"results"`
+	Errors    map[string]string         `json:"errors"`
+	Total     int                       `json:"total"`
+	Generated int                       `json:"generated"`
+	Failed    int                       `json:"failed"`
+}
+
+func (s *Server) handleTestGenerateAll(c *gin.Context) {
+	projectID := c.Param("projectId")
+	if projectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "project_id is required"})
+		return
+	}
+
+	var req TestGenerateAllRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		req.Depth = 3
+	}
+
+	store, err := s.manager.GetStore(projectID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "project not found"})
+		return
+	}
+
+	var handlers []string
+	for fact := range store.ScanContext(c.Request.Context(), "", "has_role", "api_handler") {
+		handlers = append(handlers, fact.Subject)
+	}
+
+	if len(handlers) == 0 {
+		c.JSON(http.StatusOK, TestGenerateAllResponse{
+			Results:   map[string]string{},
+			Errors:    map[string]string{},
+			Total:     0,
+			Generated: 0,
+			Failed:    0,
+		})
+		return
+	}
+
+	results := make(map[string]string)
+	errors := make(map[string]string)
+	generated := 0
+	failed := 0
+
+	const maxConcurrency = 3
+	sem := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for _, handler := range handlers {
+		wg.Add(1)
+		go func(h string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			aiReq := ai.AIRequest{
+				ProjectID: projectID,
+				Task:      string(ooda.TaskTestGeneration),
+				SymbolID:  h,
+				Data:      map[string]any{"depth": req.Depth},
+			}
+
+			result, err := s.aiService.HandleRequestOODA(c.Request.Context(), aiReq)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errors[h] = err.Error()
+				failed++
+			} else {
+				results[h] = result
+				generated++
+			}
+		}(handler)
+	}
+	wg.Wait()
+
+	c.JSON(http.StatusOK, TestGenerateAllResponse{
+		Results:   results,
+		Errors:    errors,
+		Total:     len(handlers),
+		Generated: generated,
+		Failed:    failed,
+	})
 }
 
 // handleCreateReviewSession creates an ephemeral review session from a git diff.

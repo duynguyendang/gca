@@ -174,6 +174,18 @@ func (d *GraphDecider) buildFallbackPrompt(ctx context.Context, store *meb.MEBSt
 		"SymbolID": frame.SymbolID,
 		"Data":     frame.Data,
 	}
+
+	if frame.Task == TaskDatalog {
+		schema, err := BuildDatalogSchemaContext(ctx, store)
+		if err != nil {
+			return "", fmt.Errorf("build datalog schema: %w", err)
+		}
+		data["Predicates"] = schema.Predicates
+		data["FactExamples"] = schema.FactExamples
+		data["ConstraintDoc"] = schema.ConstraintDoc
+		return promptbuilder.BuildDatalogPromptWithSchema(ctx, store, d.prompts, data)
+	}
+
 	return promptbuilder.BuildPrompt(string(frame.Task), ctx, store, d.prompts, data)
 }
 

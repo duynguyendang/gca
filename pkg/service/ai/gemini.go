@@ -870,6 +870,36 @@ func (a *analyticalTemplateStore) ListTemplates(ctx context.Context, projectID, 
 }
 
 func (s *AIService) HandleRequestOODA(ctx context.Context, req AIRequest) (string, error) {
+	task := ooda.GCATask(req.Task)
+	if task == "" {
+		task = ooda.TaskChat
+	}
+
+	if task == ooda.TaskTestGeneration {
+		store, err := s.manager.GetStore(req.ProjectID)
+		if err != nil {
+			return "", fmt.Errorf("failed to get store: %w", err)
+		}
+
+		depth := 3
+		if req.Data != nil {
+			if m, ok := req.Data.(map[string]any); ok {
+				if d, ok := m["depth"].(int); ok && d > 0 {
+					depth = d
+				}
+			}
+		}
+
+		model := &AIServiceModelAdapter{service: s}
+		config := &ooda.MultiRoundConfig{
+			Store: store,
+			Model: model,
+			Depth: depth,
+		}
+
+		return ooda.RunMultiRoundTestGen(ctx, config, req.SymbolID)
+	}
+
 	storeManager := &StoreManagerAdapter{service: s}
 	promptLoader := &PromptLoaderAdapter{service: s}
 	model := &AIServiceModelAdapter{service: s}
@@ -877,11 +907,6 @@ func (s *AIService) HandleRequestOODA(ctx context.Context, req AIRequest) (strin
 	config := ooda.NewOODAConfig(storeManager, promptLoader, model)
 	config.TemplateStore = &analyticalTemplateStore{manager: s.manager, cache: make(map[string]*templateCacheEntry)}
 	loop := ooda.NewOODALoopFromConfig(config)
-
-	task := ooda.GCATask(req.Task)
-	if task == "" {
-		task = ooda.TaskChat
-	}
 
 	return ooda.RunOODATask(ctx, loop, req.ProjectID, req.Query, task, req.SymbolID, req.Data)
 }

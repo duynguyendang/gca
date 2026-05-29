@@ -404,6 +404,7 @@ func (e *TreeSitterExtractor) processSymbols(bundle *AnalysisBundle, symbols []S
 		// Create Facts
 		bundle.Facts = append(bundle.Facts,
 			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateType, Object: sym.Type},
+			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateHasKind, Object: normalizeKind(string(sym.Type))},
 			meb.Fact{Subject: string(relPath), Predicate: config.PredicateDefines, Object: sym.ID},
 			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateInPackage, Object: filePackage},
 			meb.Fact{Subject: string(sym.ID), Predicate: config.PredicateName, Object: sym.Name},
@@ -1236,6 +1237,23 @@ func isGoBuiltIn(name string) bool {
 		return true
 	}
 	return false
+}
+
+func normalizeKind(t string) string {
+	switch t {
+	case TypeFunction:
+		return "func"
+	case TypeMethod:
+		return "method"
+	case TypeStruct:
+		return "struct"
+	case TypeInterface:
+		return "interface"
+	case TypeClass:
+		return "class"
+	default:
+		return t
+	}
 }
 
 func clean(s string) string {

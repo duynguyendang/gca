@@ -6,15 +6,22 @@ input:
     SymbolID: string
     Context: string
 ---
-You are an expert Software Engineer. Generate comprehensive unit tests for the following code.
+You are an expert Software Engineer. Generate comprehensive integration tests for the following API endpoint.
 
 ## Query: {{.Query}}
 
 {{if .Context}}
-## Code Context
+## API Context
 {{.Context}}
 {{end}}
 
-Review the following design headers. If any header matches the business logic of the target API, incorporate its context into your test cases.
+The Route Config section shows the HTTP method, path, and URL parameters.
+Use your framework's HTTP testing library to write tests that:
+
+- Exercise the endpoint with real HTTP requests (not direct function calls)
+- Assert HTTP status codes and response bodies
+- Test path parameters and query string parameters
+- Cover: happy path, validation errors, auth failures, edge cases
+- Mock auth/DB dependencies as shown in the dependency section
 
 Generate tests covering: normal cases, edge cases, and error conditions.

@@ -62,11 +62,25 @@ func DefaultCORSConfig() CORSConfig {
 	}
 }
 
+// AIService defines the interface for AI-powered operations.
+type AIService interface {
+	HandleRequestOODA(ctx context.Context, req ai.AIRequest) (string, error)
+	HandleRequest(ctx context.Context, req ai.AIRequest) (string, error)
+	HandleAsk(ctx context.Context, req AskRequest) (*AskResponse, error)
+	GetEmbedding(ctx context.Context, text string) ([]float32, error)
+}
+
+// AskRequest mirrors ai.AskRequest for the interface.
+type AskRequest = ai.AskRequest
+
+// AskResponse mirrors ai.AskResponse for the interface.
+type AskResponse = ai.AskResponse
+
 // Server holds the state for the REST API server.
 type Server struct {
 	manager        *manager.StoreManager
 	graphService   *service.GraphService
-	aiService      *ai.AIService
+	aiService      AIService
 	mangleClient   *manglesdk.Client
 	queryService   *registry.QueryService
 	ephemeralStore *ephemeral.EphemeralStore
@@ -121,6 +135,31 @@ func NewServer(mgr *manager.StoreManager, sourceDir string) *Server {
 		aiService:      aiSvc,
 		mangleClient:   mangleClient,
 		queryService:   queryService,
+		ephemeralStore: ephemeral.NewEphemeralStore(0),
+		sourceDir:      sourceDir,
+		router:         r,
+	}
+	s.setupRoutes()
+	return s
+}
+
+// NewServerWithAIService creates a Server with a custom AIService (used for testing).
+func NewServerWithAIService(mgr *manager.StoreManager, sourceDir string, aiSvc AIService) *Server {
+	r := gin.Default()
+	r.Use(RequestIDMiddleware())
+	r.Use(CORSMiddleware())
+	r.Use(RateLimitMiddleware())
+	r.Use(ValidationMiddleware())
+	r.Use(CompressionMiddleware())
+
+	svc := service.NewGraphService(mgr)
+
+	s := &Server{
+		manager:        mgr,
+		graphService:   svc,
+		aiService:      aiSvc,
+		mangleClient:   nil,
+		queryService:   nil,
 		ephemeralStore: ephemeral.NewEphemeralStore(0),
 		sourceDir:      sourceDir,
 		router:         r,
@@ -216,8 +255,9 @@ func (s *Server) setupRoutes() {
 	// Ingest Endpoints
 	s.router.POST("/api/v1/ingest/incremental", s.handleIncrementalIngest)
 
-	// Test Generation Endpoint
+	// Test Generation Endpoints
 	s.router.POST("/api/v1/projects/:projectId/test/generate", s.handleTestGenerate)
+	s.router.POST("/api/v1/projects/:projectId/test/generate-all", s.handleTestGenerateAll)
 }
 
 // AI Handler
@@ -348,7 +388,7 @@ func (s *Server) handleAgentExecute(c *gin.Context) {
 	}
 
 	// Wrap the AIService in an adapter that satisfies agent.ModelInterface
-	modelAdapter := ai.NewAIServiceModelAdapter(s.aiService)
+	modelAdapter := ai.NewAIServiceModelAdapter(s.aiService.(*ai.AIService))
 	orch := agent.NewOrchestrator(modelAdapter, store)
 
 	predicateNames := []string{

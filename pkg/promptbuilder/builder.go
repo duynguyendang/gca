@@ -22,6 +22,28 @@ func BuildDatalogPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet,
 	return sb.String(), nil
 }
 
+func BuildDatalogPromptWithSchema(ctx context.Context, store *meb.MEBStore, ps *PromptSet, data interface{}) (string, error) {
+	if ps.Datalog != nil {
+		return ps.Datalog.Execute(data)
+	}
+	predicates, _ := data.(map[string]interface{})["Predicates"].(string)
+	factExamples, _ := data.(map[string]interface{})["FactExamples"].(string)
+	constraintDoc, _ := data.(map[string]interface{})["ConstraintDoc"].(string)
+	query, _ := data.(map[string]interface{})["Query"].(string)
+
+	var sb strings.Builder
+	sb.WriteString("## Available Predicates\n")
+	sb.WriteString(predicates)
+	sb.WriteString("\n\n## Example Facts (from store)\n")
+	sb.WriteString(factExamples)
+	sb.WriteString("\n\n")
+	sb.WriteString(constraintDoc)
+	sb.WriteString("\n\n## User Query\n")
+	sb.WriteString(query)
+	sb.WriteString("\n\nOutput:")
+	return sb.String(), nil
+}
+
 func BuildChatPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, data interface{}) (string, error) {
 	var m map[string]interface{}
 	if md, ok := data.(map[string]interface{}); ok {

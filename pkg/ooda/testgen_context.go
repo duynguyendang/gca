@@ -3,29 +3,38 @@ package ooda
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/duynguyendang/gca/pkg/prompts"
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/meb"
 )
 
 type TestGenContext struct {
-	Target         string
-	TargetMeta     SymbolMeta
-	Framework      string
-	AuthDeps       []DepMeta
-	DbDeps         []DepMeta
-	OtherDeps      []DepMeta
-	ProjectHeaders []string
+	Target     string
+	TargetMeta SymbolMeta
+	Framework  string
+	RouteConfig *RouteConfig
+	AuthDeps   []DepMeta
+	DbDeps     []DepMeta
+	OtherDeps  []DepMeta
+}
+
+type RouteConfig struct {
+	Method string
+	Path   string
+	Params []string
 }
 
 type SymbolMeta struct {
-	Name    string
-	Kind    string
-	Package string
-	Role    string
-	Tags    []string
-	Content string
+	Name      string
+	Kind      string
+	Package   string
+	Role      string
+	Tags      []string
+	Content   string
+	Signature string
 }
 
 type DepMeta struct {
@@ -46,7 +55,16 @@ func buildTestGenContext(ctx context.Context, store *meb.MEBStore, frame *GCAFra
 		return nil, fmt.Errorf("resolve target: %w", err)
 	}
 
-	deps := bfsCallees(ctx, store, symbolID, 3)
+	depth := 3
+	if frame.Data != nil {
+		if m, ok := frame.Data.(map[string]any); ok {
+			if d, ok := m["depth"].(int); ok && d > 0 {
+				depth = d
+			}
+		}
+	}
+
+	deps := bfsCallees(ctx, store, symbolID, depth)
 
 	authDeps, dbDeps, otherDeps := classifyDeps(ctx, store, deps)
 
@@ -54,16 +72,16 @@ func buildTestGenContext(ctx context.Context, store *meb.MEBStore, frame *GCAFra
 
 	framework := detectFramework(ctx, store)
 
-	headers := getProjectHeaders(ctx, store, symbolID)
+	routeConfig := getRouteConfig(ctx, store, symbolID)
 
 	return &TestGenContext{
-		Target:         symbolID,
-		TargetMeta:     targetMeta,
-		Framework:      framework,
-		AuthDeps:       authDeps,
-		DbDeps:         dbDeps,
-		OtherDeps:      otherDeps,
-		ProjectHeaders: headers,
+		Target:     symbolID,
+		TargetMeta: targetMeta,
+		Framework:  framework,
+		RouteConfig: routeConfig,
+		AuthDeps:   authDeps,
+		DbDeps:     dbDeps,
+		OtherDeps:  otherDeps,
 	}, nil
 }
 
@@ -92,22 +110,49 @@ func bfsCallees(ctx context.Context, store *meb.MEBStore, symbolID string, maxDe
 	var result []string
 
 	for depth := 0; depth < maxDepth; depth++ {
-		var next []string
-		for _, sym := range current {
-			for fact := range store.ScanContext(ctx, sym, "calls", "") {
-				if callee, ok := fact.Object.(string); ok && !visited[callee] {
-					visited[callee] = true
-					result = append(result, callee)
-					next = append(next, callee)
-				}
-			}
-		}
-		current = next
 		if len(current) == 0 {
 			break
 		}
+
+		callees := queryCalleesAtDepth(ctx, store, current)
+		var next []string
+		for _, callee := range callees {
+			if !visited[callee] {
+				visited[callee] = true
+				result = append(result, callee)
+				next = append(next, callee)
+			}
+		}
+		current = next
 	}
 	return result
+}
+
+func queryCalleesAtDepth(ctx context.Context, store *meb.MEBStore, symbols []string) []string {
+	if len(symbols) == 0 {
+		return nil
+	}
+
+	var orClauses []string
+	for _, sym := range symbols {
+		orClauses = append(orClauses, fmt.Sprintf(`triples("%s", "calls", Callee)`, sym))
+	}
+	query := strings.Join(orClauses, ", ")
+
+		results, err := gcamdb.Query(ctx, store, query)
+	if err != nil || len(results) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	var callees []string
+	for _, row := range results {
+		if callee, ok := row["Callee"].(string); ok && !seen[callee] {
+			seen[callee] = true
+			callees = append(callees, callee)
+		}
+	}
+	return callees
 }
 
 func classifyDeps(ctx context.Context, store *meb.MEBStore, symbolIDs []string) (auth, db, other []DepMeta) {
@@ -115,20 +160,43 @@ func classifyDeps(ctx context.Context, store *meb.MEBStore, symbolIDs []string) 
 		meta := getSymbolMeta(ctx, store, id)
 		dep := DepMeta{ID: id, Name: meta.Name, Kind: meta.Kind, Role: meta.Role}
 
-		switch meta.Role {
-		case "sanitizer", "auth":
+		isAuth := meta.Role == "api_handler"
+		isDb := meta.Role == "data_contract"
+
+		if !isAuth && !isDb {
+			fileID := filePrefix(id)
+			for fact := range store.ScanContext(ctx, fileID, "has_tag", "") {
+				if tag, ok := fact.Object.(string); ok {
+					if tag == "sanitizer" || tag == "public_api" {
+						isAuth = true
+					}
+					if tag == "database" {
+						isDb = true
+					}
+				}
+			}
+		}
+
+		if isAuth {
 			auth = append(auth, dep)
-		case "database":
+		} else if isDb {
 			db = append(db, dep)
-		default:
+		} else {
 			other = append(other, dep)
 		}
 	}
 	return
 }
 
+func filePrefix(symbolID string) string {
+	if idx := strings.LastIndex(symbolID, ":"); idx >= 0 {
+		return symbolID[:idx]
+	}
+	return symbolID
+}
+
 func getSymbolMeta(ctx context.Context, store *meb.MEBStore, symbolID string) SymbolMeta {
-	meta := SymbolMeta{}
+	meta := SymbolMeta{Name: extractSymbolName(symbolID)}
 
 	var kind, pkg, role string
 	var tags []string
@@ -159,6 +227,7 @@ func getSymbolMeta(ctx context.Context, store *meb.MEBStore, symbolID string) Sy
 
 	if content, err := store.GetContentByKey(symbolID); err == nil && len(content) > 0 {
 		meta.Content = string(content)
+		meta.Signature = extractSignature(string(content), meta.Name)
 	}
 
 	meta.Kind = kind
@@ -166,6 +235,76 @@ func getSymbolMeta(ctx context.Context, store *meb.MEBStore, symbolID string) Sy
 	meta.Role = role
 	meta.Tags = tags
 	return meta
+}
+
+func extractSignature(content, funcName string) string {
+	if funcName == "" || content == "" {
+		return ""
+	}
+
+	funcRegex := regexp.MustCompile(`(?m)^func\s+\([^)]+\)\s*` + regexp.QuoteMeta(funcName) + `\s*\([^)]*\)`)
+	matches := funcRegex.FindStringSubmatch(content)
+	if len(matches) > 0 {
+		sig := strings.TrimSpace(matches[0])
+		sig = regexp.MustCompile(`\s+`).ReplaceAllString(sig, " ")
+		return sig
+	}
+
+	funcRegex2 := regexp.MustCompile(`(?m)^func\s+` + regexp.QuoteMeta(funcName) + `\s*\([^)]*\)`)
+	matches2 := funcRegex2.FindStringSubmatch(content)
+	if len(matches2) > 0 {
+		sig := strings.TrimSpace(matches2[0])
+		sig = regexp.MustCompile(`\s+`).ReplaceAllString(sig, " ")
+		return sig
+	}
+
+	return ""
+}
+
+func extractSymbolName(symbolID string) string {
+	if idx := strings.LastIndex(symbolID, ":"); idx >= 0 && idx < len(symbolID)-1 {
+		return symbolID[idx+1:]
+	}
+	return symbolID
+}
+
+func getRouteConfig(ctx context.Context, store *meb.MEBStore, symbolID string) *RouteConfig {
+	var route, method, path string
+	var pathParams []string
+
+	for fact := range store.ScanContext(ctx, "", "handled_by", symbolID) {
+		route = fact.Subject
+		break
+	}
+	if route == "" {
+		return nil
+	}
+
+	if idx := strings.Index(route, ":"); idx >= 0 {
+		method = route[:idx]
+		path = route[idx+1:]
+	} else {
+		method = "GET"
+		path = route
+	}
+
+	methodUpper := strings.ToUpper(method)
+	if methodUpper != "GET" && methodUpper != "POST" && methodUpper != "PUT" &&
+		methodUpper != "DELETE" && methodUpper != "PATCH" && methodUpper != "OPTIONS" {
+		method = "GET"
+	}
+
+	paramRegex := regexp.MustCompile(`:([a-zA-Z_][a-zA-Z0-9_]*)`)
+	matches := paramRegex.FindAllStringSubmatch(path, -1)
+	for _, m := range matches {
+		pathParams = append(pathParams, m[1])
+	}
+
+	return &RouteConfig{
+		Method: method,
+		Path:   path,
+		Params: pathParams,
+	}
 }
 
 func detectFramework(ctx context.Context, store *meb.MEBStore) string {
@@ -188,26 +327,6 @@ func detectFramework(ctx context.Context, store *meb.MEBStore) string {
 	return "go"
 }
 
-func getProjectHeaders(ctx context.Context, store *meb.MEBStore, symbolID string) []string {
-	headerSet := make(map[string]bool)
-
-	for fact := range store.ScanContext(ctx, symbolID, "documented_by", "") {
-		if mdFile, ok := fact.Object.(string); ok {
-			for headerFact := range store.ScanContext(ctx, mdFile, "documented_header", "") {
-				if headerText, ok := headerFact.Object.(string); ok {
-					headerSet[headerText] = true
-				}
-			}
-		}
-	}
-
-	result := make([]string, 0, len(headerSet))
-	for h := range headerSet {
-		result = append(result, h)
-	}
-	return result
-}
-
 func buildTestGenerationPrompt(template *prompts.Prompt, tgc *TestGenContext) (string, error) {
 	var sb strings.Builder
 
@@ -219,9 +338,23 @@ func buildTestGenerationPrompt(template *prompts.Prompt, tgc *TestGenContext) (s
 	}
 	sb.WriteString(fmt.Sprintf("Framework: %s\n\n", tgc.Framework))
 
+	if tgc.RouteConfig != nil {
+		sb.WriteString("## Route Config\n")
+		sb.WriteString(fmt.Sprintf("Method: %s\n", tgc.RouteConfig.Method))
+		sb.WriteString(fmt.Sprintf("Path: %s\n", tgc.RouteConfig.Path))
+		if len(tgc.RouteConfig.Params) > 0 {
+			sb.WriteString(fmt.Sprintf("Params: %s\n", strings.Join(tgc.RouteConfig.Params, ", ")))
+		}
+		sb.WriteString("\n")
+	}
+
 	sb.WriteString("## Target Code\n```go\n")
 	sb.WriteString(tgc.TargetMeta.Content)
 	sb.WriteString("\n```\n\n")
+
+	if tgc.TargetMeta.Signature != "" {
+		sb.WriteString(fmt.Sprintf("## Target Signature\n`%s`\n\n", tgc.TargetMeta.Signature))
+	}
 
 	if len(tgc.AuthDeps) > 0 {
 		sb.WriteString("## Auth Dependencies (mock these)\n")
@@ -247,14 +380,6 @@ func buildTestGenerationPrompt(template *prompts.Prompt, tgc *TestGenContext) (s
 		sb.WriteString("\n")
 	}
 
-	if len(tgc.ProjectHeaders) > 0 {
-		sb.WriteString("## Design Headers (business context)\n")
-		for _, h := range tgc.ProjectHeaders {
-			sb.WriteString(fmt.Sprintf("- %s\n", h))
-		}
-		sb.WriteString("\n")
-	}
-
 	sb.WriteString(getFrameworkGuidelines(tgc.Framework))
 
 	contextStr := sb.String()
@@ -271,26 +396,38 @@ func buildTestGenerationPrompt(template *prompts.Prompt, tgc *TestGenContext) (s
 func getFrameworkGuidelines(f string) string {
 	switch f {
 	case "go":
-		return `## Go Test Guidelines
-- Use standard testing.T with table-driven tests
-- Mock auth with interfaces (define AuthService interface)
-- Mock DB with mock interface or sqlmock
-- Follow naming: func Test<Name>_<Scenario>
-- Test: happy path, error cases, edge cases`
+		return `## Go Integration Test Guidelines
+- Use httptest.NewServer to create a test HTTP server from your router
+- Use httptest.NewRequest to craft HTTP requests with proper method/URL/headers
+- Assert status codes: if w.Code != http.StatusOK { t.Errorf(...) }
+- Test route path params via URL construction: /api/users/123
+- Test query params: URL + "?page=1&limit=10"
+- Mock auth by injecting a test middleware or interface
+- Mock DB with test fakes, sqlmock, or in-memory implementations
+- Follow naming: func TestIntegration_<Handler>_<Scenario>
+- Cover: happy path, validation errors, auth failures, edge cases`
 	case "jest":
-		return `## Jest Guidelines
-- Use describe()/it() or test() blocks
-- jest.mock() for external modules
-- beforeEach/afterEach for setup/teardown
-- Test rendering, state changes, edge cases`
+		return `## Jest Integration Test Guidelines
+- Use supertest (for Express/Fastify) or node-fetch/jest-fetch-mock for HTTP testing
+- Create a test server instance in beforeAll, close it in afterAll
+- Use request(object) or fetch(URL) to make HTTP calls
+- Test route parameters: /api/users/:id → /api/users/123
+- Test query parameters: ?name=test&role=admin
+- Mock external dependencies with jest.mock()
+- Assert: status codes (expect(res.status).toBe(200)), response body shape
+- Cover: happy path, validation errors, auth failures, edge cases`
 	case "pytest":
-		return `## Pytest Guidelines
-- pytest fixtures for setup/teardown
-- @pytest.mark.parametrize for multiple test cases
-- pytest.raises() for exception testing
-- test_<function>_<scenario> naming`
+		return `## Pytest Integration Test Guidelines
+- Use your framework's TestClient (Django TestCase, FastAPI TestClient, Flask test_client)
+- pytest fixtures for test server setup/teardown
+- @pytest.mark.parametrize for multiple request variants
+- Assert: status codes (assert response.status_code == 200), JSON body keys
+- Test: path params, query params, JSON body, auth headers
+- Mock external services or databases with fakes/mocks
+- Cover: happy path, validation errors, auth failures, edge cases`
 	default:
-		return `## Guidelines
-Generate tests for: normal cases, edge cases, error conditions.`
+		return `## Integration Test Guidelines
+Generate tests that make real HTTP requests to the endpoint.
+Cover: normal cases, edge cases, error conditions.`
 	}
 }

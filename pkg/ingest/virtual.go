@@ -186,6 +186,7 @@ func EnhanceVirtualTriples(s Store) error {
 
 		matches := routeRegex.FindAllStringSubmatch(content, -1)
 		for _, match := range matches {
+			method := strings.ToUpper(match[1])
 			route := match[2]
 			rawHandler := strings.TrimSpace(match[3])
 
@@ -199,6 +200,11 @@ func EnhanceVirtualTriples(s Store) error {
 			if targetID, ok := symbolLookup[handlerToken]; ok {
 				routeMap[route] = targetID
 				upsertFact(s, string(route), config.PredicateHandledBy, targetID)
+				upsertFact(s, string(route), "http_method", method)
+				paramRegex := regexp.MustCompile(`:([a-zA-Z_][a-zA-Z0-9_]*)`)
+				for _, m := range paramRegex.FindAllStringSubmatch(route, -1) {
+					upsertFact(s, string(route), "path_param", m[1])
+				}
 				upsertFact(s, string(targetID), config.PredicateHasRole, config.RoleAPIHandler)
 			} else {
 				logger.Warn("Failed to link route to handler", "route", route, "handler", rawHandler, "token", handlerToken)

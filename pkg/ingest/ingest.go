@@ -468,8 +468,29 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 		}
 	}
 
-	// Make sure file has type "file"
+	// Language detection
+	var lang string
+	switch {
+	case strings.HasSuffix(relPath, ".go"):
+		lang = "go"
+	case strings.HasSuffix(relPath, ".py"):
+		lang = "python"
+	case strings.HasSuffix(relPath, ".ts") || strings.HasSuffix(relPath, ".tsx"):
+		lang = "typescript"
+	case strings.HasSuffix(relPath, ".js") || strings.HasSuffix(relPath, ".jsx"):
+		lang = "javascript"
+	case strings.HasSuffix(relPath, ".java"):
+		lang = "java"
+	case strings.HasSuffix(relPath, ".rs"):
+		lang = "rust"
+	}
+	if lang != "" {
+		finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateHasLanguage, Object: lang})
+	}
+
+	// Make sure file has type "file" and kind "file"
 	finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateType, Object: config.SymbolKindFile})
+	finalFacts = append(finalFacts, meb.Fact{Subject: string(relPath), Predicate: config.PredicateHasKind, Object: config.SymbolKindFile})
 
 	hasNameCount := 0
 	for _, f := range bundle.Facts {

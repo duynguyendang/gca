@@ -189,7 +189,7 @@ The following features are planned for future releases:
 | Code Health Dashboard | ✅ DONE | SVG health score, risk leaderboard, metrics radar, smells list |
 | Graph Diff for PR Reviews | ✅ DONE | Snapshot comparison and set-difference for code state changes |
 | MCP Server | ✅ DONE | Model Context Protocol server for structured code queries |
-| Generate Integration Tests | 🟡 TODO | AI-powered integration test generation |
+| Generate Integration Tests | 🟡 TODO | AI-powered integration test generation (OODA loop, batch endpoint) |
 | Automated Code Review | 🟡 TODO | PR analysis for bugs and security issues |
 | Dependency Migration Advisor | 🟡 TODO | Impact analysis for library upgrades |
 | Incident Debugging Assistant | 🟡 TODO | Trace errors to source code locations |
@@ -235,6 +235,12 @@ The following features are planned for future releases:
 
 - `POST /api/v1/ask` — Unified NL → Datalog → LLM pipeline
 
+### Test Generation
+
+- `POST /api/v1/projects/:projectId/test/generate` — Generate test for a single handler
+- `POST /api/v1/projects/:projectId/test/generate-all` — Batch generate tests for all API handlers
+- `GET /api/v1/projects/:projectId/test/list` — List API handlers (`gca testgen` CLI also available)
+
 ### Source Code
 
 - `GET /api/v1/source` — Retrieve embedded source code
@@ -250,6 +256,7 @@ gca/
 │   ├── analyze.go              # Post-ingest analysis command
 │   ├── mcp.go                  # MCP server command
 │   ├── repl.go                 # Interactive REPL command
+│   ├── testgen.go             # Test generation CLI (list API handlers)
 │   └── server.go               # HTTP server command
 ├── pkg/
 │   ├── agent/                  # Multi-step reasoning agent (orchestrator, planner, executor, reflector)
