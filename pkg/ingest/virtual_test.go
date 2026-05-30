@@ -318,11 +318,9 @@ func TestUpsertFact(t *testing.T) {
 }
 
 func TestVirtualFactMu(t *testing.T) {
-	mu1 := virtualFactMu
-	mu2 := virtualFactMu
-	if &mu1 == &mu2 {
-		t.Error("virtualFactMu should be a unique mutex instance")
-	}
+	// Verify virtualFactMu is accessible (package-level var, not copied).
+	virtualFactMu.Lock()
+	virtualFactMu.Unlock()
 }
 
 func TestEnhanceVirtualTriples_EmptyStore(t *testing.T) {
