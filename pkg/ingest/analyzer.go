@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
 	mebpkg "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/logger"
@@ -430,8 +431,7 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 	}
 
 	// Compute hub scores - files that are called by many others
-	hubQuery := `triples(File, "calls", _), not contains(File, ":")`
-	hubResults, err := mebpkg.Query(ctx, sourceStore, hubQuery)
+	hubResults, err := mebpkg.Query(ctx, sourceStore, common.GetNamedQuery("hub_candidates"))
 	if err != nil {
 		return fmt.Errorf("hub query failed: %w", err)
 	}
@@ -459,8 +459,7 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 	}
 
 	// Compute entry points - files that define main, init, or have many callees
-	entryQuery := `triples(File, "defines", Symbol), or(contains(Symbol, "main"), contains(Symbol, "init"))`
-	entryResults, err := mebpkg.Query(ctx, sourceStore, entryQuery)
+	entryResults, err := mebpkg.Query(ctx, sourceStore, common.GetNamedQuery("entry_candidates"))
 	if err != nil {
 		logger.Warn("Entry point query failed", "error", err)
 	} else {
@@ -479,7 +478,7 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 	}
 
 	// Compute centrality for symbols (functions/methods)
-	symbolCentralityQuery := `triples(File, "defines", Symbol), triples(Symbol, "calls", Target)`
+	symbolCentralityQuery := common.GetNamedQuery("symbol_calls")
 	symbolResults, err := mebpkg.Query(ctx, sourceStore, symbolCentralityQuery)
 	if err != nil {
 		logger.Warn("Symbol centrality query failed", "error", err)

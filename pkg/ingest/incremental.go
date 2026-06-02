@@ -403,7 +403,17 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 				defer wg.Done()
 				localExt := NewTreeSitterExtractor()
 				sem := make(chan struct{}, 10)
-				for path := range jobs {
+				for {
+					var path string
+					var ok bool
+					select {
+					case <-ctx.Done():
+						return
+					case path, ok = <-jobs:
+						if !ok {
+							return
+						}
+					}
 					rel, _ := filepath.Rel(sourceDir, path)
 					logger.Debug("Processing file", "project", projectName, "file", rel)
 					if err := processFile(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta, &embeddingWg, sem, state, opts); err != nil {

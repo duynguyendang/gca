@@ -6,6 +6,21 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/gca-be']
 
+  # Write env vars file (YAML avoids gcloud dict comma issue)
+  - name: 'gcr.io/cloud-builders/gcloud'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        cat > /workspace/env.yaml <<EOF
+        LOW_MEM: 'true'
+        LLM_MODEL: 'googleai/gemma-4-31b-it'
+        LLM_PROVIDER: 'googleai'
+        EMBEDDING_MODEL: 'googleai/gemini-embedding-001'
+        CORS_ALLOW_ORIGINS: 'https://gca-hackathon.web.app,https://gca-hackathon.firebaseapp.com'
+        CORS_REFLECT_ANY: 'true'
+        EOF
+
   # Deploy to Cloud Run with secret from Secret Manager
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
@@ -25,8 +40,8 @@ steps:
       - '8080'
       - '--set-secrets'
       - 'LLM_API_KEY=GEMINI_KEY:latest'
-      - '--set-env-vars'
-      - 'LOW_MEM=true,LLM_MODEL=googleai/gemma-4-31b-it,LLM_PROVIDER=googleai,EMBEDDING_MODEL=googleai/gemini-embedding-001,CORS_ALLOW_ORIGINS=https://gca-hackathon.web.app'
+      - '--env-vars-file'
+      - '/workspace/env.yaml'
       - '--allow-unauthenticated'
 
 images:

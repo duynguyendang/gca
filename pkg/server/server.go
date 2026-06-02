@@ -28,6 +28,7 @@ type CORSConfig struct {
 	ExposeHeaders    []string
 	AllowCredentials bool
 	MaxAge           int
+	ReflectAnyOrigin bool // bypass allowlist: echo request Origin for any caller
 }
 
 // DefaultCORSConfig returns a secure default CORS configuration
@@ -37,6 +38,8 @@ func DefaultCORSConfig() CORSConfig {
 			"http://localhost:3000",
 			"http://localhost:5173",
 			"http://localhost:8080",
+			"https://gca-hackathon.web.app",
+			"https://gca-hackathon.firebaseapp.com",
 		},
 		AllowMethods: []string{
 			"GET",
@@ -66,6 +69,7 @@ func DefaultCORSConfig() CORSConfig {
 type AIService interface {
 	HandleRequestOODA(ctx context.Context, req ai.AIRequest) (string, error)
 	HandleRequest(ctx context.Context, req ai.AIRequest) (string, error)
+	HandleRequestStream(ctx context.Context, req ai.AIRequest, onChunk func(string) error) error
 	HandleAsk(ctx context.Context, req AskRequest) (*AskResponse, error)
 	GetEmbedding(ctx context.Context, text string) ([]float32, error)
 }
@@ -83,6 +87,7 @@ type Server struct {
 	aiService      AIService
 	mangleClient   *manglesdk.Client
 	queryService   *registry.QueryService
+	smellRegistry  *registry.SmellRegistry
 	ephemeralStore *ephemeral.EphemeralStore
 	sourceDir      string
 	router         *gin.Engine
@@ -129,12 +134,18 @@ func NewServer(mgr *manager.StoreManager, sourceDir string) *Server {
 		queryService = registry.NewQueryService(queryRegistry)
 	}
 
+	smellRegistry := registry.NewSmellRegistry(mgr)
+	if err := smellRegistry.LoadFromPolicies(context.Background(), ""); err != nil {
+		logger.Warn("Failed to load smell registry from policies", "error", err)
+	}
+
 	s := &Server{
 		manager:        mgr,
 		graphService:   svc,
 		aiService:      aiSvc,
 		mangleClient:   mangleClient,
 		queryService:   queryService,
+		smellRegistry:  smellRegistry,
 		ephemeralStore: ephemeral.NewEphemeralStore(0),
 		sourceDir:      sourceDir,
 		router:         r,
@@ -154,12 +165,15 @@ func NewServerWithAIService(mgr *manager.StoreManager, sourceDir string, aiSvc A
 
 	svc := service.NewGraphService(mgr)
 
+	smellRegistry := registry.NewSmellRegistry(mgr)
+
 	s := &Server{
 		manager:        mgr,
 		graphService:   svc,
 		aiService:      aiSvc,
 		mangleClient:   nil,
 		queryService:   nil,
+		smellRegistry:  smellRegistry,
 		ephemeralStore: ephemeral.NewEphemeralStore(0),
 		sourceDir:      sourceDir,
 		router:         r,
@@ -279,13 +293,11 @@ func (s *Server) handleAIAsk(c *gin.Context) {
 		return
 	}
 
-	// Validate ProjectID
 	if err := ValidateProjectID(req.ProjectID); err != nil {
 		handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
 		return
 	}
 
-	// Validate and sanitize Query
 	if req.Query != "" {
 		if err := ValidateQuery(req.Query); err != nil {
 			handleError(c, errors.NewAppError(http.StatusBadRequest, "invalid query", err))
@@ -296,26 +308,36 @@ func (s *Server) handleAIAsk(c *gin.Context) {
 
 	useOODA := os.Getenv("USE_OODA_LOOP") == "true"
 
-	var answer string
-	var err error
-
 	if useOODA {
-		answer, err = s.aiService.HandleRequestOODA(c.Request.Context(), req)
+		// OODA loop streaming not yet implemented — send full answer as one event
+		answer, err := s.aiService.HandleRequestOODA(c.Request.Context(), req)
 		if err != nil {
-			logger.Error("AI OODA Error", "error", err)
 			handleError(c, errors.NewAppError(http.StatusInternalServerError, "AI request failed", err))
 			return
 		}
-	} else {
-		answer, err = s.aiService.HandleRequest(c.Request.Context(), req)
-		if err != nil {
-			logger.Error("AI Error", "error", err)
-			handleError(c, errors.NewAppError(http.StatusInternalServerError, "AI request failed", err))
-			return
-		}
+		c.JSON(http.StatusOK, gin.H{"answer": answer})
+		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"answer": answer})
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.WriteHeader(http.StatusOK)
+	c.Writer.Flush()
+
+	streamFn := func(chunk string) error {
+		c.SSEvent("", chunk)
+		c.Writer.Flush()
+		return nil
+	}
+	if err := s.aiService.HandleRequestStream(c.Request.Context(), req, streamFn); err != nil {
+		c.SSEvent("error", err.Error())
+		c.Writer.Flush()
+		return
+	}
+	c.SSEvent("", "[DONE]")
+	c.Writer.Flush()
 }
 
 // handleAIClassify returns just the intent classification without executing a full query.
@@ -466,8 +488,33 @@ func CORSMiddleware() gin.HandlerFunc {
 		}
 	}
 
+	if os.Getenv("CORS_REFLECT_ANY") == "true" {
+		config.ReflectAnyOrigin = true
+	}
+
 	return func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
+
+		// CORS_REFLECT_ANY bypass: echo the request's Origin for any caller.
+		if config.ReflectAnyOrigin && origin != "" {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+			c.Writer.Header().Set("Vary", "Origin")
+			c.Writer.Header().Set("Access-Control-Allow-Methods", strings.Join(config.AllowMethods, ", "))
+			c.Writer.Header().Set("Access-Control-Allow-Headers", strings.Join(config.AllowHeaders, ", "))
+			c.Writer.Header().Set("Access-Control-Expose-Headers", strings.Join(config.ExposeHeaders, ", "))
+			if config.AllowCredentials {
+				c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
+			if config.MaxAge > 0 {
+				c.Writer.Header().Set("Access-Control-Max-Age", strconv.Itoa(config.MaxAge))
+			}
+			if c.Request.Method == "OPTIONS" {
+				c.AbortWithStatus(204)
+				return
+			}
+			c.Next()
+			return
+		}
 
 		// Check if origin is allowed
 		allowed := false

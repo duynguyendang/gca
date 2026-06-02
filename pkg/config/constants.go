@@ -159,6 +159,8 @@ const (
 )
 
 // Smell weight constants — must match policies/smells/scoring.mg
+// Deprecated: Use SmellRegistry.Weight() instead. These constants are defined
+// in policies/smells/scoring.mg and read dynamically at handler time.
 const (
 	SmellWeightCircularDependency = 10
 	SmellWeightCircularTransitive  = 15
@@ -170,6 +172,10 @@ const (
 )
 
 // Datalog query constants
+// Deprecated: Use common.GetNamedQuery(name) instead. These constants are
+// defined in policies/queries.mg and loaded dynamically at runtime.
+// They remain here for backward compatibility but new code should use
+// common.GetNamedQuery().
 const (
 	QuerySmellType      = `triples(Subject, "has_smell_type", Type)`
 	QuerySmellSeverity  = `triples(Subject, "has_smell_severity", Severity)`

@@ -24,5 +24,7 @@ WORKDIR /app
 # Copy binary from builder stage
 COPY --from=builder /app/gca .
 COPY --from=builder /app/data ./data
+COPY --from=builder /app/prompts ./prompts
+COPY --from=builder /app/policies ./policies
 
 ENTRYPOINT ["./gca", "server", "--data", "/app/data"]

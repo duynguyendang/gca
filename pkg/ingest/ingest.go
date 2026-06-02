@@ -181,7 +181,17 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 		go func() {
 			defer wg.Done()
 			localExt := NewTreeSitterExtractor()
-			for path := range jobs {
+			for {
+				var path string
+				var ok bool
+				select {
+				case <-ctx.Done():
+					return
+				case path, ok = <-jobs:
+					if !ok {
+						return
+					}
+				}
 				rel, relErr := filepath.Rel(sourceDir, path)
 				if relErr != nil {
 					logger.Error("Failed to get relative path", "path", path, "error", relErr)

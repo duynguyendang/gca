@@ -16,7 +16,7 @@ const (
 
 const (
 	QueryTimeout     = 30 * time.Second
-	AIRequestTimeout = 120 * time.Second
+	AIRequestTimeout = 30 * time.Second  // Must be < frontend timeout (35s) and < Cloud Run proxy disconnect (~49s)
 	EmbeddingTimeout = 10 * time.Second
 )
 

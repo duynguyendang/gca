@@ -48,10 +48,18 @@ var neuroSymPromptTemplate *prompts.Prompt
 
 var templateCategories = []string{"smell", "analysis", "datalog", "test", "performance", "security", "refactor"}
 
-var attentionSinkQueries = map[string]string{
-	"entry_points": `triples(Subject, "is_entry_point", "true")`,
-	"hub_scores":   `triples(Subject, "has_hub_score", Score)`,
-	"smells":       `triples(Subject, "has_smell", Object)`,
+// attentionSinkQueries provides named queries for the Virtual Attention Sink.
+// Query strings are defined in policies/queries.mg and loaded via common.GetNamedQuery.
+func attentionSinkQuery(name string) string {
+	switch name {
+	case "entry_points":
+		return common.GetNamedQuery("entry_point")
+	case "hub_scores":
+		return common.GetNamedQuery("hub_score")
+	case "smells":
+		return common.GetNamedQuery("smell")
+	}
+	return ""
 }
 
 func init() {
@@ -302,7 +310,7 @@ func (c *NeuroSymbolicConfig) GetAttentionSink(ctx context.Context) (string, err
 	var sb strings.Builder
 	sb.WriteString("=== ATTENTION SINK (Pre-computed Architectural Facts) ===\n")
 
-	if entries, err := gcamdb.Query(ctx, c.AnalyticalStore, attentionSinkQueries["entry_points"]); err == nil && len(entries) > 0 {
+	if entries, err := gcamdb.Query(ctx, c.AnalyticalStore, attentionSinkQuery("entry_points")); err == nil && len(entries) > 0 {
 		sb.WriteString("\nEntry Points:\n")
 		count := 0
 		for _, r := range entries {
@@ -316,7 +324,7 @@ func (c *NeuroSymbolicConfig) GetAttentionSink(ctx context.Context) (string, err
 		}
 	}
 
-	if hubs, err := gcamdb.Query(ctx, c.AnalyticalStore, attentionSinkQueries["hub_scores"]); err == nil && len(hubs) > 0 {
+	if hubs, err := gcamdb.Query(ctx, c.AnalyticalStore, attentionSinkQuery("hub_scores")); err == nil && len(hubs) > 0 {
 		sb.WriteString("\nHigh-Centrality Files (Hub):\n")
 		count := 0
 		for _, r := range hubs {
@@ -333,7 +341,7 @@ func (c *NeuroSymbolicConfig) GetAttentionSink(ctx context.Context) (string, err
 		}
 	}
 
-	if smells, err := gcamdb.Query(ctx, c.AnalyticalStore, attentionSinkQueries["smells"]); err == nil && len(smells) > 0 {
+	if smells, err := gcamdb.Query(ctx, c.AnalyticalStore, attentionSinkQuery("smells")); err == nil && len(smells) > 0 {
 		sb.WriteString("\nArchitectural Smells:\n")
 		count := 0
 		for _, r := range smells {

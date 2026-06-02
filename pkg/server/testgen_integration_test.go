@@ -102,6 +102,10 @@ func (m *mockAIService) HandleRequest(ctx context.Context, req ai.AIRequest) (st
 	return "", nil
 }
 
+func (m *mockAIService) HandleRequestStream(ctx context.Context, req ai.AIRequest, onChunk func(string) error) error {
+	return nil
+}
+
 func (m *mockAIService) HandleAsk(ctx context.Context, req ai.AskRequest) (*ai.AskResponse, error) {
 	return &ai.AskResponse{}, nil
 }

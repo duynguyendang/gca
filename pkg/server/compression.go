@@ -18,6 +18,13 @@ import (
 // The middleware skips compression for responses that are already compressed.
 func CompressionMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Skip compression for SSE streaming endpoints
+		if strings.HasPrefix(c.Request.URL.Path, "/api/v1/ai/ask") ||
+			strings.HasPrefix(c.Request.URL.Path, "/api/v1/agent/execute") {
+			c.Next()
+			return
+		}
+
 		// Don't compress if client doesn't accept gzip
 		if !strings.Contains(c.Request.Header.Get("Accept-Encoding"), "gzip") {
 			c.Next()

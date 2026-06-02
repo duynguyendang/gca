@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
@@ -46,8 +47,9 @@ type AIService struct {
 	responseCacheTTL     time.Duration
 	responseCacheMaxSize int
 	responseCacheList    *list.List
-	stopCh               chan struct{}
-	cleanupDone          chan struct{}
+	stopCh      chan struct{}
+	cleanupDone chan struct{}
+	stopOnce    sync.Once
 
 	// Circuit breaker for AI service resilience
 	circuitFailures    atomic.Int32
@@ -127,6 +129,7 @@ func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService,
 const (
 	circuitFailureThreshold = 5
 	circuitOpenDuration     = 30 * time.Second
+	MaxPromptLen            = 8000
 )
 
 func (s *AIService) isCircuitOpen() bool {
@@ -159,6 +162,15 @@ func (s *AIService) shouldFailFast() bool {
 	return s.isCircuitOpen()
 }
 
+func truncatePrompt(prompt string) string {
+	if utf8.RuneCountInString(prompt) > MaxPromptLen {
+		logger.Warn("Truncating oversized prompt", "original_len", len(prompt), "cap", MaxPromptLen)
+		runes := []rune(prompt)
+		return string(runes[:MaxPromptLen]) + "\n\n[Context truncated to fit model limits]"
+	}
+	return prompt
+}
+
 func (s *AIService) GenerateText(ctx context.Context, prompt string) (string, error) {
 	if s.shouldFailFast() {
 		return "", fmt.Errorf("AI service circuit breaker is open, failing fast to prevent cascading failures")
@@ -181,6 +193,43 @@ func (s *AIService) GenerateText(ctx context.Context, prompt string) (string, er
 
 	s.recordSuccess()
 	return resp.Text(), nil
+}
+
+// GenerateTextStream generates text via streaming, calling onChunk with each token delta.
+func (s *AIService) GenerateTextStream(ctx context.Context, prompt string, onChunk func(string) error) error {
+	if s.shouldFailFast() {
+		return fmt.Errorf("AI service circuit breaker is open, failing fast to prevent cascading failures")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, config.AIRequestTimeout)
+	defer cancel()
+
+	logger.Debug("Sending Streaming Prompt to LLM", "provider", s.provider, "prompt", prompt)
+
+	stream := genkit.GenerateStream(ctx, s.g,
+		ai.WithModelName(s.defaultModel),
+		ai.WithPrompt(prompt),
+	)
+	for result, err := range stream {
+		if err != nil {
+			s.recordFailure()
+			logger.Error("LLM Stream Failed", "error", err)
+			return err
+		}
+		if result.Done {
+			s.recordSuccess()
+			return nil
+		}
+		if chunk := result.Chunk; chunk != nil {
+			if err := onChunk(chunk.Text()); err != nil {
+				logger.Debug("Stream onChunk returned error (client disconnect)", "error", err)
+				s.recordSuccess()
+				return err
+			}
+		}
+	}
+	s.recordSuccess()
+	return nil
 }
 
 // GenerateTextWithContext generates text with diagnostic context injected from the Analytical Store.
@@ -376,7 +425,10 @@ func (s *AIService) cleanupExpiredCache() {
 
 // Close signals the cleanup goroutines to stop and waits for them to complete.
 func (s *AIService) Close() {
-	close(s.stopCh)
+	s.stopOnce.Do(func() {
+		close(s.stopCh)
+		close(s.cleanupDone)
+	})
 }
 
 // WaitForCleanup waits for any in-flight cleanup goroutines to complete.
@@ -440,9 +492,28 @@ func (s *AIService) HandleRequest(ctx context.Context, req AIRequest) (string, e
 		return "", fmt.Errorf("failed to build prompt: %w", err)
 	}
 
+	prompt = truncatePrompt(prompt)
+
 	logger.Debug("Sending AI Prompt", "task", req.Task, "length", len(prompt))
 
 	return s.GenerateText(ctx, prompt)
+}
+
+// HandleRequestStream builds a prompt and streams the LLM response via onChunk.
+func (s *AIService) HandleRequestStream(ctx context.Context, req AIRequest, onChunk func(string) error) error {
+	store, err := s.manager.GetStore(req.ProjectID)
+	if err != nil {
+		return fmt.Errorf("failed to get store: %w", err)
+	}
+
+	prompt, err := s.buildTaskPrompt(ctx, store, req)
+	if err != nil {
+		return fmt.Errorf("failed to build prompt: %w", err)
+	}
+
+	prompt = truncatePrompt(prompt)
+
+	return s.GenerateTextStream(ctx, prompt, onChunk)
 }
 
 func (s *AIService) buildTaskPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {

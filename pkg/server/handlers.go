@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	apperrors "github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/ephemeral"
@@ -1178,7 +1179,7 @@ func (s *Server) handleHealthSummary(c *gin.Context) {
 	var smellResults []smellResult
 
 	// Query has_smell_type facts
-	typeQuery := config.QuerySmellType
+	typeQuery := common.GetNamedQuery("smell_type")
 	if typeResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, typeQuery); err == nil {
 		for _, r := range typeResults {
 			if subject, ok := r["Subject"].(string); ok {
@@ -1193,7 +1194,7 @@ func (s *Server) handleHealthSummary(c *gin.Context) {
 	}
 
 	// Query has_smell_severity facts to get severity
-	severityQuery := config.QuerySmellSeverity
+	severityQuery := common.GetNamedQuery("smell_severity")
 	if sevResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, severityQuery); err == nil {
 		severityMap := make(map[string]string)
 		for _, r := range sevResults {
@@ -1249,8 +1250,7 @@ func (s *Server) handleHealthSummary(c *gin.Context) {
 	}
 
 	// Query for hub scores
-	hubQuery := config.QueryHubScore
-	hubResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, hubQuery)
+	hubResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("hub_score"))
 	if err == nil {
 		for _, r := range hubResults {
 			subject, _ := r["Subject"].(string)
@@ -1271,8 +1271,7 @@ func (s *Server) handleHealthSummary(c *gin.Context) {
 	}
 
 	// Query for entry points
-	entryQuery := config.QueryEntryPoint
-	entryResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, entryQuery)
+	entryResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("entry_point"))
 	if err == nil {
 		for _, r := range entryResults {
 			subject, _ := r["Subject"].(string)
@@ -1345,8 +1344,7 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 	fileDebt := make(map[string]int)
 
 	// Pre-computed health debt facts from scoring.mg
-	debtQuery := config.QueryHealthDebt
-	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, debtQuery); err == nil {
+	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("health_debt")); err == nil {
 		for _, r := range results {
 			subject, _ := r["Subject"].(string)
 			debtStr, _ := r["Debt"].(string)
@@ -1360,8 +1358,7 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 	}
 
 	// Smells: triples(Subject, "has_smell", Object)
-	smellQuery := config.QuerySmell
-	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, smellQuery); err == nil {
+	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("smell")); err == nil {
 		for _, r := range results {
 			subject, _ := r["Subject"].(string)
 			object, _ := r["Object"].(string)
@@ -1373,8 +1370,7 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 	}
 
 	// Hub scores: triples(Subject, "has_hub_score", Score)
-	hubQuery := config.QueryHubScore
-	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, hubQuery); err == nil {
+	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("hub_score")); err == nil {
 		for _, r := range results {
 			subject, _ := r["Subject"].(string)
 			scoreStr, _ := r["Score"].(string)
@@ -1387,26 +1383,9 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 		}
 	}
 
-	// Build smell weight map from Go constants (these match scoring.mg at runtime).
-	// The scoring.mg rules are executed by the analyzer to produce has_health_debt
-	// facts — smell_weight rules are not stored as facts in the analytical store.
-	smellWeight := map[string]int{
-		"circular_dependency": config.SmellWeightCircularDependency,
-		"circular_transitive": config.SmellWeightCircularTransitive,
-		"god_file":            config.SmellWeightGodFile,
-		"layer_violation":     config.SmellWeightLayerViolation,
-		"hub_anomaly":         config.SmellWeightHubAnomaly,
-		"security_risk":       config.SmellWeightUnsanitizedDB,
-	}
-
-	getWeight := func(smell string) int {
-		for prefix, w := range smellWeight {
-			if strings.HasPrefix(smell, prefix) {
-				return w
-			}
-		}
-		return config.SmellWeightDefault
-	}
+	// Smell weights are read from the Analytical Store via smellRegistry.
+	// This replaces the old hardcoded smellWeight map — adding a new smell
+	// type only requires a change to policies/smells/*.mg, no Go changes.
 
 	var files []FileHealthV2
 	totalArchDebt := 0
@@ -1417,12 +1396,12 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 		var archSmells []string
 		secIssues := 0
 
-		for _, s := range smells {
-			if strings.HasPrefix(s, "security_risk") || strings.HasPrefix(s, "unsanitized") {
+		for _, smell := range smells {
+			if s.smellRegistry.IsSecurity(smell) {
 				secIssues++
 				totalSecurity++
 			} else {
-				archSmells = append(archSmells, s)
+				archSmells = append(archSmells, smell)
 			}
 		}
 
@@ -1430,8 +1409,12 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 		if preComputedDebt, ok := fileDebt[file]; ok {
 			debt = preComputedDebt
 		} else {
-			for _, s := range smells {
-				debt += getWeight(s)
+			for _, smell := range smells {
+				if w, ok := s.smellRegistry.Weight(smell); ok {
+					debt += w
+				} else {
+					debt += s.smellRegistry.DefaultWeight()
+				}
 			}
 			if hub, ok := fileHubScore[file]; ok {
 				debt += hub
@@ -1524,7 +1507,7 @@ func (s *Server) handleSurpriseAnalysis(c *gin.Context) {
 
 	var surpriseResults []surpriseResult
 
-	query := config.QuerySurprise
+	query := common.GetNamedQuery("surprise")
 	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, query); err == nil {
 		for _, r := range results {
 			if subject, ok := r["Subject"].(string); ok {
@@ -1542,7 +1525,7 @@ func (s *Server) handleSurpriseAnalysis(c *gin.Context) {
 	}
 
 	// Also query for surprise score facts (composite scores)
-	scoreQuery := config.QuerySurpriseScore
+	scoreQuery := common.GetNamedQuery("surprise_score")
 	scoreMap := make(map[string]float64)
 	if scoreResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, scoreQuery); err == nil {
 		for _, r := range scoreResults {
@@ -1669,7 +1652,7 @@ func (s *Server) handleKnowledgeGaps(c *gin.Context) {
 	// Query degree facts
 	inDegMap := make(map[string]int)
 	outDegMap := make(map[string]int)
-	if inResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, config.QueryInDegreeShort); err == nil {
+	if inResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, 	common.GetNamedQuery("in_degree_short")); err == nil {
 		for _, r := range inResults {
 			if s, ok := r["S"].(string); ok {
 				if d, ok := r["D"].(string); ok {
@@ -1680,7 +1663,7 @@ func (s *Server) handleKnowledgeGaps(c *gin.Context) {
 			}
 		}
 	}
-	if outResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, config.QueryOutDegreeShort); err == nil {
+	if outResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, 	common.GetNamedQuery("out_degree_short")); err == nil {
 		for _, r := range outResults {
 			if s, ok := r["S"].(string); ok {
 				if d, ok := r["D"].(string); ok {
@@ -1694,7 +1677,7 @@ func (s *Server) handleKnowledgeGaps(c *gin.Context) {
 
 	// Query cluster facts
 	clusterMap := make(map[string]string)
-	if clusterResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, config.QueryClusterShort); err == nil {
+	if clusterResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("cluster_short")); err == nil {
 		for _, r := range clusterResults {
 			if s, ok := r["S"].(string); ok {
 				if c, ok := r["C"].(string); ok {
@@ -1731,7 +1714,7 @@ func (s *Server) handleKnowledgeGaps(c *gin.Context) {
 	}
 
 	// Untested hotspots: degree >= 5 and not a test symbol
-	if testResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, config.QueryTestSymbol); err == nil {
+	if testResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("test_symbol")); err == nil {
 		testSymbols := make(map[string]bool)
 		for _, r := range testResults {
 			if s, ok := r["S"].(string); ok {
@@ -1783,7 +1766,7 @@ func (s *Server) handleKnowledgeGaps(c *gin.Context) {
 	// Single-file clusters: all members in same file
 	// Query in_file facts
 	fileMap := make(map[string]string)
-	if fileResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, config.QueryInFile); err == nil {
+	if fileResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("in_file")); err == nil {
 		for _, r := range fileResults {
 			if s, ok := r["S"].(string); ok {
 				if f, ok := r["F"].(string); ok {

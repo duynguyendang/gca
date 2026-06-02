@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/datalog"
 	"github.com/duynguyendang/gca/pkg/logger"
@@ -343,7 +344,7 @@ func buildQueryFromSymbols(symbols []string, intent Intent, original string) str
 	}
 
 	if len(symbols) == 1 {
-		sym := symbols[0]
+		sym := common.EscapeDatalogValue(symbols[0])
 		switch intent {
 		case IntentWhoCalls:
 			return fmt.Sprintf(`triples(?caller, "calls", "%s")`, sym)
@@ -358,6 +359,7 @@ func buildQueryFromSymbols(symbols []string, intent Intent, original string) str
 
 	var conditions []string
 	for _, sym := range symbols {
+		sym = common.EscapeDatalogValue(sym)
 		switch intent {
 		case IntentWhoCalls:
 			conditions = append(conditions, fmt.Sprintf(`triples(?caller, "calls", "%s")`, sym))
