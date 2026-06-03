@@ -129,7 +129,7 @@ func NewAIService(ctx context.Context, manager ProjectStoreManager) (*AIService,
 const (
 	circuitFailureThreshold = 5
 	circuitOpenDuration     = 30 * time.Second
-	MaxPromptLen            = 8000
+	MaxPromptLen            = 128000
 )
 
 func (s *AIService) isCircuitOpen() bool {

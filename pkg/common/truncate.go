@@ -28,7 +28,7 @@ func TruncateWithEllipsis(s string, maxLen int, suffix string) string {
 }
 
 func SymbolContext(s string) string {
-	return TruncateWithEllipsis(s, MaxSymbolContextLength, "\n... (truncated)")
+	return s
 }
 
 func ContentPreview(s string) string {

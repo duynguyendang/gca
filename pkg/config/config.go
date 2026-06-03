@@ -11,7 +11,7 @@ const (
 	DefaultModel          = "gemini-1.5-flash"
 	DefaultEmbeddingModel = "gemini-embedding-001"
 	DefaultTemperature   = 0.2
-	DefaultMaxTokens      = 2048
+	DefaultMaxTokens      = 8192
 )
 
 const (
