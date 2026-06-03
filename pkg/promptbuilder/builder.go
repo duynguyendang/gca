@@ -87,6 +87,10 @@ func BuildChatPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, da
 			query = fmt.Sprintf("%v", q)
 		}
 
+		if isRouteQuery(query) {
+			appendRouteContext(store, &contextBuilder)
+		}
+
 		templateData := map[string]interface{}{
 			"Query":   query,
 			"Context": contextBuilder.String(),

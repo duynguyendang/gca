@@ -2261,3 +2261,71 @@ func (s *Server) handleReviewSessionQuery(c *gin.Context) {
 
 	c.JSON(http.StatusOK, result)
 }
+
+// handleRoutes returns all detected API routes from the codebase.
+// Query parameters:
+//   - project: project ID (auto-detected if omitted)
+//
+// Response: JSON array of route objects with method, path, and handler.
+func (s *Server) handleRoutes(c *gin.Context) {
+	projectID := c.Query("project")
+	if projectID == "" {
+		projects, err := s.graphService.ListProjects()
+		if err == nil && len(projects) > 0 {
+			projectID = projects[0].ID
+		}
+	}
+	if projectID == "" {
+		c.JSON(http.StatusOK, gin.H{"routes": []interface{}{}})
+		return
+	}
+
+	store, err := s.manager.GetAnalyticalStore(projectID)
+	if err != nil {
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to get store", err))
+		return
+	}
+
+	routes := make(map[string]map[string]string) // route -> {method, handler}
+
+	for fact, err := range store.Scan("", config.PredicateHandledBy, "") {
+		if err != nil {
+			continue
+		}
+		route := fact.Subject
+		if handler, ok := fact.Object.(string); ok {
+			if routes[route] == nil {
+				routes[route] = make(map[string]string)
+			}
+			routes[route]["handler"] = handler
+			routes[route]["path"] = route
+		}
+	}
+
+	for fact, err := range store.Scan("", "http_method", "") {
+		if err != nil {
+			continue
+		}
+		route := fact.Subject
+		if method, ok := fact.Object.(string); ok {
+			if routes[route] == nil {
+				routes[route] = make(map[string]string)
+			}
+			routes[route]["method"] = method
+		}
+	}
+
+	result := make([]map[string]string, 0, len(routes))
+	for _, r := range routes {
+		if r["method"] == "" {
+			r["method"] = "ANY"
+		}
+		result = append(result, r)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i]["path"] < result[j]["path"]
+	})
+
+	c.JSON(http.StatusOK, gin.H{"routes": result})
+}

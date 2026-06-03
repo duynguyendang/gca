@@ -303,6 +303,7 @@ func TestUpsertFact(t *testing.T) {
 		t.Errorf("Store should have 1 fact after upsert, got %d", len(store.Facts))
 	}
 
+	// Second upsert with same subject+predicate should be idempotent (skip, not replace)
 	upsertFact(store, "test.go", "handled_by", "handler2")
 	if len(store.Facts) != 1 {
 		t.Errorf("Store should still have 1 fact after second upsert, got %d", len(store.Facts))
@@ -310,8 +311,8 @@ func TestUpsertFact(t *testing.T) {
 
 	for _, f := range store.Facts {
 		if obj, ok := f.Object.(string); ok {
-			if obj != "handler2" {
-				t.Errorf("Fact object should be handler2, got %q", obj)
+			if obj != "handler1" {
+				t.Errorf("Fact object should be handler1 (idempotent), got %q", obj)
 			}
 		}
 	}
@@ -415,6 +416,81 @@ func TestEnhanceVirtualTriples_EmptyStoreScenario(t *testing.T) {
 	err := EnhanceVirtualTriples(store)
 	if err != nil {
 		t.Errorf("EnhanceVirtualTriples should not error with empty store: %v", err)
+	}
+}
+
+func TestEnhanceVirtualTriples_Go122Mux(t *testing.T) {
+	store := NewMockStore()
+	store.Documents["reflection.go"] = []byte(`
+package genkit
+
+import "net/http"
+
+func serveMux(g *Genkit) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/__health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /api/actions", wrapHandler(handleListActions(g)))
+	mux.HandleFunc("POST /api/runAction", handleRunAction(g))
+	return mux
+}
+
+func handleRunAction(g *Genkit) http.HandlerFunc { return nil }
+func wrapHandler(h interface{}) http.HandlerFunc  { return nil }
+`)
+
+	store.Facts = []meb.Fact{
+		{Subject: "reflection.go", Predicate: config.PredicateHasTag, Object: "backend"},
+		{Subject: "reflection.go", Predicate: config.PredicateDefines, Object: "serveMux"},
+		{Subject: "reflection.go", Predicate: config.PredicateDefines, Object: "handleRunAction"},
+	}
+
+	err := EnhanceVirtualTriples(store)
+	if err != nil {
+		t.Fatalf("EnhanceVirtualTriples should not error with Go 1.22 mux: %v", err)
+	}
+
+	// Check that handled_by facts were created
+	routeCount := 0
+	for _, f := range store.Facts {
+		if f.Predicate == config.PredicateHandledBy {
+			routeCount++
+		}
+	}
+	if routeCount < 2 {
+		t.Errorf("Expected at least 2 handled_by facts for Go 1.22 mux, got %d", routeCount)
+	}
+
+	// Check that http_method facts were created
+	methodCount := 0
+	for _, f := range store.Facts {
+		if f.Predicate == "http_method" {
+			methodCount++
+		}
+	}
+	if methodCount < 2 {
+		t.Errorf("Expected at least 2 http_method facts, got %d", methodCount)
+	}
+}
+
+func TestExtractHandler(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"s.handleTest", "handleTest"},
+		{"handler", "handler"},
+		{"wrapReflectionHandler(handleListActions(g))", "handleListActions"},
+		{"wrapHandler(innerFunc(arg1, arg2))", "innerFunc"},
+		{"func(w http.ResponseWriter, r *http.Request) {}", ""},
+		{"  s.handleTest  ", "handleTest"},
+	}
+	for _, tt := range tests {
+		result := extractHandler(tt.input)
+		if result != tt.expected {
+			t.Errorf("extractHandler(%q) = %q, want %q", tt.input, result, tt.expected)
+		}
 	}
 }
 

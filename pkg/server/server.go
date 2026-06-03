@@ -272,6 +272,9 @@ func (s *Server) setupRoutes() {
 	// Test Generation Endpoints
 	s.router.POST("/api/v1/projects/:projectId/test/generate", s.handleTestGenerate)
 	s.router.POST("/api/v1/projects/:projectId/test/generate-all", s.handleTestGenerateAll)
+
+	// Route Discovery
+	s.router.GET("/api/v1/routes", s.handleRoutes)
 }
 
 // AI Handler

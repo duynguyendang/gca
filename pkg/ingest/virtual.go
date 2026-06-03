@@ -33,12 +33,23 @@ func safeAddFact(s Store, subj, pred string, obj any) bool {
 
 // upsertFact adds a fact, replacing any existing fact with same subject/predicate.
 // For route->handler facts that should be deterministic on re-run.
-// Protected by mutex to ensure atomic delete+add operations.
+// Protected by mutex to ensure atomic operations.
 func upsertFact(s Store, subj, pred string, obj any) {
 	virtualFactMu.Lock()
 	defer virtualFactMu.Unlock()
-	s.DeleteFactsBySubject(subj)
-	s.AddFact(meb.Fact{Subject: subj, Predicate: pred, Object: obj})
+	// Check if fact with same subject+predicate already exists
+	existing := false
+	for f, err := range s.Scan(subj, pred, "") {
+		if err != nil {
+			continue
+		}
+		_ = f
+		existing = true
+		break
+	}
+	if !existing {
+		s.AddFact(meb.Fact{Subject: subj, Predicate: pred, Object: obj})
+	}
 }
 
 // getTagConfig returns the active tagging rules for this project.
@@ -89,6 +100,36 @@ func configDrivenTagMatcher(s Store, fileID string, tagCfg *config.ProjectTagCon
 			logger.Debug("Config-driven tag injection", "file", fileID, "tag", tag)
 		}
 	}
+}
+
+// extractHandler extracts the handler function name from a raw handler string.
+// Handles: "s.handleTest" → "handleTest", "wrapReflectionHandler(handleListActions(g))" → "handleListActions",
+// "func(...) {...}" → "" (anonymous, caller should create synthetic ID).
+func extractHandler(raw string) string {
+	raw = strings.TrimSpace(raw)
+	// Anonymous function literals → return empty (caller creates synthetic ID)
+	if strings.HasPrefix(raw, "func") {
+		return ""
+	}
+	// Strip receiver prefix: "s.handleTest" → "handleTest"
+	if idx := strings.LastIndex(raw, "."); idx != -1 {
+		raw = raw[idx+1:]
+	}
+	raw = strings.Trim(raw, " ),;")
+	// Handle wrapped functions: "wrapHandler(innerFunc(args))" → "innerFunc"
+	if idx := strings.Index(raw, "("); idx != -1 {
+		inner := raw[:idx]
+		after := strings.TrimSpace(raw[idx+1:])
+		if j := strings.Index(after, "("); j != -1 {
+			inner = after[:j]
+		}
+		inner = strings.Trim(inner, " ),;")
+		if inner != "" && inner != "func" {
+			return inner
+		}
+		return ""
+	}
+	return raw
 }
 
 func EnhanceVirtualTriples(s Store) error {
@@ -168,8 +209,10 @@ func EnhanceVirtualTriples(s Store) error {
 		}
 	}
 
-	// Route detection via regex
-	routeRegex := regexp.MustCompile(`\.(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\(\s*"([^"]+)"\s*,\s*([^,\)]+)`)
+	// Route detection via regex — supports Gin (.GET/.POST) and Go 1.22 mux (HandleFunc("METHOD /path", handler))
+	ginRouteRegex := regexp.MustCompile(`\.(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\(\s*"([^"]+)"\s*,\s*([^,\)]+)`)
+	go122MuxRegex := regexp.MustCompile(`\.(HandleFunc|Handle)\s*\(\s*"(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\s+([^"]+)"\s*,\s*(.+)`)
+	paramRegex := regexp.MustCompile(`:([a-zA-Z_][a-zA-Z0-9_]*)`)
 
 	for id := range beSet {
 		if strings.Contains(id, ":") {
@@ -180,34 +223,58 @@ func EnhanceVirtualTriples(s Store) error {
 			continue
 		}
 		content := string(doc)
-		if !strings.Contains(content, "gin.Default") && !strings.Contains(content, "gin.New") && !strings.Contains(content, ".Group") && !strings.Contains(content, "Router") {
-			continue
+
+		// Try Gin-style routes: r.GET("/path", handler)
+		if strings.Contains(content, "gin.Default") || strings.Contains(content, "gin.New") ||
+			strings.Contains(content, ".Group") || strings.Contains(content, "Router") {
+			for _, match := range ginRouteRegex.FindAllStringSubmatch(content, -1) {
+				method := strings.ToUpper(match[1])
+				route := match[2]
+				rawHandler := strings.TrimSpace(match[3])
+				handlerToken := extractHandler(rawHandler)
+
+				if targetID, ok := symbolLookup[handlerToken]; ok {
+					routeMap[route] = targetID
+					upsertFact(s, route, config.PredicateHandledBy, targetID)
+					upsertFact(s, route, "http_method", method)
+					for _, m := range paramRegex.FindAllStringSubmatch(route, -1) {
+						upsertFact(s, route, "path_param", m[1])
+					}
+					upsertFact(s, targetID, config.PredicateHasRole, config.RoleAPIHandler)
+				} else {
+					logger.Warn("Failed to link route to handler", "route", route, "handler", rawHandler, "token", handlerToken)
+				}
+			}
 		}
 
-		matches := routeRegex.FindAllStringSubmatch(content, -1)
-		for _, match := range matches {
-			method := strings.ToUpper(match[1])
-			route := match[2]
-			rawHandler := strings.TrimSpace(match[3])
+		// Try Go 1.22+ ServeMux: mux.HandleFunc("METHOD /path", handler)
+		if strings.Contains(content, "http.NewServeMux") || strings.Contains(content, "HandleFunc(") || strings.Contains(content, "mux.Handle(") {
+			for _, match := range go122MuxRegex.FindAllStringSubmatch(content, -1) {
+				method := strings.ToUpper(match[2])
+				route := match[3]
+				rawHandler := strings.TrimSpace(match[4])
+				handlerToken := extractHandler(rawHandler)
 
-			handlerToken := rawHandler
-			if idx := strings.LastIndex(rawHandler, "."); idx != -1 {
-				handlerToken = rawHandler[idx+1:]
-			}
-
-			handlerToken = strings.Trim(handlerToken, " ),;")
-
-			if targetID, ok := symbolLookup[handlerToken]; ok {
-				routeMap[route] = targetID
-				upsertFact(s, string(route), config.PredicateHandledBy, targetID)
-				upsertFact(s, string(route), "http_method", method)
-				paramRegex := regexp.MustCompile(`:([a-zA-Z_][a-zA-Z0-9_]*)`)
-				for _, m := range paramRegex.FindAllStringSubmatch(route, -1) {
-					upsertFact(s, string(route), "path_param", m[1])
+				if targetID, ok := symbolLookup[handlerToken]; ok {
+					routeMap[route] = targetID
+					upsertFact(s, route, config.PredicateHandledBy, targetID)
+					upsertFact(s, route, "http_method", method)
+					for _, m := range paramRegex.FindAllStringSubmatch(route, -1) {
+						upsertFact(s, route, "path_param", m[1])
+					}
+					upsertFact(s, targetID, config.PredicateHasRole, config.RoleAPIHandler)
+				} else {
+					// Handler not in symbol table — create synthetic ID for anonymous/wrapped functions
+					syntheticID := id + ":handler:" + method + "_" + route
+					routeMap[route] = syntheticID
+					upsertFact(s, route, config.PredicateHandledBy, syntheticID)
+					upsertFact(s, route, "http_method", method)
+					safeAddFact(s, syntheticID, config.PredicateDefines, id)
+					for _, m := range paramRegex.FindAllStringSubmatch(route, -1) {
+						upsertFact(s, route, "path_param", m[1])
+					}
+					upsertFact(s, syntheticID, config.PredicateHasRole, config.RoleAPIHandler)
 				}
-				upsertFact(s, string(targetID), config.PredicateHasRole, config.RoleAPIHandler)
-			} else {
-				logger.Warn("Failed to link route to handler", "route", route, "handler", rawHandler, "token", handlerToken)
 			}
 		}
 	}
