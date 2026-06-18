@@ -479,6 +479,12 @@ type AIRequest struct {
 	Data             interface{} `json:"data"`
 	ContextMode      string      `json:"context_mode,omitempty"`
 	QueryInstruction string      `json:"query_instruction,omitempty"`
+	Messages         []ChatMessage `json:"messages,omitempty"`
+}
+
+type ChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 func (s *AIService) HandleRequest(ctx context.Context, req AIRequest) (string, error) {
@@ -517,10 +523,18 @@ func (s *AIService) HandleRequestStream(ctx context.Context, req AIRequest, onCh
 }
 
 func (s *AIService) buildTaskPrompt(ctx context.Context, store *meb.MEBStore, req AIRequest) (string, error) {
+	messages := make([]interface{}, len(req.Messages))
+	for i, m := range req.Messages {
+		messages[i] = map[string]interface{}{
+			"role":    m.Role,
+			"content": m.Content,
+		}
+	}
 	data := map[string]interface{}{
 		"Query":   req.Query,
 		"SymbolID": req.SymbolID,
 		"Data":    req.Data,
+		"Messages": messages,
 	}
 	return promptbuilder.BuildPrompt(req.Task, ctx, store, s.prompts, data)
 }

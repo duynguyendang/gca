@@ -540,6 +540,24 @@ func (a *Analyzer) writeDegreeFacts(ctx context.Context, sourceStore, analytical
 		outDegree[fact.Subject]++
 	}
 
+	// OKF extension: include okf_link edges (Source Store) and bridges_to edges
+	// (Analytical Store) in the degree calculation. This ensures OKF concepts get
+	// has_in_degree/has_out_degree facts so they participate in the smell pipeline
+	// (okf_hub_anomaly, okf_orphan_concept via isolated-node check) and Leiden
+	// community detection. See docs/designs/okf-support.md "Analyzer Integration".
+	for fact := range sourceStore.ScanContext(ctx, "", "okf_link", "") {
+		if obj, ok := fact.Object.(string); ok {
+			inDegree[obj]++
+		}
+		outDegree[fact.Subject]++
+	}
+	for fact := range analyticalStore.ScanContext(ctx, "", "bridges_to", "") {
+		if obj, ok := fact.Object.(string); ok {
+			inDegree[obj]++
+		}
+		outDegree[fact.Subject]++
+	}
+
 	allSymbols := make(map[string]bool)
 	for sym := range inDegree {
 		allSymbols[sym] = true

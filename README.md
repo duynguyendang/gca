@@ -68,6 +68,7 @@ Every layer of GCA's intelligence is a Datalog policy you can edit:
 | **Query Registry** | `policies/queries.mg` | Pre-defined queries auto-exposed as REST endpoints |
 | **Intent Templates** | `policies/intent_templates.mg` | Natural language → Datalog mapping for AI |
 | **Memory Rules** | `policies/memory/*.mg` | Fact promotion/eviction policies |
+| **OKF Knowledge** | `policies/okf/*.mg` | OKF predicate declarations, bridge rules, OKF-specific smells (`okf_orphan_concept`, `okf_stale_concept`, `okf_hub_anomaly`, `okf_bridge_break`) |
 
 ## Use Cases
 
@@ -78,6 +79,8 @@ Every layer of GCA's intelligence is a Datalog policy you can edit:
 - **Custom health metrics** — adjust scoring weights to match your team's priorities
 - **Teach AI new queries** — add intent templates without touching Go code
 - **Query code via MCP** — connect MCP-compatible tools to explore codebase structure
+- **Pair code with knowledge** — ingest OKF bundles so runbooks, dataset descriptions, and API contracts become first-class graph entities cross-linked to the code they describe
+- **Audit knowledge freshness** — OKF smells flag stale (>90 days), orphan, hub, or broken-bridge concepts alongside the existing architecture smells
 
 ## Neuro-Symbolic AI
 
@@ -170,6 +173,17 @@ Powered by Firebase Genkit with support for multiple providers:
 - **Analytics Versioning**: Skip redundant computations on re-ingestion
 - **Auto-Scan Smells**: All `policies/smells/*.mg` rules run automatically post-ingest via `analyzer.go`
 
+### Knowledge Ingestion (OKF v0.1)
+
+GCA treats [OKF bundles](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) — directories of markdown files with YAML frontmatter — as a first-class source. Pair the code graph with the runbook, dataset description, or API contract that explains it.
+
+- **`./gca okf ingest <bundle-dir>`** — Walk an OKF bundle, parse every `.md`, emit `okf_concept` + `okf_link` + `okf_resource` + `okf_tag` facts into the Source Store and `bridges_to` / `okf_bridge_miss` into the Analytical Store.
+- **Code ↔ knowledge bridges** — A markdown link like `[LoginHandler](src/auth.go#LoginHandler)` resolves against the Source Store via `defines` + `has_name`. If the symbol exists, GCA writes a `bridges_to` fact; if not, an `okf_bridge_miss` for the `okf_bridge_break` smell.
+- **`./gca okf export <project>`** — Emit the code graph as a portable OKF bundle: one concept per file/package/cluster with frontmatter (`type`, `title`, `description`, `resource`, `tags`, `gca_in_degree`, `gca_centrality`, `gca_smells`), plus `index.md` and `log.md`. Round-trippable — re-ingest what you exported.
+- **Content-hash dedup** — Unchanged concepts are skipped on re-ingest; changed concepts have old facts wiped and re-emitted.
+- **OKF-specific smells** — `policies/okf/smells/` adds `okf_orphan_concept`, `okf_stale_concept`, `okf_hub_anomaly`, and `okf_bridge_break` to the dashboard.
+- **Centrality + Leiden** — `writeDegreeFacts` extends its scan to `okf_link` and `bridges_to`, so OKF concepts participate in centrality and community detection on equal footing with code symbols.
+
 ## Why This Matters for Code Understanding
 
 | Question | Without GCA | With GCA |
@@ -201,6 +215,7 @@ The following features are planned for future releases:
 | Framework Migration | 🟢 TODO | Convert code between languages/frameworks |
 | Idempotent Analytics | ✅ DONE | Safe re-runs without duplicate facts |
 | AI Circuit Breaker | ✅ DONE | Graceful degradation on AI failures |
+| OKF Knowledge Ingestion | ✅ DONE | Ingest & export OKF v0.1 bundles; bridges to code graph; 4 OKF smells |
 
 ## RESTful API
 
@@ -245,6 +260,12 @@ The following features are planned for future releases:
 
 - `GET /api/v1/source` — Retrieve embedded source code
 - `GET /api/v1/hydrate` — Get hydrated symbol with code + metadata
+
+### OKF (Knowledge Bundles)
+
+- `POST /api/v1/okf/ingest` — Ingest an OKF bundle. Body: `{ "project_id": "...", "bundle_dir": "/abs/path" }`. Returns concept/link/bridge counts and per-file conformance errors.
+- `GET /api/v1/okf/export?project=<id>&scope=file|package|cluster&out=<abs path>` — Export the code graph as an OKF bundle. `out` must be under `./data/exports`.
+- `GET /api/v1/okf/orphans?project=<id>` — List OKF concepts flagged by the `okf_orphan_concept` smell.
 
 ## Architecture
 
@@ -353,6 +374,16 @@ export GEMINI_API_KEY="your_api_key_here"
 LOW_MEM=true ./gca ingest ./my-project ./data/my-project
 ```
 
+### Ingest an OKF Bundle
+
+```bash
+# Pair a code project with an OKF knowledge bundle
+./gca okf ingest ./docs/knowledge ./data/my-project
+
+# Export the code graph as a portable OKF bundle
+./gca okf export my-project --out ./out/bundle --scope file
+```
+
 ### Start Server
 
 ```bash
@@ -385,6 +416,8 @@ GCA exposes its knowledge graph through the [Model Context Protocol](https://mod
 | `get_clusters` | Detect logical communities (Leiden algorithm) |
 | `trace_impact_path` | Shortest path between two symbols |
 | `get_node_metadata` | Metadata for a symbol (kind, package, tags) |
+| `okf_ingest` | Ingest an OKF v0.1 bundle (markdown + YAML frontmatter) as knowledge concepts |
+| `okf_export` | Export the code graph as a portable OKF bundle (file/package/cluster scope) |
 
 ### Resources
 
@@ -440,6 +473,20 @@ export LOW_MEM=true                # Low-memory mode
 | `has_kind` | Symbol type | `triples("main", "has_kind", "func")` |
 | `has_language` | Programming language | `triples("main.go", "has_language", "go")` |
 | `called_by` | Inverse of calls | `triples("fmt.Println", "called_by", "main")` |
+
+### OKF Predicates
+
+| Predicate | Description | Example |
+|-----------|-------------|---------|
+| `okf_concept` | OKF concept with its declared type | `triples("gca://project/p/okf/tables/orders", "okf_concept", "BigQuery Table")` |
+| `okf_link` | Markdown link from a concept to another concept or symbol | `triples(C, "okf_link", T)` |
+| `okf_resource` | Canonical URI for the asset the concept describes | `triples(C, "okf_resource", "https://...")` |
+| `okf_tag` | Concept tag (one per tag) | `triples(C, "okf_tag", "sales")` |
+| `okf_title` / `okf_description` / `okf_body` / `okf_timestamp` | Frontmatter scalars | |
+| `okf_content_hash` | sha256 of the raw file (incremental dedup) | `triples(C, "okf_content_hash", "ab12...")` |
+| `okf_frontmatter` | JSON blob of preserved extension keys (round-trip) | |
+| `bridges_to` | Analytical: concept links to an existing code symbol | `triples(C, "bridges_to", "src/auth.go:LoginHandler")` |
+| `okf_bridge_miss` | Analytical: link target looked like code but no symbol exists | |
 
 ### Virtual Predicates
 

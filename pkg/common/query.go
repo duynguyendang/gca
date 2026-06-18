@@ -43,6 +43,17 @@ var NamedQueries = map[string]string{
 	"hub_candidates":   `triples(File, "calls", _), not contains(File, ":")`,
 	"entry_candidates": `triples(File, "defines", Symbol), or(contains(Symbol, "main"), contains(Symbol, "init"))`,
 	"symbol_calls":     `triples(File, "defines", Symbol), triples(Symbol, "calls", Target)`,
+
+	// OKF (Open Knowledge Format) queries — registered at the top of the map literal
+	// so they are available before any GetNamedQuery call (GetNamedQuery panics on
+	// unknown names — see query.go panic-on-unknown contract).
+	"okf_concept":         `triples(Concept, "has_role", "okf_concept")`,
+	"okf_concept_title":   `triples(Concept, "okf_title", Title)`,
+	"okf_concept_desc":    `triples(Concept, "okf_description", Description)`,
+	"okf_concepts":        `triples(Concept, "has_role", "okf_concept")`,
+	"okf_concept_links":   `triples(Concept, "okf_link", Target)`,
+	"okf_concept_bridges": `triples(Concept, "bridges_to", Symbol)`,
+	"bridges_to":          `triples(Concept, "bridges_to", Symbol)`,
 }
 
 // GetNamedQuery returns the Datalog string for a named query.

@@ -87,6 +87,23 @@ func BuildChatPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, da
 			query = fmt.Sprintf("%v", q)
 		}
 
+		var historyBuilder strings.Builder
+		if rawMessages, ok := m["Messages"].([]interface{}); ok && len(rawMessages) > 0 {
+			historyBuilder.WriteString("## Conversation History\n")
+			for _, raw := range rawMessages {
+				if msg, ok := raw.(map[string]interface{}); ok {
+					role, _ := msg["role"].(string)
+					content, _ := msg["content"].(string)
+					if role == "user" {
+						historyBuilder.WriteString(fmt.Sprintf("**User:** %s\n\n", content))
+					} else if role == "ai" || role == "assistant" {
+						historyBuilder.WriteString(fmt.Sprintf("**AI:** %s\n\n", content))
+					}
+				}
+			}
+			historyBuilder.WriteString("---\n\n")
+		}
+
 		if isRouteQuery(query) {
 			appendRouteContext(store, &contextBuilder)
 		}
@@ -94,6 +111,7 @@ func BuildChatPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet, da
 		templateData := map[string]interface{}{
 			"Query":   query,
 			"Context": contextBuilder.String(),
+			"History": historyBuilder.String(),
 		}
 		return ps.Chat.Execute(templateData)
 	}

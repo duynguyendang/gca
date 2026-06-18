@@ -273,6 +273,11 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/api/v1/projects/:projectId/test/generate", s.handleTestGenerate)
 	s.router.POST("/api/v1/projects/:projectId/test/generate-all", s.handleTestGenerateAll)
 
+	// OKF Endpoints
+	s.router.POST("/api/v1/okf/ingest", s.handleOKFIngest)
+	s.router.GET("/api/v1/okf/export", s.handleOKFExport)
+	s.router.GET("/api/v1/okf/orphans", s.handleOKFOrphans)
+
 	// Route Discovery
 	s.router.GET("/api/v1/routes", s.handleRoutes)
 }

@@ -92,6 +92,7 @@ const (
 	RoleDataContract = "data_contract"
 	RoleAPIHandler   = "api_handler"
 	RoleUtility      = "utility"
+	RoleOKFConcept   = "okf_concept"
 )
 
 // Architectural tag constants for security smell detection

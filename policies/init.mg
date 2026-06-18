@@ -15,6 +15,13 @@ load_policy("smells/surprise.mg").
 load_policy("smells/knowledge_gaps.mg").
 load_policy("smells/scoring.mg").
 
+load_policy("okf/_decl.mg").
+load_policy("okf/bridges.mg").
+load_policy("okf/smells/orphan.mg").
+load_policy("okf/smells/stale.mg").
+load_policy("okf/smells/hub.mg").
+load_policy("okf/smells/scoring.mg").
+
 load_policy("security_agent.mg").
 load_policy("quality_agent.mg").
 load_policy("performance_agent.mg").
