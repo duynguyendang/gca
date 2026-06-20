@@ -80,6 +80,7 @@ type StoreManager struct {
 	mu            sync.Mutex // Protects all access to projects cache
 	profile       MemoryProfile
 	readOnly      bool
+	embeddingDim  int // Vector dimension for MEB's vector registry (0 = MEB default 1536)
 	cachedList    []ProjectMetadata
 	lastListBuild time.Time
 	telemetrySink meb.TelemetrySink
@@ -114,6 +115,13 @@ func NewStoreManager(baseDir string, profile MemoryProfile, readOnly bool) *Stor
 // SetEphemeralStore sets the EphemeralStore (for testing or custom configuration).
 func (sm *StoreManager) SetEphemeralStore(es *ephemeral.EphemeralStore) {
 	sm.ephemeral = es
+}
+
+// SetVectorFullDim sets the embedding vector dimension for MEB's vector registry.
+// This must match the output dimension of the configured embedding model.
+// Setting to 0 leaves MEB's default (1536). Call before first GetStore() call.
+func (sm *StoreManager) SetVectorFullDim(dim int) {
+	sm.embeddingDim = dim
 }
 
 // NewEphemeralSession creates a new RAM-based session for transient facts.
@@ -163,6 +171,12 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 	cfg.EnableAutoGC = !sm.readOnly
 	cfg.GCRatio = 0.5
 	cfg.Verbose = false
+
+	// Set vector dimension to match embedding model output.
+	// Must be set before NewMEBStore — mismatches cause all vector Adds to fail.
+	if sm.embeddingDim > 0 {
+		cfg.VectorFullDim = sm.embeddingDim
+	}
 
 	s, err := meb.NewMEBStore(cfg)
 	if err != nil {

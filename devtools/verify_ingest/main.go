@@ -203,7 +203,7 @@ components:
 		qVec, err := es.GetEmbedding(context.Background(), "hello in Python")
 		if err == nil {
 			// Vector search returns iter.Seq2
-			vecIter := s.Vectors().Search(qVec, 5)
+			vecIter := s.Vectors().Search(ctx, qVec, 5)
 			count := 0
 			for match, err := range vecIter {
 				if err != nil {

@@ -53,6 +53,9 @@ func Export(ctx context.Context, sa StoreAccessor, opts ExportOptions) (*ExportR
 		opts.MaxBodyKB = 8
 	}
 
+	// IMPORTANT: GetAnalyticalStore (and GetSourceStore) share the same
+	// underlying store instance. GetAnalyticalStore changes the topic ID on
+	// it, so we must re-acquire the source store afterwards to reset it.
 	sourceStore, err := sa.GetSourceStore(opts.ProjectID)
 	if err != nil {
 		return nil, fmt.Errorf("okf export: get source store: %w", err)
@@ -60,6 +63,11 @@ func Export(ctx context.Context, sa StoreAccessor, opts ExportOptions) (*ExportR
 	analyticalStore, err := sa.GetAnalyticalStore(opts.ProjectID)
 	if err != nil {
 		return nil, fmt.Errorf("okf export: get analytical store: %w", err)
+	}
+	// Re-acquire source store to reset topic ID on the shared instance.
+	sourceStore, err = sa.GetSourceStore(opts.ProjectID)
+	if err != nil {
+		return nil, fmt.Errorf("okf export: get source store: %w", err)
 	}
 
 	// Collect scope units

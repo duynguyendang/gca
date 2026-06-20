@@ -89,7 +89,7 @@ func (s *GraphService) GetHybridClusters(ctx context.Context, projectID string, 
 	results, err := store.Find().
 		SimilarTo(queryEmbedding).
 		Limit(limit).
-		Execute()
+		Execute(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("vector search failed: %w", err)
 	}

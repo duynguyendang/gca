@@ -231,7 +231,7 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 
 	// Final Passes
 	EnhanceVirtualTriples(s)
-	TagRoles(s)
+	TagRoles(ctx, s)
 
 	// Save HEAD commit SHA for git-based incremental detection
 	if IsGitRepo(sourceDir) {
@@ -539,8 +539,8 @@ func hashToTopicID(name string) uint32 {
 	return (h & 0xFFFFFF) | 1 // ensure non-zero (0 is reserved)
 }
 
-func TagRoles(s *meb.MEBStore) error {
-	for fact, err := range s.ScanWithPruning("", config.PredicateHandledBy, "", keys.EntityFunc, false) {
+func TagRoles(ctx context.Context, s *meb.MEBStore) error {
+	for fact, err := range s.ScanWithPruning(ctx, "", config.PredicateHandledBy, "", keys.EntityFunc, false) {
 		if err != nil {
 			continue
 		}

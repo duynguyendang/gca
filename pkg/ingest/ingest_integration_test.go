@@ -311,7 +311,7 @@ func TestTagRoles_EmptyStore(t *testing.T) {
 	s, _, cleanup := createTestStore(t)
 	defer cleanup()
 
-	err := TagRoles(s)
+	err := TagRoles(context.Background(), s)
 	if err != nil {
 		t.Errorf("TagRoles failed: %v", err)
 	}

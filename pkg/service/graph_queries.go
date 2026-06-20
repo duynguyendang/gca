@@ -598,7 +598,7 @@ func (s *GraphService) SemanticSearch(ctx context.Context, projectID, query stri
 
 	results := make([]SemanticSearchResult, 0, k)
 
-	vecIter := store.Vectors().Search(embedding, k)
+	vecIter := store.Vectors().Search(ctx, embedding, k)
 	for vr, err := range vecIter {
 		if err != nil {
 			break
@@ -643,7 +643,7 @@ func (s *GraphService) SemanticSearchFiltered(ctx context.Context, projectID, qu
 		builder = builder.Where(predicate, object)
 	}
 
-	queryResults, err := builder.Execute()
+	queryResults, err := builder.Execute(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("query builder execution failed: %w", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/duynguyendang/gca/internal/manager"
+	"github.com/duynguyendang/gca/pkg/llmconfig"
 	"github.com/duynguyendang/gca/pkg/server"
 	"github.com/spf13/cobra"
 )
@@ -27,6 +28,7 @@ and AI-powered code analysis.`,
 
 		// Initialize StoreManager
 		mgr := manager.NewStoreManager(dataDir, getMemoryProfile(), true)
+		mgr.SetVectorFullDim(llmconfig.GetEmbeddingDim(""))
 		defer mgr.CloseAll()
 
 		srv := server.NewServer(mgr, sourceDir)

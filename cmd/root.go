@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/duynguyendang/gca/internal/manager"
+	"github.com/duynguyendang/gca/pkg/llmconfig"
 	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/store"
@@ -114,6 +115,13 @@ func createStore(readOnly bool, dataPath string, projectName string, sourcePath 
 		fmt.Printf("Running in READ-ONLY mode. Data directory: %s\n", storePath)
 	} else {
 		fmt.Printf("Running in INGESTION mode.\nSource: %s\nData: %s\n", sourcePath, storePath)
+	}
+
+	// Set vector dimension to match embedding model output.
+	// Must match the dimension of the configured embedding model or
+	// all Vectors().Add() calls will fail with "invalid vector dimension".
+	if dim := llmconfig.GetEmbeddingDim(""); dim > 0 {
+		cfg.VectorFullDim = dim
 	}
 
 	return meb.NewMEBStore(cfg)

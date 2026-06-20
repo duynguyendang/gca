@@ -343,7 +343,7 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 	if len(changedFiles) == 0 && len(deletedFiles) == 0 {
 		logger.Info("No changes detected. Skipping processing.")
 		EnhanceVirtualTriples(s)
-		TagRoles(s)
+		TagRoles(ctx, s)
 		return nil
 	}
 
@@ -477,7 +477,7 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 	}
 
 	EnhanceVirtualTriples(s)
-	TagRoles(s)
+	TagRoles(ctx, s)
 
 	return nil
 }

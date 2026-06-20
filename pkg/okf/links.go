@@ -121,21 +121,35 @@ func (r *LinkResolver) resolveCodeLink(ctx context.Context, raw string) Resolved
 // lookupSymbol finds a Source Store symbol by file path and name. It uses
 // defines(File, Symbol) joined with has_name(Symbol, Name) — no string-prefix
 // matching on the symbol name itself.
+//
+// It tries the filePath as-is first; if no match is found and the path does
+// not already start with the project ID, it retries with projectID + "/" + path.
+// This allows OKF docs to use portable relative paths like "ai/src/chat.ts"
+// even though the source store prefixes paths with the project name.
 func (r *LinkResolver) lookupSymbol(ctx context.Context, filePath, symName string) string {
 	if r.Store == nil || symName == "" {
 		return ""
 	}
-	for fact, err := range r.Store.ScanContext(ctx, filePath, "defines", "") {
-		if err != nil {
-			continue
-		}
-		symID, ok := fact.Object.(string)
-		if !ok || symID == "" {
-			continue
-		}
-		for nf := range r.Store.ScanContext(ctx, symID, "has_name", "") {
-			if name, ok := nf.Object.(string); ok && name == symName {
-				return symID
+
+	// Try paths in order: as-is first, then project-prefixed.
+	candidates := []string{filePath}
+	if !strings.HasPrefix(filePath, r.ProjectID+"/") {
+		candidates = append(candidates, filepath.Join(r.ProjectID, filePath))
+	}
+
+	for _, candidate := range candidates {
+		for fact, err := range r.Store.ScanContext(ctx, candidate, "defines", "") {
+			if err != nil {
+				continue
+			}
+			symID, ok := fact.Object.(string)
+			if !ok || symID == "" {
+				continue
+			}
+			for nf := range r.Store.ScanContext(ctx, symID, "has_name", "") {
+				if name, ok := nf.Object.(string); ok && name == symName {
+					return symID
+				}
 			}
 		}
 	}

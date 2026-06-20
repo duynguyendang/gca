@@ -56,8 +56,8 @@ github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkp
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/duynguyendang/manglekit v0.0.0-20260330150740-81e7572ffb31 h1:5J5hXPucLvnkUtpvc2s3MTPS/PDKJrWZWtURG05cKSY=
 github.com/duynguyendang/manglekit v0.0.0-20260330150740-81e7572ffb31/go.mod h1:OyZ5j/7mxANK8GUq94VYBCn9Thc199aTIkTv5ue8m0M=
-github.com/duynguyendang/meb v0.0.0-20260414090359-4b53b8dde65d h1:+hLNyPEjR/elLiH0sbpo3pkRXOneejUcKv4YkpPQcVM=
-github.com/duynguyendang/meb v0.0.0-20260414090359-4b53b8dde65d/go.mod h1:MTJAO4B5k+hjrHWCpu/6Ylp/8VLH+M6ieB9ajL9Ir0I=
+github.com/duynguyendang/meb v0.0.0-20260619092246-3adaaf7359a4 h1:R0isYpC5GobSp+Cean8xYXVYl+UFcWX3zEShKNHSgY0=
+github.com/duynguyendang/meb v0.0.0-20260619092246-3adaaf7359a4/go.mod h1:eJ97gzmgRdGeyye6KcRFupmckcJPvJ8HnT9sHagL4Bg=
 github.com/elazarl/goproxy v1.7.2 h1:Y2o6urb7Eule09PjlhQRGNsqRfPmYI3KKQLFpCAV3+o=
 github.com/elazarl/goproxy v1.7.2/go.mod h1:82vkLNir0ALaW14Rc399OTTjyNREgmdL2cVoIbS6XaE=
 github.com/emirpasic/gods v1.18.1 h1:FXtiHYKDGKCW2KzwZKx0iC0PQmdlorYgdFG9jPXJ1Bc=

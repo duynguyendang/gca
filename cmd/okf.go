@@ -119,11 +119,11 @@ func init() {
 	okfCmd.AddCommand(exportOkfCmd)
 
 	// ingestOkfCmd flags
-	ingestOkfCmd.Flags().StringVarP(&okfProject, "project", "p", "", "Project name (default: derived from bundle dir name)")
+	ingestOkfCmd.Flags().StringVar(&okfProject, "project", "", "Project name (default: derived from bundle dir name)")
 
 	// exportOkfCmd flags
 	exportOkfCmd.Flags().StringVarP(&okfOutDir, "out", "o", "", "Output bundle directory (required)")
-	exportOkfCmd.Flags().StringVarP(&okfScope, "scope", "s", "file", "Export scope: file, package, or cluster")
+	exportOkfCmd.Flags().StringVarP(&okfScope, "scope", "", "file", "Export scope: file, package, or cluster")
 	_ = exportOkfCmd.MarkFlagRequired("out")
 
 	_ = config.GenePoolPath // ensure config is linked
