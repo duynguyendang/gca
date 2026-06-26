@@ -58,6 +58,8 @@ github.com/duynguyendang/manglekit v0.0.0-20260330150740-81e7572ffb31 h1:5J5hXPu
 github.com/duynguyendang/manglekit v0.0.0-20260330150740-81e7572ffb31/go.mod h1:OyZ5j/7mxANK8GUq94VYBCn9Thc199aTIkTv5ue8m0M=
 github.com/duynguyendang/meb v0.0.0-20260619092246-3adaaf7359a4 h1:R0isYpC5GobSp+Cean8xYXVYl+UFcWX3zEShKNHSgY0=
 github.com/duynguyendang/meb v0.0.0-20260619092246-3adaaf7359a4/go.mod h1:eJ97gzmgRdGeyye6KcRFupmckcJPvJ8HnT9sHagL4Bg=
+github.com/duynguyendang/meb v0.0.0-20260623043431-b8a7da87c79a h1:f/L/99+TZDwgaGPD9RLxbrFWyQh5M4al29jr7jrMKL0=
+github.com/duynguyendang/meb v0.0.0-20260623043431-b8a7da87c79a/go.mod h1:eJ97gzmgRdGeyye6KcRFupmckcJPvJ8HnT9sHagL4Bg=
 github.com/elazarl/goproxy v1.7.2 h1:Y2o6urb7Eule09PjlhQRGNsqRfPmYI3KKQLFpCAV3+o=
 github.com/elazarl/goproxy v1.7.2/go.mod h1:82vkLNir0ALaW14Rc399OTTjyNREgmdL2cVoIbS6XaE=
 github.com/emirpasic/gods v1.18.1 h1:FXtiHYKDGKCW2KzwZKx0iC0PQmdlorYgdFG9jPXJ1Bc=

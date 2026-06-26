@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -273,10 +274,10 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/api/v1/projects/:projectId/test/generate", s.handleTestGenerate)
 	s.router.POST("/api/v1/projects/:projectId/test/generate-all", s.handleTestGenerateAll)
 
-	// OKF Endpoints
-	s.router.POST("/api/v1/okf/ingest", s.handleOKFIngest)
-	s.router.GET("/api/v1/okf/export", s.handleOKFExport)
+	// OKF Endpoints (query only — ingest is handled by gca ingest pipeline)
 	s.router.GET("/api/v1/okf/orphans", s.handleOKFOrphans)
+	s.router.GET("/api/v1/okf/concepts", s.handleOKFConceptsBatch)
+	s.router.GET("/api/v1/okf/links", s.handleOKFLinksBatch)
 
 	// Route Discovery
 	s.router.GET("/api/v1/routes", s.handleRoutes)
@@ -470,9 +471,19 @@ func (s *Server) readyCheck(c *gin.Context) {
 		return
 	}
 
+	// Check each project's store
+	projectStatuses := make(map[string]string)
+	for _, p := range projects {
+		if _, err := s.manager.GetStore(p.ID); err != nil {
+			projectStatuses[p.ID] = fmt.Sprintf("store_error: %v", err)
+		} else {
+			projectStatuses[p.ID] = "ok"
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"status":   "ready",
-		"projects": len(projects),
+		"projects": projectStatuses,
 	})
 }
 

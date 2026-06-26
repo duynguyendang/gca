@@ -9,6 +9,7 @@ import (
 
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/logger"
+	"github.com/duynguyendang/gca/pkg/okf"
 	"github.com/duynguyendang/meb"
 	sitter "github.com/tree-sitter/go-tree-sitter"
 	golang "github.com/tree-sitter/tree-sitter-go/bindings/go"
@@ -278,7 +279,17 @@ func (e *TreeSitterExtractor) Extract(ctx context.Context, relPath string, conte
 }
 
 // processMarkdownFile handles markdown file extraction.
+// If the file has OKF frontmatter (YAML with a `type` field), it creates OKF facts.
+// Otherwise, it creates standard documentation facts.
 func (e *TreeSitterExtractor) processMarkdownFile(relPath string, content []byte) *AnalysisBundle {
+	// Try to parse as OKF concept
+	concept, err := okf.ParseConcept(relPath, content)
+	if err == nil && concept.Type != "" {
+		// This is an OKF concept — create OKF facts
+		return e.processOKFConcept(relPath, content, concept)
+	}
+
+	// Plain markdown — existing logic
 	bundle := &AnalysisBundle{
 		Documents: []Document{{
 			ID:      string(relPath),
@@ -300,6 +311,71 @@ func (e *TreeSitterExtractor) processMarkdownFile(relPath string, content []byte
 	bundle.Facts = append(bundle.Facts, extractHeaderFacts(relPath, contentStr)...)
 
 	return bundle
+}
+
+// processOKFConcept creates OKF facts for a markdown file with OKF frontmatter.
+func (e *TreeSitterExtractor) processOKFConcept(relPath string, content []byte, concept *okf.Concept) *AnalysisBundle {
+	projectName := currentState.ProjectName
+	conceptID := okf.ConceptID(projectName, relPath)
+
+	facts := []meb.Fact{
+		{Subject: conceptID, Predicate: "okf_concept", Object: concept.Type},
+		{Subject: conceptID, Predicate: "okf_title", Object: concept.Title},
+		{Subject: conceptID, Predicate: "okf_description", Object: concept.Description},
+		{Subject: conceptID, Predicate: "okf_content_hash", Object: concept.ContentHash},
+		{Subject: conceptID, Predicate: config.PredicateHasRole, Object: "okf_concept"},
+		{Subject: conceptID, Predicate: config.PredicateType, Object: "okf_concept"},
+		{Subject: conceptID, Predicate: config.PredicateInPackage, Object: filepath.Dir(relPath)},
+	}
+
+	if concept.Timestamp != "" {
+		facts = append(facts, meb.Fact{Subject: conceptID, Predicate: "okf_timestamp", Object: concept.Timestamp})
+	}
+	if concept.Resource != "" {
+		facts = append(facts, meb.Fact{Subject: conceptID, Predicate: "okf_resource", Object: concept.Resource})
+	}
+	for _, tag := range concept.Tags {
+		facts = append(facts, meb.Fact{Subject: conceptID, Predicate: "okf_tag", Object: tag})
+	}
+
+	// Store body (truncated to 16KB inline, full body to disk if larger)
+	body := concept.Body
+	if len(body) > 16*1024 {
+		body = body[:16*1024]
+	}
+	if body != "" {
+		facts = append(facts, meb.Fact{Subject: conceptID, Predicate: "okf_body", Object: body})
+	}
+
+	// Store raw links for later resolution
+	for _, link := range concept.Links {
+		facts = append(facts, meb.Fact{Subject: conceptID, Predicate: "okf_raw_link", Object: link})
+	}
+	for _, citation := range concept.Citations {
+		facts = append(facts, meb.Fact{Subject: conceptID, Predicate: "okf_raw_link", Object: citation})
+	}
+
+	// Store frontmatter extensions
+	if fjson, err := concept.SerializeFrontmatter(); err == nil && fjson != "" {
+		facts = append(facts, meb.Fact{Subject: conceptID, Predicate: "okf_frontmatter", Object: fjson})
+	}
+
+	// Also add has_doc for semantic search
+	if body != "" {
+		facts = append(facts, meb.Fact{Subject: conceptID, Predicate: config.PredicateHasDoc, Object: body})
+	}
+
+	return &AnalysisBundle{
+		Documents: []Document{{
+			ID:      conceptID,
+			Content: content,
+			Metadata: map[string]any{
+				"file": relPath,
+				"type": "okf_concept",
+			},
+		}},
+		Facts: facts,
+	}
 }
 
 var tripleBacktickRE = regexp.MustCompile("(?s)```[\\x00-\\xFF]*?```")

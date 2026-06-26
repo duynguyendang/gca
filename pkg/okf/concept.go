@@ -26,7 +26,8 @@ type Concept struct {
 	Tags          []string
 	Timestamp     string            // ISO 8601, optional
 	Body          string            // full markdown body (without frontmatter)
-	Links         []string          // raw markdown link targets, in body order
+	Links         []string          // raw markdown link targets from body (excluding citations)
+	Citations     []string          // raw markdown link targets from # Citations section
 	SourcePath    string            // bundle-relative path, e.g. "tables/orders.md"
 	ContentHash   string            // sha256 of the raw file content
 	Frontmatter   map[string]any    // preserved extension keys (not in the well-known set)
@@ -43,7 +44,6 @@ func ConceptID(projectID, bundleRelPath string) string {
 	p = strings.TrimSuffix(p, ".md")
 	p = strings.ReplaceAll(p, `\`, "/")
 	p = filepath.ToSlash(p)
-	p = strings.ToLower(p)
 	return fmt.Sprintf("%s%s/okf/%s", ConceptIDPrefix, projectID, p)
 }
 

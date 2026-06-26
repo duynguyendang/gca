@@ -18,6 +18,8 @@ import (
 // It parses .mg policy files and stores their templates and metadata as triples.
 type TemplateStore struct {
 	storeManager *manager.StoreManager
+	// in-memory cache so LoadPolicyFiles doesn't need to open BadgerDB
+	templates map[string]*QueryTemplate
 }
 
 // QueryTemplate is an alias for ingest.TemplateStoreQuery for API compatibility.
@@ -27,16 +29,13 @@ type QueryTemplate = ingest.TemplateStoreQuery
 func NewTemplateStore(storeManager *manager.StoreManager) *TemplateStore {
 	return &TemplateStore{
 		storeManager: storeManager,
+		templates:    make(map[string]*QueryTemplate),
 	}
 }
 
-// LoadPolicyFiles parses init.mg manifest and stores templates as triples.
+// LoadPolicyFiles parses init.mg manifest and caches templates in memory.
+// Does not open BadgerDB — avoids lock contention with analyzer.
 func (ts *TemplateStore) LoadPolicyFiles(ctx context.Context, initPath string) error {
-	store, err := ts.storeManager.GetAnalyticalStore("")
-	if err != nil {
-		return fmt.Errorf("failed to get analytical store: %w", err)
-	}
-
 	manifest, err := LoadManifest(initPath)
 	if err != nil {
 		return fmt.Errorf("failed to load init.mg: %w", err)
@@ -55,9 +54,7 @@ func (ts *TemplateStore) LoadPolicyFiles(ctx context.Context, initPath string) e
 		}
 
 		for _, tmpl := range templates {
-			if err := ts.storeTemplate(ctx, store, tmpl); err != nil {
-				return fmt.Errorf("failed to store template %s: %w", tmpl.ID, err)
-			}
+			ts.templates[tmpl.ID] = tmpl
 		}
 		templatesLoaded += len(templates)
 	}
@@ -275,8 +272,13 @@ func (ts *TemplateStore) storeTemplate(ctx context.Context, store *externmeb.MEB
 	return nil
 }
 
-// GetTemplate returns a query template by ID from the Analytical Store.
+// GetTemplate returns a query template by ID.
+// Uses in-memory cache if available, falls back to Analytical Store.
 func (ts *TemplateStore) GetTemplate(ctx context.Context, projectID, templateID string) (*QueryTemplate, error) {
+	if tmpl, ok := ts.templates[templateID]; ok {
+		return tmpl, nil
+	}
+
 	store, err := ts.storeManager.GetAnalyticalStore(projectID)
 	if err != nil {
 		return nil, err
@@ -335,8 +337,18 @@ func (ts *TemplateStore) GetTemplate(ctx context.Context, projectID, templateID 
 }
 
 // ListTemplates returns all templates matching a category.
-// Templates are stored globally (not per-project), so we use empty projectID.
+// Uses in-memory cache if available, falls back to Analytical Store.
 func (ts *TemplateStore) ListTemplates(ctx context.Context, projectID, category string) ([]*QueryTemplate, error) {
+	if len(ts.templates) > 0 {
+		var templates []*QueryTemplate
+		for _, tmpl := range ts.templates {
+			if category == "" || tmpl.Category == category {
+				templates = append(templates, tmpl)
+			}
+		}
+		return templates, nil
+	}
+
 	store, err := ts.storeManager.GetAnalyticalStore("")
 	if err != nil {
 		return nil, err

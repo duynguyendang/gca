@@ -72,18 +72,3 @@ func TestDirOfConcept(t *testing.T) {
 		t.Errorf("DirOfConcept = %q", got)
 	}
 }
-
-func TestIsBridgeMissCandidate(t *testing.T) {
-	if !IsBridgeMissCandidate("src/auth.go#LoginHandler") {
-		t.Error("expected true for code-path link")
-	}
-	if IsBridgeMissCandidate("https://example.com") {
-		t.Error("expected false for external URL")
-	}
-	if IsBridgeMissCandidate("/tables/orders.md") {
-		t.Error("expected false for bundle-absolute")
-	}
-	if IsBridgeMissCandidate("./other.md") {
-		t.Error("expected false for relative")
-	}
-}

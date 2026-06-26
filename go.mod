@@ -5,7 +5,7 @@ go 1.25.1
 require (
 	github.com/agext/levenshtein v1.2.3
 	github.com/duynguyendang/manglekit v0.0.0-20260330150740-81e7572ffb31
-	github.com/duynguyendang/meb v0.0.0-20260619092246-3adaaf7359a4
+	github.com/duynguyendang/meb v0.0.0-20260623043431-b8a7da87c79a
 	github.com/firebase/genkit/go v1.4.0
 	github.com/gin-gonic/gin v1.11.0
 	github.com/go-git/go-git/v5 v5.18.0

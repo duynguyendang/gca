@@ -1,24 +1,20 @@
-# Build artifacts
-build/
+.git
+.gitignore
+.claude
+.gcloudignore
+.vscode
+.idea
+*.log
 *.db
 *.db.lock
 *.db.wal
-server.log
-
-# Large compiled binaries
-gca
-registry.test
-coverage.out
-
-# IDE and OS artifacts
-.DS_Store
-*.swp
-
-# Test fixtures and coverage
-*.out
-
-# Exclude source-code reference repo if present
-source-code/
-
-# Cloud Build context markers
-.gcloudignore
+.env
+.env.*
+devtools
+test
+*_test.go
+docs
+source-code
+gca-fe
+node_modules
+dist

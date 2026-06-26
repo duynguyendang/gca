@@ -1,95 +1,10 @@
 package server
 
 import (
-	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 
-	"github.com/duynguyendang/gca/pkg/okf"
 	"github.com/gin-gonic/gin"
 )
-
-// allowedExportDir is the directory under which export output is permitted.
-// Prevents SSRF via the `out` query parameter.
-const allowedExportDir = "./data/exports"
-
-// handleOKFIngest processes an OKF bundle ingestion request.
-// POST /api/v1/okf/ingest
-// Body: { "project_id": "...", "bundle_dir": "/path/to/bundle" }
-func (s *Server) handleOKFIngest(c *gin.Context) {
-	var req struct {
-		ProjectID string `json:"project_id"`
-		BundleDir string `json:"bundle_dir" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "details": err.Error()})
-		return
-	}
-	if req.ProjectID == "" {
-		req.ProjectID = "default"
-	}
-
-	report, err := okf.Ingest(c.Request.Context(), s.manager, okfDataDir(s), okf.IngestOptions{
-		ProjectID: req.ProjectID,
-		BundleDir: req.BundleDir,
-	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"concepts":      report.Concepts,
-		"links":         report.Links,
-		"bridges":       report.Bridges,
-		"bridge_misses": report.BridgeMiss,
-		"conformant":    report.Conformant,
-		"duration":      report.Duration.String(),
-		"errors":        report.Errors,
-	})
-}
-
-// handleOKFExport exports the code graph as an OKF bundle.
-// GET /api/v1/okf/export?project=...&scope=file|package|cluster&out=...
-func (s *Server) handleOKFExport(c *gin.Context) {
-	projectID := c.Query("project")
-	if projectID == "" {
-		projectID = "default"
-	}
-	scope := okf.ExportScope(c.DefaultQuery("scope", "file"))
-	outDir := c.Query("out")
-
-	// SSRF protection: outDir must be under the allowed export directory.
-	absOut, err := filepath.Abs(outDir)
-	if err != nil || !strings.HasPrefix(absOut, allowedExportDir) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": fmt.Sprintf("output directory must be under %s", allowedExportDir),
-		})
-		return
-	}
-	// Create allowed dir if not present
-	os.MkdirAll(allowedExportDir, 0o755) //nolint:errcheck
-
-	report, err := okf.Export(c.Request.Context(), s.manager, okf.ExportOptions{
-		ProjectID:        projectID,
-		OutDir:           absOut,
-		Scope:            scope,
-		IncludeSmells:    true,
-		IncludeCitations: true,
-	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"concepts_written": report.ConceptsWritten,
-		"files_written":    report.FilesWritten,
-		"duration":         report.Duration.String(),
-	})
-}
 
 // handleOKFOrphans returns OKF concepts flagged by okf_orphan_concept.
 // GET /api/v1/okf/orphans?project=...
@@ -134,9 +49,124 @@ func (s *Server) handleOKFOrphans(c *gin.Context) {
 	})
 }
 
-// okfDataDir returns the data directory for OKF body storage.
-// In production this is the same dir that StoreManager uses.
-// The CLI passes it explicitly; the server extracts it from the manager's base dir.
-func okfDataDir(s *Server) string {
-	return "./data"
+// handleOKFConceptsBatch returns all OKF concepts with titles in a single call.
+// GET /api/v1/okf/concepts?project=...
+// Eliminates N+1 query problem for frontend.
+func (s *Server) handleOKFConceptsBatch(c *gin.Context) {
+	projectID := c.Query("project")
+	if projectID == "" {
+		projectID = "default"
+	}
+
+	sourceStore, err := s.manager.GetSourceStore(projectID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	type ConceptInfo struct {
+		ID          string   `json:"id"`
+		Title       string   `json:"title"`
+		Type        string   `json:"type"`
+		Description string   `json:"description,omitempty"`
+		Tags        []string `json:"tags,omitempty"`
+	}
+
+	conceptMap := make(map[string]*ConceptInfo)
+
+	// Fetch concepts by role - scan all has_role facts and filter in Go
+	// (MEB store key format may differ from what ScanContext expects)
+	for fact := range sourceStore.ScanContext(c.Request.Context(), "", "has_role", "") {
+		if obj, ok := fact.Object.(string); ok && obj == "okf_concept" {
+			conceptMap[fact.Subject] = &ConceptInfo{
+				ID:   fact.Subject,
+				Type: "okf_concept",
+			}
+		}
+	}
+
+	// Fetch titles
+	for fact := range sourceStore.ScanContext(c.Request.Context(), "", "okf_title", "") {
+		if c, ok := conceptMap[fact.Subject]; ok {
+			if title, ok := fact.Object.(string); ok {
+				c.Title = title
+			}
+		}
+	}
+
+	// Fetch descriptions
+	for fact := range sourceStore.ScanContext(c.Request.Context(), "", "okf_description", "") {
+		if c, ok := conceptMap[fact.Subject]; ok {
+			if desc, ok := fact.Object.(string); ok {
+				c.Description = desc
+			}
+		}
+	}
+
+	// Fetch types
+	for fact := range sourceStore.ScanContext(c.Request.Context(), "", "okf_concept", "") {
+		if c, ok := conceptMap[fact.Subject]; ok {
+			if t, ok := fact.Object.(string); ok {
+				c.Type = t
+			}
+		}
+	}
+
+	// Fetch tags
+	for fact := range sourceStore.ScanContext(c.Request.Context(), "", "okf_tag", "") {
+		if c, ok := conceptMap[fact.Subject]; ok {
+			if tag, ok := fact.Object.(string); ok {
+				c.Tags = append(c.Tags, tag)
+			}
+		}
+	}
+
+	concepts := make([]ConceptInfo, 0, len(conceptMap))
+	for _, c := range conceptMap {
+		concepts = append(concepts, *c)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"project":  projectID,
+		"concepts": concepts,
+		"count":    len(concepts),
+	})
+}
+
+// handleOKFLinksBatch returns all concept-to-concept links in a single call.
+// GET /api/v1/okf/links?project=...
+func (s *Server) handleOKFLinksBatch(c *gin.Context) {
+	projectID := c.Query("project")
+	if projectID == "" {
+		projectID = "default"
+	}
+
+	sourceStore, err := s.manager.GetSourceStore(projectID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	type LinkInfo struct {
+		Source string `json:"source"`
+		Target string `json:"target"`
+	}
+
+	var links []LinkInfo
+	for fact := range sourceStore.ScanContext(c.Request.Context(), "", "okf_link", "") {
+		target, ok := fact.Object.(string)
+		if !ok {
+			continue
+		}
+		links = append(links, LinkInfo{
+			Source: fact.Subject,
+			Target: target,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"project": projectID,
+		"links":   links,
+		"count":   len(links),
+	})
 }

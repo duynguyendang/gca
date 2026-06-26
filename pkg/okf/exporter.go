@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +15,12 @@ import (
 	"github.com/duynguyendang/meb"
 )
 
+// StoreAccessor provides access to the Source and Analytical stores.
+type StoreAccessor interface {
+	GetSourceStore(projectID string) (*meb.MEBStore, error)
+	GetAnalyticalStore(projectID string) (*meb.MEBStore, error)
+}
+
 // ExportScope controls how the code graph is broken into OKF concepts.
 type ExportScope string
 
@@ -22,6 +29,33 @@ const (
 	ExportPackage ExportScope = "package" // one concept per package (group by in_package)
 	ExportCluster ExportScope = "cluster" // one concept per belongs_to_cluster
 )
+
+// markdownLinkRegex matches markdown inline links: [text](target)
+var markdownLinkRegex = regexp.MustCompile(`\[[^\]\n]*\]\(([^()\s]+)(?:\s+"[^"]*")?\)`)
+
+// convertMarkdownLinksToCode converts markdown links to code references
+// Example: [Action](core/src/action.ts#Action) → `Action` or `` `core/src/action.ts#Action` ``
+func convertMarkdownLinksToCode(text string) string {
+	return markdownLinkRegex.ReplaceAllStringFunc(text, func(match string) string {
+		// Extract the link target (between parentheses)
+		parts := strings.Split(match, "](")
+		if len(parts) < 2 {
+			return match
+		}
+		target := strings.TrimSuffix(parts[1], ")")
+		
+		// If the target is a relative path with a symbol reference, use it as code
+		if strings.Contains(target, "#") || strings.ContainsAny(target, "./") {
+			return fmt.Sprintf("`%s`", target)
+		}
+		
+		// Otherwise, extract just the last segment (e.g., "Action" from "core/src/action.ts#Action")
+		if idx := strings.LastIndex(target, "/"); idx != -1 {
+			return fmt.Sprintf("`%s`", target[idx+1:])
+		}
+		return fmt.Sprintf("`%s`", target)
+	})
+}
 
 // ExportOptions controls OKF bundle export.
 type ExportOptions struct {
@@ -232,10 +266,13 @@ func exportScopeUnit(ctx context.Context, src, anal *meb.MEBStore, opts ExportOp
 	if desc == "" {
 		desc = fmt.Sprintf("GCA %s: %s", opts.Scope, label)
 	}
+	// Convert markdown links to code references
+	desc = convertMarkdownLinksToCode(desc)
 	fm["description"] = desc
 
 	// Resource: stable internal URI
-	if opts.Scope == ExportFile {
+	switch opts.Scope {
+	case ExportFile:
 		topSym := ""
 		if len(syms) > 0 {
 			topSym = syms[0]
@@ -245,6 +282,10 @@ func exportScopeUnit(ctx context.Context, src, anal *meb.MEBStore, opts ExportOp
 		} else {
 			fm["resource"] = fmt.Sprintf("%s%s/file/%s", ConceptIDPrefix, opts.ProjectID, unitID)
 		}
+	case ExportPackage:
+		fm["resource"] = fmt.Sprintf("%s%s/package/%s", ConceptIDPrefix, opts.ProjectID, unitID)
+	case ExportCluster:
+		fm["resource"] = fmt.Sprintf("%s%s/cluster/%s", ConceptIDPrefix, opts.ProjectID, unitID)
 	}
 
 	// Tags: from has_tag on any symbol in this unit
@@ -264,6 +305,9 @@ func exportScopeUnit(ctx context.Context, src, anal *meb.MEBStore, opts ExportOp
 	if len(tagList) > 0 {
 		fm["tags"] = tagList
 	}
+
+	// Timestamp: use current time as the export timestamp
+	fm["timestamp"] = time.Now().UTC().Format(time.RFC3339)
 
 	// Extension keys from Analytical Store
 	inDeg := loadAnalInt(anal, ctx, unitID, "has_in_degree")
@@ -377,6 +421,26 @@ func exportScopeUnit(ctx context.Context, src, anal *meb.MEBStore, opts ExportOp
 		body.WriteString("_No bridges._\n")
 	}
 	body.WriteString("\n")
+
+	// Citations section (URL-only links from OKF concepts bridged to this unit, per OKF §8)
+	var citations []string
+	seen := make(map[string]bool)
+	for bf := range anal.ScanContext(ctx, "", "bridges_to", unitID) {
+		conceptID := bf.Subject
+		for lf := range src.ScanContext(ctx, conceptID, "okf_link", "") {
+			if target, ok := lf.Object.(string); ok && IsExternalURL(target) && !seen[target] {
+				citations = append(citations, target)
+				seen[target] = true
+			}
+		}
+	}
+	if len(citations) > 0 {
+		body.WriteString("# Citations\n\n")
+		for i, c := range citations {
+			body.WriteString(fmt.Sprintf("[%d] %s\n", i+1, c))
+		}
+		body.WriteString("\n")
+	}
 
 	// Build frontmatter YAML
 	fmYAML := marshalFrontmatter(fm)
@@ -508,7 +572,8 @@ type scopeUnit struct {
 
 func writeIndexMD(dir string, units []scopeUnit) error {
 	var b strings.Builder
-	b.WriteString("# Subdirectories\n\n")
+	// Write frontmatter with okf_version per OKF §11
+	b.WriteString("---\nokf_version: \"0.1\"\n---\n\n")
 	for _, unit := range units {
 		b.WriteString(fmt.Sprintf("* [%s](%s/%s.md)\n", unit.label, scopeDir(unit.scope), safeFilename(unit.id)))
 	}

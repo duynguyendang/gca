@@ -1164,6 +1164,7 @@ func (s *Server) handleHealthSummary(c *gin.Context) {
 	// Fetch from the Analytical partition where the smells actually live.
 	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
 	if err != nil {
+		logger.Error("handleHealthSummary error", "project", projectID, "error", err)
 		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
 		return
 	}
@@ -1334,6 +1335,11 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 
 	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
 	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			handleError(c, apperrors.NewAppError(http.StatusNotFound, "project not found", err))
+			return
+		}
+		logger.Error("handleHealthSummaryV2 error", "project", projectID, "error", err)
 		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
 		return
 	}

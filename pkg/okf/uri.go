@@ -129,7 +129,15 @@ func IsBundleAbsolute(raw string) bool {
 	return strings.HasPrefix(raw, "/")
 }
 
-// IsRelative reports whether the link target is relative (starts with "./" or "../").
+// IsRelative reports whether the link target is relative (starts with "./", "../",
+// or is a bare relative path ending in ".md" like "other.md" or "subdir/concept.md").
 func IsRelative(raw string) bool {
-	return strings.HasPrefix(raw, "./") || strings.HasPrefix(raw, "../")
+	if strings.HasPrefix(raw, "./") || strings.HasPrefix(raw, "../") {
+		return true
+	}
+	// Bare relative: not absolute, not external, ends with .md
+	if strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return false
+	}
+	return strings.HasSuffix(raw, ".md")
 }

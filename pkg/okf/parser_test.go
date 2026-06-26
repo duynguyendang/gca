@@ -15,7 +15,7 @@ func TestConceptID(t *testing.T) {
 		{"simple", "acme", "tables/orders.md", "gca://project/acme/okf/tables/orders"},
 		{"leading dot slash", "acme", "./foo/bar.md", "gca://project/acme/okf/foo/bar"},
 		{"root file", "acme", "overview.md", "gca://project/acme/okf/overview"},
-		{"mixed case lowercased", "acme", "Tables/Orders.md", "gca://project/acme/okf/tables/orders"},
+		{"mixed case preserved", "acme", "Tables/Orders.md", "gca://project/acme/okf/Tables/Orders"},
 		{"windows separators", "acme", "tables\\orders.md", "gca://project/acme/okf/tables/orders"},
 	}
 	for _, tt := range tests {
@@ -111,8 +111,11 @@ timestamp: '2026-01-15T00:00:00Z'
 	if !strings.Contains(c.Body, "# Schema") {
 		t.Error("body should contain # Schema")
 	}
-	if len(c.Links) != 1 || c.Links[0] != "https://example.com/docs" {
-		t.Errorf("links = %v", c.Links)
+	if len(c.Links) != 0 {
+		t.Errorf("links should be empty (citation section excluded), got %v", c.Links)
+	}
+	if len(c.Citations) != 1 || c.Citations[0] != "https://example.com/docs" {
+		t.Errorf("citations = %v", c.Citations)
 	}
 	if c.ContentHash == "" {
 		t.Error("content hash should be set")

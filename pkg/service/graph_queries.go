@@ -126,7 +126,7 @@ func matchesPushdownPredicates(result map[string]any, predicates map[string]stri
 
 // GetManifest returns a compressed project manifest for the AI.
 func (s *GraphService) GetManifest(ctx context.Context, projectID string) (map[string]interface{}, error) {
-	store, err := s.manager.GetStore(projectID)
+	store, err := s.getStore(projectID)
 	if err != nil {
 		return nil, err
 	}

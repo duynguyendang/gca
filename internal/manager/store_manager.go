@@ -18,6 +18,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/telemetry"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/store"
+	"github.com/dgraph-io/badger/v4"
 	lru "github.com/hashicorp/golang-lru/v2"
 )
 
@@ -155,6 +156,7 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 	// Open in ReadOnly mode if configured
 	cfg := store.DefaultConfig(projectDir)
 	cfg.ReadOnly = sm.readOnly
+	cfg.SyncWrites = true
 
 	// Apply Memory Profile
 	if sm.profile == MemoryProfileLow {
@@ -180,7 +182,22 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 
 	s, err := meb.NewMEBStore(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open store for project %s: %w", projectID, err)
+		// Handle meb v0.4 snapshot format migration: if the snapshot vector
+		// size doesn't match (clean break from v0.3), delete the old snapshot
+		// keys and retry, so a fresh snapshot is built from current vectors.
+		if strings.Contains(err.Error(), "snapshot vector size mismatch") {
+			log.Printf("Detected stale vector snapshot for project %s, clearing and retrying...", projectID)
+			if clearErr := clearVectorSnapshot(projectDir); clearErr != nil {
+				return nil, fmt.Errorf("failed to open store for project %s: %w (also failed to clear snapshot: %v)", projectID, err, clearErr)
+			}
+			s, err = meb.NewMEBStore(cfg)
+			if err != nil {
+				return nil, fmt.Errorf("failed to open store for project %s after snapshot clear: %w", projectID, err)
+			}
+			log.Printf("Vector snapshot cleared and store reopened successfully for project %s", projectID)
+		} else {
+			return nil, fmt.Errorf("failed to open store for project %s: %w", projectID, err)
+		}
 	}
 
 	// Set TopicID for project-scoped queries
@@ -578,6 +595,57 @@ func (sm *StoreManager) QueryFederated(ctx context.Context, projectID, query str
 		Count:     len(merged),
 		StoreType: StoreTypeFederated,
 	}, nil
+}
+
+// clearVectorSnapshot deletes the stale TQ vector snapshot keys from a
+// Badger DB, so that meb can rebuild a fresh snapshot on next open.
+// This is needed after a meb v0.3→v0.4 upgrade where the snapshot format
+// changed (clean break).
+func clearVectorSnapshot(projectDir string) error {
+	badgerPath := filepath.Join(projectDir, "badger")
+	opts := badger.DefaultOptions(badgerPath).
+		WithReadOnly(false).
+		WithLogger(nil)
+	db, err := badger.Open(opts)
+	if err != nil {
+		return fmt.Errorf("open badger for snapshot cleanup: %w", err)
+	}
+	defer db.Close()
+
+	// Collect all keys with "sys:tq:" prefix (snapshot meta + vector chunks)
+	var keys [][]byte
+	err = db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+		prefix := []byte("sys:tq:")
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			key := make([]byte, len(it.Item().Key()))
+			copy(key, it.Item().Key())
+			keys = append(keys, key)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("scan snapshot keys: %w", err)
+	}
+
+	if len(keys) == 0 {
+		return nil // nothing to clear
+	}
+
+	err = db.Update(func(txn *badger.Txn) error {
+		for _, k := range keys {
+			if err := txn.Delete(k); err != nil {
+				return fmt.Errorf("delete snapshot key %s: %w", string(k), err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("delete snapshot keys: %w", err)
+	}
+
+	return nil
 }
 
 // rowsToStringMap converts []map[string]any to []map[string]string for API responses.

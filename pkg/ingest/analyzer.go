@@ -392,6 +392,14 @@ func (a *Analyzer) RunPostIngestAnalysis(ctx context.Context, projectID string) 
 		logger.Warn("Centrality computation failed", "error", err)
 	}
 
+	// Write okf_age_days facts so the stale smell policy (stale.mg) can fire.
+	sourceStore, srcErr := a.storeManager.GetSourceStore(projectID)
+	if srcErr == nil {
+		if err := a.writeOKFAgeDays(ctx, sourceStore); err != nil {
+			logger.Warn("OKF age days computation failed", "error", err)
+		}
+	}
+
 	if err := a.executeRulesFromTemplates(ctx, projectID); err != nil {
 		logger.Warn("Template rule execution failed", "error", err)
 	}
@@ -587,6 +595,57 @@ func (a *Analyzer) writeDegreeFacts(ctx context.Context, sourceStore, analytical
 	}
 
 	logger.Debug("Degree facts written", "facts", factCount, "symbols", len(allSymbols))
+	return nil
+}
+
+// writeOKFAgeDays computes okf_age_days for each OKF concept based on its okf_timestamp.
+// This enables the stale smell policy (stale.mg) to detect concepts older than 90 days.
+func (a *Analyzer) writeOKFAgeDays(ctx context.Context, sourceStore *meb.MEBStore) error {
+	now := time.Now()
+	factCount := 0
+
+	for fact := range sourceStore.ScanContext(ctx, "", "okf_timestamp", "") {
+		tsStr, ok := fact.Object.(string)
+		if !ok || tsStr == "" {
+			continue
+		}
+
+		// Try ISO 8601 formats: full datetime, date-only, or with timezone
+		var ts time.Time
+		var parseErr error
+		for _, layout := range []string{
+			time.RFC3339,
+			"2006-01-02T15:04:05Z",
+			"2006-01-02",
+			time.RFC3339Nano,
+		} {
+			ts, parseErr = time.Parse(layout, tsStr)
+			if parseErr == nil {
+				break
+			}
+		}
+		if parseErr != nil {
+			continue
+		}
+
+		days := int(now.Sub(ts).Hours() / 24)
+		if days < 0 {
+			days = 0
+		}
+
+		ageFact := meb.Fact{
+			Subject:   fact.Subject,
+			Predicate: "okf_age_days",
+			Object:    fmt.Sprintf("%d", days),
+		}
+		if err := sourceStore.AddFact(ageFact); err != nil {
+			logger.Warn("Failed to add okf_age_days fact", "subject", fact.Subject, "error", err)
+		} else {
+			factCount++
+		}
+	}
+
+	logger.Debug("OKF age days facts written", "facts", factCount)
 	return nil
 }
 

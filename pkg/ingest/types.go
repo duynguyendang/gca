@@ -21,6 +21,23 @@ type AnalysisBundle struct {
 	Facts     []meb.Fact
 }
 
+// IngestState holds shared state across the ingestion pipeline.
+type IngestState struct {
+	ProjectName      string
+	SymbolTable      map[string]string
+	FileIndex        map[string]bool
+	FileContentCache map[string][]byte
+}
+
+// NewIngestState creates a new IngestState with initialized maps.
+func NewIngestState() *IngestState {
+	return &IngestState{
+		SymbolTable:      make(map[string]string),
+		FileIndex:        make(map[string]bool),
+		FileContentCache: make(map[string][]byte),
+	}
+}
+
 // Extractor is the interface for language-specific content extraction.
 type Extractor interface {
 	// Extract analyzes the content and returns a bundle of documents and facts.

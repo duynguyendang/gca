@@ -51,7 +51,8 @@ func ParseConcept(sourcePath string, raw []byte) (*Concept, error) {
 		Body:        string(body),
 		Frontmatter: map[string]any{},
 		Tags:        []string{},
-		Links:       extractLinks(body),
+		Links:       extractBodyLinks(body),
+		Citations:   extractCitationLinks(body),
 		ContentHash: HashContent(raw),
 	}
 
@@ -148,6 +149,30 @@ func extractLinks(body []byte) []string {
 		}
 	}
 	return out
+}
+
+// citationsHeading matches the # Citations heading (case-insensitive, any level).
+var citationsHeading = regexp.MustCompile(`(?mi)^#{1,3}\s+Citations\s*$`)
+
+// extractCitationLinks returns link targets from the # Citations section only.
+// If no # Citations section exists, returns nil.
+func extractCitationLinks(body []byte) []string {
+	idx := citationsHeading.FindIndex(body)
+	if idx == nil {
+		return nil
+	}
+	// Start from the end of the heading match
+	citationBody := body[idx[1]:]
+	return extractLinks(citationBody)
+}
+
+// extractBodyLinks returns link targets from the body EXCLUDING the # Citations section.
+func extractBodyLinks(body []byte) []string {
+	idx := citationsHeading.FindIndex(body)
+	if idx == nil {
+		return extractLinks(body)
+	}
+	return extractLinks(body[:idx[0]])
 }
 
 // isWellKnownFrontmatterKey reports whether a key is one of the OKF-spec
