@@ -18,6 +18,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/telemetry"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/store"
+	"github.com/duynguyendang/meb/vector"
 	"github.com/dgraph-io/badger/v4"
 	lru "github.com/hashicorp/golang-lru/v2"
 )
@@ -39,6 +40,13 @@ const CurrentSchemaVersion = "2.0"
 
 // MemoryProfile defines the memory optimization strategy
 type MemoryProfile string
+
+// Index types for vector search acceleration.
+const (
+	IndexTypeBrute = "brute" // default: exact brute-force search
+	IndexTypeIVFPQ = "ivfpq" // IVF-PQ approximate nearest neighbor
+	IndexTypeHNSW  = "hnsw"  // HNSW graph-based approximate nearest neighbor
+)
 
 // StoreType specifies which logical store to access (Source vs Analytical).
 type StoreType string
@@ -81,7 +89,8 @@ type StoreManager struct {
 	mu            sync.Mutex // Protects all access to projects cache
 	profile       MemoryProfile
 	readOnly      bool
-	embeddingDim  int // Vector dimension for MEB's vector registry (0 = MEB default 1536)
+	embeddingDim  int    // Vector dimension for MEB's vector registry (0 = MEB default 1536)
+	indexType     string // Vector index type: brute, ivfpq, hnsw
 	cachedList    []ProjectMetadata
 	lastListBuild time.Time
 	telemetrySink meb.TelemetrySink
@@ -111,6 +120,20 @@ func NewStoreManager(baseDir string, profile MemoryProfile, readOnly bool) *Stor
 	sm.projects = cache
 
 	return sm
+}
+
+// SetIndexType sets the vector search index type. Must be called before
+// the first GetStore() call. Accepted values: "brute" (default), "ivfpq", "hnsw".
+func (sm *StoreManager) SetIndexType(indexType string) {
+	switch indexType {
+	case "", IndexTypeBrute:
+		sm.indexType = IndexTypeBrute
+	case IndexTypeIVFPQ, IndexTypeHNSW:
+		sm.indexType = indexType
+	default:
+		log.Printf("WARNING: unknown MEB_INDEX %q, falling back to brute", indexType)
+		sm.indexType = IndexTypeBrute
+	}
 }
 
 // SetEphemeralStore sets the EphemeralStore (for testing or custom configuration).
@@ -215,8 +238,37 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 		return nil, fmt.Errorf("failed to set retention for project %s: %w", projectID, err)
 	}
 
+	// Enable vector index if configured
+	switch sm.indexType {
+	case IndexTypeIVFPQ:
+		if err := s.EnableIVFPQ(vector.DefaultIVFPQConfig()); err != nil {
+			return nil, fmt.Errorf("failed to enable IVF-PQ for project %s: %w", projectID, err)
+		}
+		log.Printf("IVF-PQ index enabled for project %s", projectID)
+	case IndexTypeHNSW:
+		if err := s.EnableHNSW(vector.DefaultHNSWConfig()); err != nil {
+			return nil, fmt.Errorf("failed to enable HNSW for project %s: %w", projectID, err)
+		}
+		log.Printf("HNSW index enabled for project %s", projectID)
+	default:
+		// brute (exact search) — no additional setup needed
+	}
+
 	sm.projects.Add(projectID, s)
 	return s, nil
+}
+
+// TrainIndex trains the vector index (IVF-PQ only; HNSW trains incrementally).
+// Called after ingestion or batch vector additions.
+func (sm *StoreManager) TrainIndex(s *meb.MEBStore, topicID uint32) error {
+	switch sm.indexType {
+	case IndexTypeIVFPQ:
+		if err := s.TrainIVFPQ(topicID); err != nil {
+			return fmt.Errorf("IVF-PQ training failed: %w", err)
+		}
+		log.Printf("IVF-PQ training completed for topic %d", topicID)
+	}
+	return nil
 }
 
 // hasBadgerDir checks if a directory contains a badger database subdirectory.

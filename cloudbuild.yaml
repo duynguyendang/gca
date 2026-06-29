@@ -14,6 +14,7 @@ steps:
       - |
         cat > /workspace/env.yaml <<EOF
         LOW_MEM: 'true'
+        MEB_INDEX: 'brute'
         LLM_MODEL: 'googleai/gemini-3.1-flash-lite'
         LLM_PROVIDER: 'googleai'
         EMBEDDING_MODEL: 'googleai/gemini-embedding-001'

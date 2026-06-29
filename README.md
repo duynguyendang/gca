@@ -552,6 +552,8 @@ All smells contribute to composite health scoring via `policies/smells/scoring.m
 
 > Note: `depth=1` queries use direct store scan and avoid building the full call graph, making them fast even on large projects.
 
+
+
 ## Deployment
 
 ### Docker

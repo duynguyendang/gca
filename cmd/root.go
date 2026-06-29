@@ -24,6 +24,7 @@ var (
 	sourceDir string
 	lowMem    bool
 	port      string
+	mebIndex  string
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -51,6 +52,9 @@ Datalog, natural language, and semantic search.`,
 		}
 		if lowMemStr := os.Getenv("LOW_MEM"); lowMemStr != "" && !cmd.Flags().Changed("low-mem") {
 			lowMem = strings.ToLower(lowMemStr) == "true"
+		}
+		if idx := os.Getenv("MEB_INDEX"); idx != "" {
+			mebIndex = idx
 		}
 
 		return nil

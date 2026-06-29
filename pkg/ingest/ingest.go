@@ -354,14 +354,16 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 		return fmt.Errorf("failed to add document %s: %w", relPath, addErr)
 	}
 
-	// Store symbol documents (with file, start_line, end_line metadata for snippet extraction)
+	// Pre-create dict entries for all symbols so async embedding goroutines
+	// can look them up via LookupID(). Actual metadata facts are stored in
+	// the single transaction below alongside bundle facts.
 	for _, doc := range bundle.Documents {
-		if err := s.AddDocumentWithTopic(s.TopicID(), doc.ID, nil, nil, doc.Metadata); err != nil {
-			logger.Warn("Failed to add symbol doc", "doc_id", doc.ID, "error", err)
+		if _, err := s.Dict().GetOrCreateID(doc.ID); err != nil {
+			logger.Warn("Failed to pre-create dict entry for symbol", "doc_id", doc.ID, "error", err)
 		}
 	}
 
-	// Embed documentation for semantic search (AFTER symbols are added to ensure IDs exist)
+	// Embed documentation for semantic search (AFTER dict entries exist)
 	if embedder != nil {
 		docFactsFound := 0
 
@@ -517,7 +519,23 @@ func processFile(ctx context.Context, s *meb.MEBStore, ext Extractor, embedder *
 
 	logger.Debug("Total facts being added", "total", len(finalFacts), "has_name_count", hasNameCount)
 
-	return s.AddFactBatch(finalFacts)
+	// Cross-subsystem transaction: symbol metadata + bundle facts in one atomic batch.
+	// Reduces N separate AddDocumentWithTopic calls + AddFactBatch to a single Update().
+	return s.Update(func(txn *meb.StoreTxn) error {
+		var allSymFacts []meb.Fact
+		for _, doc := range bundle.Documents {
+			for k, v := range doc.Metadata {
+				allSymFacts = append(allSymFacts, meb.Fact{Subject: doc.ID, Predicate: k, Object: v})
+			}
+		}
+		if len(allSymFacts) > 0 {
+			if err := txn.AddFactBatchWithTopic(allSymFacts, s.TopicID()); err != nil {
+				logger.Warn("Failed to store symbol metadata batch", "count", len(allSymFacts), "error", err)
+			}
+		}
+		// All bundle facts
+		return txn.AddFactBatchWithTopic(finalFacts, s.TopicID())
+	})
 }
 
 func isSupportedFile(path string) bool {

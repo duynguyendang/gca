@@ -134,7 +134,7 @@ func TestTakeSnapshot_WithCommunities(t *testing.T) {
 	}
 }
 
-func TestTakeSnapshot_TypeAssertionSafety(t *testing.T) {
+func TestTakeSnapshot_IntegerObjectEncodedAsString(t *testing.T) {
 	s, tmpDir := setupTestStore(t)
 	defer closeTestStore(s, tmpDir)
 
@@ -146,8 +146,10 @@ func TestTakeSnapshot_TypeAssertionSafety(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TakeSnapshot should not fail on non-string object: %v", err)
 	}
-	if snap.EdgeCount != 0 {
-		t.Errorf("Non-string object should be skipped, expected 0 edges, got %d", snap.EdgeCount)
+	// meb v0.5 encodes integer objects as dictionary strings.
+	// fact.Object.(string) succeeds because the integer is returned as "123".
+	if snap.EdgeCount != 1 {
+		t.Errorf("Integer object is dictionary-encoded as string in meb v0.5, expected 1 edge, got %d", snap.EdgeCount)
 	}
 }
 

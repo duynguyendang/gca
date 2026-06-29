@@ -29,6 +29,7 @@ and AI-powered code analysis.`,
 		// Initialize StoreManager
 		mgr := manager.NewStoreManager(dataDir, getMemoryProfile(), true)
 		mgr.SetVectorFullDim(llmconfig.GetEmbeddingDim(""))
+		mgr.SetIndexType(mebIndex)
 		defer mgr.CloseAll()
 
 		srv := server.NewServer(mgr, sourceDir)
