@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/duynguyendang/gca/pkg/common"
 )
 
 type AggregationType string
@@ -411,21 +413,7 @@ func applySort(results []map[string]any, sortSpecs []SortSpec) []map[string]any 
 }
 
 func toFloat64(v any) (float64, bool) {
-	switch val := v.(type) {
-	case float64:
-		return val, true
-	case float32:
-		return float64(val), true
-	case int:
-		return float64(val), true
-	case int64:
-		return float64(val), true
-	case string:
-		if f, err := strconv.ParseFloat(val, 64); err == nil {
-			return f, true
-		}
-	}
-	return 0, false
+	return common.ToFloat64(v)
 }
 
 func compareValues(a, b any) int {

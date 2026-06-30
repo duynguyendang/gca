@@ -19,6 +19,7 @@ type RateLimiter struct {
 	capacity int           // max tokens
 	cleanup  time.Duration // cleanup interval for stale buckets
 	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 type bucket struct {
@@ -44,7 +45,9 @@ func NewRateLimiter(rate, capacity int) *RateLimiter {
 
 // Stop stops the rate limiter cleanup goroutine
 func (rl *RateLimiter) Stop() {
-	close(rl.stopCh)
+	rl.stopOnce.Do(func() {
+		close(rl.stopCh)
+	})
 }
 
 // Allow checks if a request from the given key is allowed
@@ -103,28 +106,28 @@ func (rl *RateLimiter) cleanupStaleBuckets() {
 	}
 }
 
-// RateLimitMiddleware returns a Gin middleware for rate limiting
-func RateLimitMiddleware() gin.HandlerFunc {
-	// Get rate limit configuration from environment variables
+// newRateLimiterFromEnv creates a RateLimiter from environment variables.
+func newRateLimiterFromEnv() *RateLimiter {
 	rateStr := os.Getenv("RATE_LIMIT_REQUESTS_PER_SECOND")
 	capacityStr := os.Getenv("RATE_LIMIT_BURST_CAPACITY")
-
-	rate := 10     // default: 10 requests per second
-	capacity := 20 // default: burst capacity of 20
-
+	rate := 10
+	capacity := 20
 	if rateStr != "" {
 		if r, err := strconv.Atoi(rateStr); err == nil && r > 0 {
 			rate = r
 		}
 	}
-
 	if capacityStr != "" {
 		if c, err := strconv.Atoi(capacityStr); err == nil && c > 0 {
 			capacity = c
 		}
 	}
+	return NewRateLimiter(rate, capacity)
+}
 
-	limiter := NewRateLimiter(rate, capacity)
+// RateLimitMiddleware returns a Gin middleware for rate limiting
+func RateLimitMiddleware() gin.HandlerFunc {
+	limiter := newRateLimiterFromEnv()
 
 	return func(c *gin.Context) {
 		// Use IP address as the rate limit key

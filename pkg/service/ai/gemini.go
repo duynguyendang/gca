@@ -276,7 +276,7 @@ func (s *AIService) BuildDiagnosticContext(ctx context.Context, projectID string
 	sb.WriteString(fmt.Sprintf("Project: %s\n", projectID))
 
 	// Query for entry points
-	entryQuery := `triples(Subject, "is_entry_point", "true")`
+	entryQuery := common.GetNamedQuery("entry_point")
 	entryResults, err := gcamdb.Query(ctx, analyticalStore, entryQuery)
 	if err == nil && len(entryResults) > 0 {
 		sb.WriteString("Entry Points:\n")
@@ -293,7 +293,7 @@ func (s *AIService) BuildDiagnosticContext(ctx context.Context, projectID string
 	}
 
 	// Query for hub files
-	hubQuery := `triples(Subject, "has_hub_score", Score)`
+	hubQuery := common.GetNamedQuery("hub_score")
 	hubResults, err := gcamdb.Query(ctx, analyticalStore, hubQuery)
 	if err == nil && len(hubResults) > 0 {
 		sb.WriteString("Hub Files (high connectivity):\n")
@@ -312,7 +312,7 @@ func (s *AIService) BuildDiagnosticContext(ctx context.Context, projectID string
 	}
 
 	// Query for smells
-	smellQuery := `triples(Subject, "has_smell", Object)`
+	smellQuery := common.GetNamedQuery("smell")
 	smellResults, err := gcamdb.Query(ctx, analyticalStore, smellQuery)
 	if err == nil && len(smellResults) > 0 {
 		sb.WriteString("Architectural Issues:\n")

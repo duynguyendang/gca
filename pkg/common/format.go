@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -170,6 +171,27 @@ func ExtractStringList(data interface{}, limit int) string {
 		}
 	}
 	return strings.TrimSuffix(sb.String(), ", ")
+}
+
+// ToFloat64 converts a value to float64 if possible.
+func ToFloat64(v any) (float64, bool) {
+	switch val := v.(type) {
+	case float64:
+		return val, true
+	case float32:
+		return float64(val), true
+	case int:
+		return float64(val), true
+	case int64:
+		return float64(val), true
+	case int32:
+		return float64(val), true
+	case string:
+		if f, err := strconv.ParseFloat(val, 64); err == nil {
+			return f, true
+		}
+	}
+	return 0, false
 }
 
 // ExtractPathString extracts a formatted path string from query results.

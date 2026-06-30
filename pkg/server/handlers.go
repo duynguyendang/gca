@@ -2100,7 +2100,9 @@ func (s *Server) handleTestGenerateAll(c *gin.Context) {
 
 	var req TestGenerateAllRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		req.Depth = 3
+		logger.Error("handleTestGenerateAll: invalid request body", "error", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
 	}
 
 	store, err := s.manager.GetStore(projectID)
@@ -2294,10 +2296,7 @@ func (s *Server) handleRoutes(c *gin.Context) {
 
 	routes := make(map[string]map[string]string) // route -> {method, handler}
 
-	for fact, err := range store.Scan("", config.PredicateHandledBy, "") {
-		if err != nil {
-			continue
-		}
+	for fact := range store.ScanContext(c.Request.Context(), "", config.PredicateHandledBy, "") {
 		route := fact.Subject
 		if handler, ok := fact.Object.(string); ok {
 			if routes[route] == nil {
@@ -2308,10 +2307,7 @@ func (s *Server) handleRoutes(c *gin.Context) {
 		}
 	}
 
-	for fact, err := range store.Scan("", "http_method", "") {
-		if err != nil {
-			continue
-		}
+	for fact := range store.ScanContext(c.Request.Context(), "", "http_method", "") {
 		route := fact.Subject
 		if method, ok := fact.Object.(string); ok {
 			if routes[route] == nil {

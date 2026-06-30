@@ -148,6 +148,24 @@ func TestGetRateLimitConfig(t *testing.T) {
 	}
 }
 
+func TestRateLimiter_StopFromServer(t *testing.T) {
+	srv, _, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	done := make(chan struct{})
+	go func() {
+		srv.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Cleanup goroutine exited normally
+	case <-time.After(2 * time.Second):
+		t.Fatal("Server.Close() timed out — rate limiter cleanup goroutine may not have exited")
+	}
+}
+
 func TestBucket_Structure(t *testing.T) {
 	b := &bucket{
 		tokens:    10,

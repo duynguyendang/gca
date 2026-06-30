@@ -182,6 +182,8 @@ func (a *Analyzer) emitFactFromTemplate(store *meb.MEBStore, result map[string]a
 		subject = s
 	} else if s, ok := result["Cluster"].(string); ok {
 		subject = s
+	} else if s, ok := result["Concept"].(string); ok {
+		subject = s
 	}
 
 	if subject == "" {
@@ -311,6 +313,9 @@ func (a *Analyzer) executeTemplateQueries(ctx context.Context, projectID string)
 		// Write results to analytical store
 		for _, r := range results {
 			subject := extractString(r, "Subject")
+			if subject == "" {
+				subject = extractString(r, "Concept")
+			}
 			if subject == "" {
 				continue
 			}
@@ -874,6 +879,8 @@ func (a *Analyzer) emitStructuredFact(store *meb.MEBStore, result map[string]any
 	} else if s, ok := result["A"].(string); ok {
 		subject = s
 	} else if s, ok := result["Subject"].(string); ok {
+		subject = s
+	} else if s, ok := result["Concept"].(string); ok {
 		subject = s
 	}
 

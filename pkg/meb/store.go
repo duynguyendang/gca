@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/datalog"
 	"github.com/duynguyendang/gca/pkg/logger"
@@ -567,23 +568,5 @@ func compareLTE(val interface{}, constraintStr string) bool {
 
 // toFloat64 converts a value to float64 if possible.
 func toFloat64(v interface{}) (float64, bool) {
-	switch val := v.(type) {
-	case int:
-		return float64(val), true
-	case int64:
-		return float64(val), true
-	case int32:
-		return float64(val), true
-	case float64:
-		return val, true
-	case float32:
-		return float64(val), true
-	case string:
-		var f float64
-		_, err := fmt.Sscanf(val, "%f", &f)
-		if err == nil {
-			return f, true
-		}
-	}
-	return 0, false
+	return common.ToFloat64(v)
 }

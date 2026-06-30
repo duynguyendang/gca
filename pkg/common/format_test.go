@@ -228,6 +228,37 @@ func TestExtractStringList(t *testing.T) {
 	}
 }
 
+func TestToFloat64(t *testing.T) {
+	tests := []struct {
+		name  string
+		input any
+		want  float64
+		wantOK bool
+	}{
+		{name: "float64", input: float64(3.14), want: 3.14, wantOK: true},
+		{name: "float32", input: float32(2.5), want: 2.5, wantOK: true},
+		{name: "int", input: 42, want: 42.0, wantOK: true},
+		{name: "int64", input: int64(100), want: 100.0, wantOK: true},
+		{name: "int32", input: int32(10), want: 10.0, wantOK: true},
+		{name: "string number", input: "3.14", want: 3.14, wantOK: true},
+		{name: "string int", input: "42", want: 42.0, wantOK: true},
+		{name: "invalid string", input: "not-a-number", want: 0, wantOK: false},
+		{name: "bool", input: true, want: 0, wantOK: false},
+		{name: "nil", input: nil, want: 0, wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ToFloat64(tt.input)
+			if ok != tt.wantOK {
+				t.Errorf("ToFloat64(%v) ok = %v, want %v", tt.input, ok, tt.wantOK)
+			}
+			if ok && got != tt.want {
+				t.Errorf("ToFloat64(%v) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExtractPathString(t *testing.T) {
 	tests := []struct {
 		name  string

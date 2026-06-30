@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -143,6 +145,39 @@ func TestHandleFiles(t *testing.T) {
 		w := doRequest(srv, "GET", "/api/v1/files?project="+testProjectID+"&prefix=handlers", "")
 		requireStatus(t, w, http.StatusOK)
 	})
+}
+
+func TestHandleRoutes_ContextCancel(t *testing.T) {
+	srv, _, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	req := httptest.NewRequest("GET", "/api/v1/routes?project="+testProjectID, nil)
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	requireStatus(t, w, http.StatusOK)
+	var resp map[string]interface{}
+	requireJSON(t, w, &resp)
+	routes, ok := resp["routes"].([]interface{})
+	if !ok {
+		t.Error("expected routes array in response")
+	}
+	// With cancelled context, ScanContext should stop iterating immediately
+	if len(routes) != 0 {
+		t.Logf("Got %d routes with cancelled context (may be partial)", len(routes))
+	}
+}
+
+func TestHandleTestGenerateAll_BadJSON(t *testing.T) {
+	srv, _, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	w := doJSONRequest(srv, "POST", "/api/v1/projects/"+testProjectID+"/test/generate-all", `{invalid}`)
+	requireStatus(t, w, http.StatusBadRequest)
 }
 
 func TestHandleHydrate(t *testing.T) {

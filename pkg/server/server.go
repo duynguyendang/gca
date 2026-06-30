@@ -90,16 +90,33 @@ type Server struct {
 	queryService   *registry.QueryService
 	smellRegistry  *registry.SmellRegistry
 	ephemeralStore *ephemeral.EphemeralStore
+	rateLimiter    *RateLimiter
 	sourceDir      string
 	router         *gin.Engine
 }
 
 // NewServer creates a new Server instance.
 func NewServer(mgr *manager.StoreManager, sourceDir string) *Server {
+	rateLimiter := newRateLimiterFromEnv()
 	r := gin.Default()
 	r.Use(RequestIDMiddleware())
 	r.Use(CORSMiddleware())
-	r.Use(RateLimitMiddleware())
+	r.Use(func(c *gin.Context) {
+		key := c.ClientIP()
+		apiKey := c.GetHeader("X-API-Key")
+		if apiKey != "" {
+			key = "api:" + apiKey
+		}
+		if !rateLimiter.Allow(key) {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error":       "Rate limit exceeded. Please try again later.",
+				"retry_after": 1,
+			})
+			c.Abort()
+			return
+		}
+		c.Next()
+	})
 	r.Use(ValidationMiddleware())
 	r.Use(CompressionMiddleware())
 
@@ -148,6 +165,7 @@ func NewServer(mgr *manager.StoreManager, sourceDir string) *Server {
 		queryService:   queryService,
 		smellRegistry:  smellRegistry,
 		ephemeralStore: ephemeral.NewEphemeralStore(0),
+		rateLimiter:    rateLimiter,
 		sourceDir:      sourceDir,
 		router:         r,
 	}
@@ -157,10 +175,26 @@ func NewServer(mgr *manager.StoreManager, sourceDir string) *Server {
 
 // NewServerWithAIService creates a Server with a custom AIService (used for testing).
 func NewServerWithAIService(mgr *manager.StoreManager, sourceDir string, aiSvc AIService) *Server {
+	rateLimiter := newRateLimiterFromEnv()
 	r := gin.Default()
 	r.Use(RequestIDMiddleware())
 	r.Use(CORSMiddleware())
-	r.Use(RateLimitMiddleware())
+	r.Use(func(c *gin.Context) {
+		key := c.ClientIP()
+		apiKey := c.GetHeader("X-API-Key")
+		if apiKey != "" {
+			key = "api:" + apiKey
+		}
+		if !rateLimiter.Allow(key) {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error":       "Rate limit exceeded. Please try again later.",
+				"retry_after": 1,
+			})
+			c.Abort()
+			return
+		}
+		c.Next()
+	})
 	r.Use(ValidationMiddleware())
 	r.Use(CompressionMiddleware())
 
@@ -176,6 +210,7 @@ func NewServerWithAIService(mgr *manager.StoreManager, sourceDir string, aiSvc A
 		queryService:   nil,
 		smellRegistry:  smellRegistry,
 		ephemeralStore: ephemeral.NewEphemeralStore(0),
+		rateLimiter:    rateLimiter,
 		sourceDir:      sourceDir,
 		router:         r,
 	}
@@ -193,9 +228,12 @@ func (s *Server) Handler() http.Handler {
 	return s.router
 }
 
-// Close shuts down background resources (ephemeral store sweeper).
+// Close shuts down background resources (ephemeral store sweeper, rate limiter).
 func (s *Server) Close() {
 	s.ephemeralStore.Close()
+	if s.rateLimiter != nil {
+		s.rateLimiter.Stop()
+	}
 }
 
 func (s *Server) setupRoutes() {

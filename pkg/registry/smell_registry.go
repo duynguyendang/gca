@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/logger"
 	mebpkg "github.com/duynguyendang/gca/pkg/meb"
 	externmeb "github.com/duynguyendang/meb"
@@ -53,7 +54,7 @@ func (sr *SmellRegistry) LoadFromPolicies(ctx context.Context, projectID string)
 	securityPrefixes := make(map[string]bool)
 
 	// Query smell_weight/2 facts: triples(Name, "smell_weight", Weight)
-	query := `triples(Name, "smell_weight", Weight)`
+	query := common.GetNamedQuery("smell_weight")
 	results, err := mebpkg.Query(ctx, store, query)
 	if err != nil {
 		logger.Warn("SmellRegistry: failed to query smell_weight", "error", err)
