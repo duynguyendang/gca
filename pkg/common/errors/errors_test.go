@@ -3,7 +3,6 @@ package errors
 import (
 	"errors"
 	"net/http"
-	"strings"
 	"testing"
 )
 
@@ -59,34 +58,6 @@ func TestNewAppError(t *testing.T) {
 	}
 	if err.Details == nil {
 		t.Error("NewAppError().Details should not be nil")
-	}
-}
-
-func TestNewAppErrorWithDetails(t *testing.T) {
-	details := map[string]interface{}{"key": "value"}
-	err := NewAppErrorWithDetails(http.StatusInternalServerError, "test", nil, details)
-
-	if err.Code != http.StatusInternalServerError {
-		t.Errorf("NewAppErrorWithDetails().Code = %d, want %d", err.Code, http.StatusInternalServerError)
-	}
-	if err.Details["key"] != "value" {
-		t.Errorf("NewAppErrorWithDetails().Details[key] = %q, want %q", err.Details["key"], "value")
-	}
-}
-
-func TestAppError_WithDetail(t *testing.T) {
-	err := NewAppError(http.StatusBadRequest, "test", nil)
-	err = err.WithDetail("extra", "info")
-
-	if err.Details["extra"] != "info" {
-		t.Errorf("AppError.WithDetail() = %q, want %q", err.Details["extra"], "info")
-	}
-
-	// Test that it doesn't panic on nil Details
-	err2 := &AppError{Code: 400, Message: "test", Details: nil}
-	err2 = err2.WithDetail("key", "value")
-	if err2.Details["key"] != "value" {
-		t.Errorf("WithDetail on nil Details failed")
 	}
 }
 
@@ -170,47 +141,6 @@ func TestMapError_AppErrorPassthrough(t *testing.T) {
 
 	if result != original {
 		t.Errorf("MapError(AppError) should return the same AppError")
-	}
-}
-
-func TestWrapError(t *testing.T) {
-	orig := ErrNotFound
-	wrapped := WrapError(orig, "context")
-
-	if wrapped == nil {
-		t.Fatal("WrapError should not return nil")
-	}
-	if !errors.Is(wrapped, orig) {
-		t.Errorf("WrapError should wrap the original error")
-	}
-	if !strings.Contains(wrapped.Error(), "context") {
-		t.Errorf("WrapError error message should contain context")
-	}
-}
-
-func TestWrapError_Nil(t *testing.T) {
-	result := WrapError(nil, "context")
-	if result != nil {
-		t.Errorf("WrapError(nil) = %v, want nil", result)
-	}
-}
-
-func TestWrapErrorf(t *testing.T) {
-	orig := ErrInvalidInput
-	wrapped := WrapErrorf(orig, "failed to %s", "validate")
-
-	if !errors.Is(wrapped, orig) {
-		t.Errorf("WrapErrorf should preserve the original error")
-	}
-	if !strings.Contains(wrapped.Error(), "failed to validate") {
-		t.Errorf("WrapErrorf should contain formatted message")
-	}
-}
-
-func TestWrapErrorf_Nil(t *testing.T) {
-	result := WrapErrorf(nil, "format %s", "args")
-	if result != nil {
-		t.Errorf("WrapErrorf(nil) = %v, want nil", result)
 	}
 }
 

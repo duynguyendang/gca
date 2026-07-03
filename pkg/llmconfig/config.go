@@ -54,23 +54,45 @@ func LoadFromEnv() (*Config, error) {
 	return cfg, nil
 }
 
+type providerDescriptor struct {
+	plugin         func(apiKey, ollamaAddr string) api.Plugin
+	defaultModel   string
+	embeddingModel string
+}
+
+var providerDescriptors = map[string]providerDescriptor{
+	"googleai": {
+		plugin:         func(apiKey, _ string) api.Plugin { return &googlegenai.GoogleAI{APIKey: apiKey} },
+		defaultModel:   "googleai/gemini-2.5-flash",
+		embeddingModel: "googleai/text-embedding-004",
+	},
+	"gemini": {
+		plugin:         func(apiKey, _ string) api.Plugin { return &googlegenai.GoogleAI{APIKey: apiKey} },
+		defaultModel:   "googleai/gemini-2.5-flash",
+		embeddingModel: "googleai/text-embedding-004",
+	},
+	"openai": {
+		plugin:         func(apiKey, _ string) api.Plugin { return &openai.OpenAI{APIKey: apiKey} },
+		defaultModel:   "openai/gpt-4o",
+		embeddingModel: "openai/text-embedding-3-large",
+	},
+	"anthropic": {
+		plugin:         func(apiKey, _ string) api.Plugin { return &anthropic.Anthropic{APIKey: apiKey} },
+		defaultModel:   "anthropic/claude-3-5-sonnet-20241022",
+		embeddingModel: "",
+	},
+	"ollama": {
+		plugin:         func(_, ollamaAddr string) api.Plugin { return &ollama.Ollama{ServerAddress: ollamaAddr} },
+		defaultModel:   "ollama/llama3.2",
+		embeddingModel: "ollama/nomic-embed-text",
+	},
+}
+
 func createPlugins(provider, apiKey, ollamaAddr string) []api.Plugin {
-	var plugins []api.Plugin
-
-	switch provider {
-	case "googleai", "gemini":
-		plugins = append(plugins, &googlegenai.GoogleAI{APIKey: apiKey})
-	case "openai":
-		plugins = append(plugins, &openai.OpenAI{APIKey: apiKey})
-	case "anthropic":
-		plugins = append(plugins, &anthropic.Anthropic{APIKey: apiKey})
-	case "ollama":
-		plugins = append(plugins, &ollama.Ollama{ServerAddress: ollamaAddr})
-	default:
-		plugins = append(plugins, &googlegenai.GoogleAI{APIKey: apiKey})
+	if desc, ok := providerDescriptors[provider]; ok {
+		return []api.Plugin{desc.plugin(apiKey, ollamaAddr)}
 	}
-
-	return plugins
+	return []api.Plugin{&googlegenai.GoogleAI{APIKey: apiKey}}
 }
 
 func resolveDefaultModel(provider, model string) string {
@@ -80,19 +102,10 @@ func resolveDefaultModel(provider, model string) string {
 		}
 		return model
 	}
-
-	switch provider {
-	case "googleai", "gemini":
-		return "googleai/gemini-2.5-flash"
-	case "openai":
-		return "openai/gpt-4o"
-	case "anthropic":
-		return "anthropic/claude-3-5-sonnet-20241022"
-	case "ollama":
-		return "ollama/llama3.2"
-	default:
-		return "googleai/gemini-2.5-flash"
+	if desc, ok := providerDescriptors[provider]; ok {
+		return desc.defaultModel
 	}
+	return "googleai/gemini-2.5-flash"
 }
 
 func resolveEmbeddingModel(provider, model string) string {
@@ -102,19 +115,10 @@ func resolveEmbeddingModel(provider, model string) string {
 		}
 		return model
 	}
-
-	switch provider {
-	case "googleai", "gemini":
-		return "googleai/text-embedding-004"
-	case "openai":
-		return "openai/text-embedding-3-large"
-	case "anthropic":
-		return ""
-	case "ollama":
-		return "ollama/nomic-embed-text"
-	default:
-		return "googleai/text-embedding-004"
+	if desc, ok := providerDescriptors[provider]; ok {
+		return desc.embeddingModel
 	}
+	return "googleai/text-embedding-004"
 }
 
 // resolveEmbeddingDim returns the embedding vector dimension for the given model name.

@@ -51,20 +51,6 @@ type ParsedQuery struct {
 	Modifier *QueryModifier
 }
 
-func ParseEnhanced(query string) (*ParsedQuery, error) {
-	modifier, baseQuery := extractModifiers(query)
-
-	atoms, err := Parse(baseQuery)
-	if err != nil {
-		return nil, err
-	}
-
-	return &ParsedQuery{
-		Atoms:    atoms,
-		Modifier: modifier,
-	}, nil
-}
-
 func extractModifiers(query string) (*QueryModifier, string) {
 	modifier := &QueryModifier{}
 
@@ -271,39 +257,6 @@ func (pq *ParsedQuery) String() string {
 	return sb.String()
 }
 
-func ApplyModifiers(results []map[string]any, modifier *QueryModifier) []map[string]any {
-	if modifier == nil {
-		return results
-	}
-
-	var filtered []map[string]any
-
-	if len(modifier.GroupBy) > 0 && modifier.Aggregation != nil {
-		filtered = applyAggregation(results, modifier)
-	} else {
-		filtered = results
-	}
-
-	if len(modifier.SortBy) > 0 {
-		filtered = applySort(filtered, modifier.SortBy)
-	}
-
-	if modifier.Offset != nil && *modifier.Offset > 0 {
-		if *modifier.Offset >= len(filtered) {
-			return []map[string]any{}
-		}
-		filtered = filtered[*modifier.Offset:]
-	}
-
-	if modifier.Limit != nil && *modifier.Limit > 0 {
-		if *modifier.Limit < len(filtered) {
-			filtered = filtered[:*modifier.Limit]
-		}
-	}
-
-	return filtered
-}
-
 func applyAggregation(results []map[string]any, modifier *QueryModifier) []map[string]any {
 	if len(modifier.GroupBy) == 0 {
 		return results
@@ -336,50 +289,55 @@ func applyAggregation(results []map[string]any, modifier *QueryModifier) []map[s
 
 		if modifier.Aggregation != nil {
 			alias := "?" + modifier.Aggregation.Alias
-			switch modifier.Aggregation.Type {
-			case AggregationCount:
-				aggResult[alias] = len(group)
-			case AggregationSum:
-				var sum float64
-				for _, r := range group {
-					if val, ok := r[modifier.Aggregation.Variable]; ok {
-						if f, ok := toFloat64(val); ok {
-							sum += f
-						}
-					}
-				}
-				aggResult[alias] = sum
-			case AggregationMin:
-				var min float64 = math.MaxFloat64
-				for _, r := range group {
-					if val, ok := r[modifier.Aggregation.Variable]; ok {
-						if f, ok := toFloat64(val); ok {
-							if f < min {
-								min = f
-							}
-						}
-					}
-				}
-				aggResult[alias] = min
-			case AggregationMax:
-				var max float64 = -math.MaxFloat64
-				for _, r := range group {
-					if val, ok := r[modifier.Aggregation.Variable]; ok {
-						if f, ok := toFloat64(val); ok {
-							if f > max {
-								max = f
-							}
-						}
-					}
-				}
-				aggResult[alias] = max
-			}
+			aggResult[alias] = aggregateGroup(group, modifier.Aggregation.Variable, modifier.Aggregation.Type)
 		}
 
 		aggregated = append(aggregated, aggResult)
 	}
 
 	return aggregated
+}
+
+func aggregateGroup(group []map[string]any, variable string, aggType AggregationType) float64 {
+	switch aggType {
+	case AggregationCount:
+		return float64(len(group))
+	case AggregationSum:
+		var sum float64
+		for _, r := range group {
+			if val, ok := r[variable]; ok {
+				if f, ok := toFloat64(val); ok {
+					sum += f
+				}
+			}
+		}
+		return sum
+	case AggregationMin:
+		var min float64 = math.MaxFloat64
+		for _, r := range group {
+			if val, ok := r[variable]; ok {
+				if f, ok := toFloat64(val); ok {
+					if f < min {
+						min = f
+					}
+				}
+			}
+		}
+		return min
+	case AggregationMax:
+		var max float64 = -math.MaxFloat64
+		for _, r := range group {
+			if val, ok := r[variable]; ok {
+				if f, ok := toFloat64(val); ok {
+					if f > max {
+						max = f
+					}
+				}
+			}
+		}
+		return max
+	}
+	return 0
 }
 
 func applySort(results []map[string]any, sortSpecs []SortSpec) []map[string]any {

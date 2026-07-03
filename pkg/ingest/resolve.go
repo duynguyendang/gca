@@ -170,14 +170,6 @@ func fileContainsPkg(file, pkg string) bool {
 	return false
 }
 
-func extractSymbolName(symID string) string {
-	parts := strings.Split(symID, ":")
-	if len(parts) >= 2 {
-		return parts[1]
-	}
-	return symID
-}
-
 func extractShortName(symID string) string {
 	parts := strings.Split(symID, ":")
 	if len(parts) >= 2 {

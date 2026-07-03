@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"net/http"
 
+	"github.com/duynguyendang/meb"
 	"github.com/gin-gonic/gin"
 )
 
@@ -20,8 +22,17 @@ func (s *Server) handleOKFOrphans(c *gin.Context) {
 		return
 	}
 
-	// Acquire source store once, not per-iteration
 	sourceStore, srcErr := s.manager.GetSourceStore(projectID)
+
+	// Batch-fetch all descriptions into a lookup map (eliminates N+1 per-orphan scan)
+	descMap := make(map[string]string)
+	if srcErr == nil {
+		for fact := range sourceStore.ScanContext(c.Request.Context(), "", "okf_description", "") {
+			if desc, ok := fact.Object.(string); ok {
+				descMap[fact.Subject] = desc
+			}
+		}
+	}
 
 	type Orphan struct {
 		ConceptID   string `json:"concept_id"`
@@ -31,13 +42,8 @@ func (s *Server) handleOKFOrphans(c *gin.Context) {
 	var orphans []Orphan
 	for fact := range analyticalStore.ScanContext(c.Request.Context(), "", "has_smell_type", "okf_orphan_concept") {
 		o := Orphan{ConceptID: fact.Subject}
-		if srcErr == nil {
-			for df := range sourceStore.ScanContext(c.Request.Context(), fact.Subject, "okf_description", "") {
-				if desc, ok := df.Object.(string); ok {
-					o.Description = desc
-					break
-				}
-			}
+		if desc, ok := descMap[fact.Subject]; ok {
+			o.Description = desc
 		}
 		orphans = append(orphans, o)
 	}
@@ -75,51 +81,50 @@ func (s *Server) handleOKFConceptsBatch(c *gin.Context) {
 	conceptMap := make(map[string]*ConceptInfo)
 
 	// Fetch concepts by role - scan all has_role facts and filter in Go
-	// (MEB store key format may differ from what ScanContext expects)
-	for fact := range sourceStore.ScanContext(c.Request.Context(), "", "has_role", "") {
+	scanFacts(sourceStore, c.Request.Context(), "has_role", func(fact meb.Fact) {
 		if obj, ok := fact.Object.(string); ok && obj == "okf_concept" {
 			conceptMap[fact.Subject] = &ConceptInfo{
 				ID:   fact.Subject,
 				Type: "okf_concept",
 			}
 		}
-	}
+	})
 
 	// Fetch titles
-	for fact := range sourceStore.ScanContext(c.Request.Context(), "", "okf_title", "") {
+	scanFacts(sourceStore, c.Request.Context(), "okf_title", func(fact meb.Fact) {
 		if c, ok := conceptMap[fact.Subject]; ok {
 			if title, ok := fact.Object.(string); ok {
 				c.Title = title
 			}
 		}
-	}
+	})
 
 	// Fetch descriptions
-	for fact := range sourceStore.ScanContext(c.Request.Context(), "", "okf_description", "") {
+	scanFacts(sourceStore, c.Request.Context(), "okf_description", func(fact meb.Fact) {
 		if c, ok := conceptMap[fact.Subject]; ok {
 			if desc, ok := fact.Object.(string); ok {
 				c.Description = desc
 			}
 		}
-	}
+	})
 
 	// Fetch types
-	for fact := range sourceStore.ScanContext(c.Request.Context(), "", "okf_concept", "") {
+	scanFacts(sourceStore, c.Request.Context(), "okf_concept", func(fact meb.Fact) {
 		if c, ok := conceptMap[fact.Subject]; ok {
 			if t, ok := fact.Object.(string); ok {
 				c.Type = t
 			}
 		}
-	}
+	})
 
 	// Fetch tags
-	for fact := range sourceStore.ScanContext(c.Request.Context(), "", "okf_tag", "") {
+	scanFacts(sourceStore, c.Request.Context(), "okf_tag", func(fact meb.Fact) {
 		if c, ok := conceptMap[fact.Subject]; ok {
 			if tag, ok := fact.Object.(string); ok {
 				c.Tags = append(c.Tags, tag)
 			}
 		}
-	}
+	})
 
 	concepts := make([]ConceptInfo, 0, len(conceptMap))
 	for _, c := range conceptMap {
@@ -169,4 +174,11 @@ func (s *Server) handleOKFLinksBatch(c *gin.Context) {
 		"links":   links,
 		"count":   len(links),
 	})
+}
+
+// scanFacts iterates all facts with a given predicate and calls fn for each.
+func scanFacts(store *meb.MEBStore, ctx context.Context, predicate string, fn func(meb.Fact)) {
+	for fact := range store.ScanContext(ctx, "", predicate, "") {
+		fn(fact)
+	}
 }

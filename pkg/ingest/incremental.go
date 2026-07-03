@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -238,98 +237,7 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 		}
 	}
 
-	// ── Determine change detection strategy ──
-	var changedFiles []string
-	var deletedFiles []string
-	var newHashes FileHashMap
-	var usedGit bool
-
-	if IsGitRepo(sourceDir) {
-		fromRef := ""
-		if opts != nil && opts.FromCommit != "" {
-			fromRef = opts.FromCommit
-		} else if lastSHA := GetLastCommitSHA(s); lastSHA != "" {
-			fromRef = lastSHA
-		}
-
-		if fromRef != "" {
-			var diff *GitDiffResult
-			var diffErr error
-
-			if opts != nil && opts.ToCommit != "" {
-				diff, diffErr = GitDiffBetweenCommits(fromRef, opts.ToCommit, sourceDir)
-			} else {
-				diff, diffErr = GitDiffToWorkingTree(fromRef, sourceDir)
-			}
-
-			if diffErr != nil {
-				logger.Warn("Git diff failed, falling back to hash-based", "error", diffErr)
-			} else {
-				logger.Info("Git diff result",
-					"from", diff.FromCommit,
-					"to", diff.ToCommit,
-					"changed", len(diff.ChangedFiles),
-					"deleted", len(diff.DeletedFiles))
-
-				// Convert relative paths to absolute paths for processFile
-				for _, rel := range diff.ChangedFiles {
-					changedFiles = append(changedFiles, filepath.Join(sourceDir, rel))
-				}
-				deletedFiles = diff.DeletedFiles
-				usedGit = true
-			}
-		}
-	}
-
-	// ── HASH-BASED FALLBACK ──
-	if !usedGit {
-		newHashes = make(FileHashMap)
-		existingFilePaths := make(map[string]bool)
-		for path := range incrState.FileHashes {
-			existingFilePaths[path] = true
-		}
-
-		err = filepath.WalkDir(sourceDir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				if config.IsSkippedDir(d.Name()) {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if isSupportedFile(path) {
-				relPath, _ := filepath.Rel(sourceDir, path)
-				if projectName != "" {
-					relPath = filepath.Join(projectName, relPath)
-				}
-
-				hash, mtime, hashErr := computeFileHash(path)
-				if hashErr != nil {
-					logger.Warn("Could not hash file", "path", path, "error", hashErr)
-					changedFiles = append(changedFiles, path)
-					return nil
-				}
-
-				newHashes[relPath] = FileHash{Path: relPath, Hash: hash, Mtime: mtime}
-				delete(existingFilePaths, relPath)
-
-				existingHash, exists := incrState.FileHashes[relPath]
-				if !exists || existingHash.Hash != hash {
-					changedFiles = append(changedFiles, path)
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return fmt.Errorf("hash computation failed: %w", err)
-		}
-
-		for path := range existingFilePaths {
-			deletedFiles = append(deletedFiles, path)
-		}
-	}
+	changedFiles, deletedFiles, newHashes, usedGit := computeDiff(s, sourceDir, projectName, incrState, opts)
 
 	mode := "hash"
 	if usedGit {
@@ -416,7 +324,11 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 					}
 					rel, _ := filepath.Rel(sourceDir, path)
 					logger.Debug("Processing file", "project", projectName, "file", rel)
-					if err := processFile(ctx, s, localExt, embeddingService, path, projectName, sourceDir, projectMeta, &embeddingWg, sem, state, opts); err != nil {
+					if err := processFile(ctx, path, &ProcessFileConfig{
+						Store: s, Extractor: localExt, Embedder: embeddingService,
+						ProjectName: projectName, SourceRoot: sourceDir, Meta: projectMeta,
+						EmbeddingWg: &embeddingWg, Sem: sem, State: state, Options: opts,
+					}); err != nil {
 						logger.Error("Error processing file", "error", err)
 						passErr.Add(1)
 					}
@@ -480,6 +392,96 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 	TagRoles(ctx, s)
 
 	return nil
+}
+
+func computeDiff(s *meb.MEBStore, sourceDir, projectName string, incrState *IncrementalState, opts *IngestOptions) (changedFiles []string, deletedFiles []string, newHashes FileHashMap, usedGit bool) {
+	if IsGitRepo(sourceDir) {
+		fromRef := ""
+		if opts != nil && opts.FromCommit != "" {
+			fromRef = opts.FromCommit
+		} else if lastSHA := GetLastCommitSHA(s); lastSHA != "" {
+			fromRef = lastSHA
+		}
+
+		if fromRef != "" {
+			var diff *GitDiffResult
+			var diffErr error
+
+			if opts != nil && opts.ToCommit != "" {
+				diff, diffErr = GitDiffBetweenCommits(fromRef, opts.ToCommit, sourceDir)
+			} else {
+				diff, diffErr = GitDiffToWorkingTree(fromRef, sourceDir)
+			}
+
+			if diffErr != nil {
+				logger.Warn("Git diff failed, falling back to hash-based", "error", diffErr)
+			} else {
+				logger.Info("Git diff result",
+					"from", diff.FromCommit,
+					"to", diff.ToCommit,
+					"changed", len(diff.ChangedFiles),
+					"deleted", len(diff.DeletedFiles))
+
+				for _, rel := range diff.ChangedFiles {
+					changedFiles = append(changedFiles, filepath.Join(sourceDir, rel))
+				}
+				deletedFiles = diff.DeletedFiles
+				usedGit = true
+			}
+		}
+	}
+
+	if !usedGit {
+		newHashes = make(FileHashMap)
+		existingFilePaths := make(map[string]bool)
+		for path := range incrState.FileHashes {
+			existingFilePaths[path] = true
+		}
+
+		err := filepath.WalkDir(sourceDir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				if config.IsSkippedDir(d.Name()) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if isSupportedFile(path) {
+				relPath, _ := filepath.Rel(sourceDir, path)
+				if projectName != "" {
+					relPath = filepath.Join(projectName, relPath)
+				}
+
+				hash, mtime, hashErr := computeFileHash(path)
+				if hashErr != nil {
+					logger.Warn("Could not hash file", "path", path, "error", hashErr)
+					changedFiles = append(changedFiles, path)
+					return nil
+				}
+
+				newHashes[relPath] = FileHash{Path: relPath, Hash: hash, Mtime: mtime}
+				delete(existingFilePaths, relPath)
+
+				existingHash, exists := incrState.FileHashes[relPath]
+				if !exists || existingHash.Hash != hash {
+					changedFiles = append(changedFiles, path)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			logger.Warn("Hash computation failed, treating all files as changed", "error", err)
+			return nil, nil, nil, false
+		}
+
+		for path := range existingFilePaths {
+			deletedFiles = append(deletedFiles, path)
+		}
+	}
+
+	return
 }
 
 // removeDeletedFiles removes all facts associated with deleted files.

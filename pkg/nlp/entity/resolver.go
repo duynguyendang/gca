@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/nlp/types"
 )
@@ -222,7 +223,7 @@ func (r *Resolver) searchSymbols(query string) []*types.Entity {
 	for _, fact := range facts {
 		symID := fact[2]
 
-		symName := extractSymbolName(symID)
+		symName := common.ExtractSymbolName(symID)
 		symNameUpper := strings.ToUpper(symName)
 		symNameLower := strings.ToLower(symName)
 
@@ -250,9 +251,3 @@ func (r *Resolver) searchSymbols(query string) []*types.Entity {
 	return results
 }
 
-func extractSymbolName(symID string) string {
-	if idx := strings.LastIndex(symID, ":"); idx >= 0 && idx < len(symID)-1 {
-		return symID[idx+1:]
-	}
-	return symID
-}

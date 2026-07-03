@@ -8,13 +8,6 @@ import (
 	"github.com/duynguyendang/gca/pkg/logger"
 )
 
-// NarrativeResult is the structured output for the UI.
-type NarrativeResult struct {
-	Summary  string         `json:"summary"`
-	Evidence []EvidenceItem `json:"evidence"`
-	Steps    []PlanStep     `json:"steps"`
-}
-
 type EvidenceItem struct {
 	StepIndex int    `json:"step_index"`
 	Query     string `json:"query"`

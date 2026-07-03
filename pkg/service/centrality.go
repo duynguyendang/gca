@@ -255,6 +255,11 @@ func (p *InterfacePattern) Match(symbol string) bool {
 	return false
 }
 
+type edgeIn struct {
+	srcIdx int
+	weight float64
+}
+
 var interfacePatternRegex = regexp.MustCompile(`(interface|handler|service|repository|controller|provider|client|adapter|factory|strategy|observer|listener|plugin|middleware|builder|parser|validator)`)
 
 func IsInterfacePattern(symbol string) bool {
@@ -304,23 +309,25 @@ func ComputePageRankCentrality(ctx context.Context, store *meb.MEBStore, iterati
 		outLinks[i] = len(edges[node])
 	}
 
+	inEdges := make([][]edgeIn, N)
+	for j, node := range nodeList {
+		if outLinks[j] == 0 {
+			continue
+		}
+		weight := 1.0 / float64(outLinks[j])
+		for _, target := range edges[node] {
+			if targetIdx, ok := nodeIndex[target]; ok {
+				inEdges[targetIdx] = append(inEdges[targetIdx], edgeIn{srcIdx: j, weight: weight})
+			}
+		}
+	}
+
 	for iter := 0; iter < iterations; iter++ {
 		newRanks := make([]float64, N)
-
 		for i := range nodeList {
-			var sum float64
-			for j, node := range nodeList {
-				if outLinks[j] > 0 {
-					for _, target := range edges[node] {
-						if targetIdx, ok := nodeIndex[target]; ok && targetIdx == i {
-							sum += damping * ranks[j] / float64(outLinks[j])
-						}
-					}
-				}
-			}
+			sum := computeDampedRank(inEdges[i], ranks, damping)
 			newRanks[i] = (1.0-damping)/float64(N) + sum
 		}
-
 		ranks = newRanks
 	}
 
@@ -340,6 +347,14 @@ func ComputePageRankCentrality(ctx context.Context, store *meb.MEBStore, iterati
 	}
 
 	return centrality, nil
+}
+
+func computeDampedRank(inEdges []edgeIn, ranks []float64, damping float64) float64 {
+	var sum float64
+	for _, e := range inEdges {
+		sum += damping * ranks[e.srcIdx] * e.weight
+	}
+	return sum
 }
 
 func NormalizeCentrality(scores map[string]float64) map[string]float64 {

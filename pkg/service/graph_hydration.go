@@ -14,6 +14,45 @@ func (s *GraphService) HydrateShallow(ctx context.Context, store *meb.MEBStore, 
 	return s.HydrateShallowBatch(ctx, store, ids)
 }
 
+type hydrateHandler func(hs *HydratedSymbol, obj interface{})
+
+var hydrateHandlers = map[string]hydrateHandler{
+	config.PredicateHasKind: func(hs *HydratedSymbol, obj interface{}) {
+		if s, ok := obj.(string); ok {
+			hs.Kind = s
+		}
+	},
+	config.PredicateHasLanguage: func(hs *HydratedSymbol, obj interface{}) {
+		if s, ok := obj.(string); ok {
+			hs.Metadata["language"] = s
+		}
+	},
+	config.PredicateStartLine: func(hs *HydratedSymbol, obj interface{}) {
+		if n, ok := coerceToInt(obj); ok {
+			hs.Metadata["start_line"] = n
+		}
+	},
+	config.PredicateEndLine: func(hs *HydratedSymbol, obj interface{}) {
+		if n, ok := coerceToInt(obj); ok {
+			hs.Metadata["end_line"] = n
+		}
+	},
+}
+
+func coerceToInt(obj interface{}) (int, bool) {
+	switch v := obj.(type) {
+	case int:
+		return v, true
+	case float64:
+		return int(v), true
+	case string:
+		if parsed, err := strconv.Atoi(v); err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
+}
+
 func (s *GraphService) HydrateShallowBatch(ctx context.Context, store *meb.MEBStore, ids []string) ([]HydratedSymbol, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -34,6 +73,10 @@ func (s *GraphService) HydrateShallowBatch(ctx context.Context, store *meb.MEBSt
 	}
 
 	for _, pred := range metadataPredicates {
+		handler, hasHandler := hydrateHandlers[pred]
+		if !hasHandler {
+			continue
+		}
 		for _, id := range ids {
 			for fact, err := range store.ScanContext(ctx, id, pred, "") {
 				if err != nil {
@@ -43,38 +86,7 @@ func (s *GraphService) HydrateShallowBatch(ctx context.Context, store *meb.MEBSt
 				if !ok {
 					continue
 				}
-				hs := &hydrated[idx]
-
-				switch pred {
-				case config.PredicateHasKind:
-					if str, ok := fact.Object.(string); ok {
-						hs.Kind = str
-					}
-				case config.PredicateHasLanguage:
-					if str, ok := fact.Object.(string); ok {
-						hs.Metadata["language"] = str
-					}
-				case config.PredicateStartLine:
-					if num, ok := fact.Object.(int); ok {
-						hs.Metadata["start_line"] = num
-					} else if floatNum, ok := fact.Object.(float64); ok {
-						hs.Metadata["start_line"] = int(floatNum)
-					} else if strNum, ok := fact.Object.(string); ok {
-						if parsed, err := strconv.Atoi(strNum); err == nil {
-							hs.Metadata["start_line"] = parsed
-						}
-					}
-				case config.PredicateEndLine:
-					if num, ok := fact.Object.(int); ok {
-						hs.Metadata["end_line"] = num
-					} else if floatNum, ok := fact.Object.(float64); ok {
-						hs.Metadata["end_line"] = int(floatNum)
-					} else if strNum, ok := fact.Object.(string); ok {
-						if parsed, err := strconv.Atoi(strNum); err == nil {
-							hs.Metadata["end_line"] = parsed
-						}
-					}
-				}
+				handler(&hydrated[idx], fact.Object)
 				break
 			}
 		}
@@ -180,17 +192,7 @@ func (s *GraphService) enrichNodes(ctx context.Context, store *meb.MEBStore, gra
 			if pkg, ok := h.Metadata["package"].(string); ok {
 				n.Metadata["package"] = pkg
 			}
-			if tags, ok := h.Metadata["tags"].([]string); ok {
-				n.Metadata["tags"] = strings.Join(tags, ",")
-			} else if tags, ok := h.Metadata["tags"].([]interface{}); ok {
-				var strTags []string
-				for _, t := range tags {
-					if s, ok := t.(string); ok {
-						strTags = append(strTags, s)
-					}
-				}
-				n.Metadata["tags"] = strings.Join(strTags, ",")
-			} else if tags, ok := h.Metadata["tags"].(string); ok {
+			if tags := joinTags(h.Metadata); tags != "" {
 				n.Metadata["tags"] = tags
 			}
 		}
@@ -237,21 +239,28 @@ func (s *GraphService) mapChildren(hydrated []HydratedSymbol) []export.D3Node {
 		if pkg, ok := h.Metadata["package"].(string); ok {
 			nodes[i].Metadata["package"] = pkg
 		}
-		if tags, ok := h.Metadata["tags"].([]string); ok {
-			nodes[i].Metadata["tags"] = strings.Join(tags, ",")
-		} else if tags, ok := h.Metadata["tags"].([]interface{}); ok {
-			var strTags []string
-			for _, t := range tags {
-				if s, ok := t.(string); ok {
-					strTags = append(strTags, s)
-				}
-			}
-			nodes[i].Metadata["tags"] = strings.Join(strTags, ",")
-		} else if tags, ok := h.Metadata["tags"].(string); ok {
+		if tags := joinTags(h.Metadata); tags != "" {
 			nodes[i].Metadata["tags"] = tags
 		}
 	}
 	return nodes
+}
+
+func joinTags(metadata map[string]interface{}) string {
+	if tags, ok := metadata["tags"].([]string); ok {
+		return strings.Join(tags, ",")
+	} else if tags, ok := metadata["tags"].([]interface{}); ok {
+		var strTags []string
+		for _, t := range tags {
+			if s, ok := t.(string); ok {
+				strTags = append(strTags, s)
+			}
+		}
+		return strings.Join(strTags, ",")
+	} else if tags, ok := metadata["tags"].(string); ok {
+		return tags
+	}
+	return ""
 }
 
 func nodeIndex(nodes []export.D3Node, id string) int {

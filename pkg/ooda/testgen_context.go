@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/prompts"
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/meb"
@@ -196,7 +197,7 @@ func filePrefix(symbolID string) string {
 }
 
 func getSymbolMeta(ctx context.Context, store *meb.MEBStore, symbolID string) SymbolMeta {
-	meta := SymbolMeta{Name: extractSymbolName(symbolID)}
+	meta := SymbolMeta{Name: common.ExtractSymbolName(symbolID)}
 
 	var kind, pkg, role string
 	var tags []string
@@ -261,12 +262,7 @@ func extractSignature(content, funcName string) string {
 	return ""
 }
 
-func extractSymbolName(symbolID string) string {
-	if idx := strings.LastIndex(symbolID, ":"); idx >= 0 && idx < len(symbolID)-1 {
-		return symbolID[idx+1:]
-	}
-	return symbolID
-}
+
 
 func getRouteConfig(ctx context.Context, store *meb.MEBStore, symbolID string) *RouteConfig {
 	var route, method, path string

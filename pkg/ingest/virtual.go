@@ -132,19 +132,14 @@ func extractHandler(raw string) string {
 	return raw
 }
 
-func EnhanceVirtualTriples(s Store) error {
-	tagCfg := getTagConfig()
-
-	feSet := make(map[string]bool)
-	beSet := make(map[string]bool)
-
-	for fact, err := range s.Scan("", config.PredicateHasTag, "frontend") {
+func collectTaggedDefines(s Store, tag string) map[string]bool {
+	set := make(map[string]bool)
+	for fact, err := range s.Scan("", config.PredicateHasTag, tag) {
 		if err != nil {
 			continue
 		}
-		feSet[fact.Subject] = true
+		set[fact.Subject] = true
 	}
-
 	for fact, err := range s.Scan("", config.PredicateDefines, "") {
 		if err != nil {
 			continue
@@ -153,45 +148,26 @@ func EnhanceVirtualTriples(s Store) error {
 		if !ok {
 			continue
 		}
-		if feSet[fact.Subject] {
-			feSet[obj] = true
+		if set[fact.Subject] {
+			set[obj] = true
 		}
 	}
+	return set
+}
 
-	for fact, err := range s.Scan("", config.PredicateHasTag, "backend") {
-		if err != nil {
-			continue
-		}
-		beSet[fact.Subject] = true
+func isIDInSet(id string, set map[string]bool) bool {
+	if set[id] {
+		return true
 	}
-
-	for fact, err := range s.Scan("", config.PredicateDefines, "") {
-		if err != nil {
-			continue
-		}
-		obj, ok := fact.Object.(string)
-		if !ok {
-			continue
-		}
-		if beSet[fact.Subject] {
-			beSet[obj] = true
-		}
+	parts := strings.Split(id, ":")
+	if len(parts) > 1 {
+		return set[parts[0]]
 	}
+	return false
+}
 
-	routeMap := make(map[string]string)
-	symbolLookup := make(map[string]string)
-
-	isTagged := func(id string, set map[string]bool) bool {
-		if set[id] {
-			return true
-		}
-		parts := strings.Split(id, ":")
-		if len(parts) > 1 {
-			return set[parts[0]]
-		}
-		return false
-	}
-
+func buildSymbolIndex(s Store, beSet map[string]bool) map[string]string {
+	lookup := make(map[string]string)
 	for id := range beSet {
 		if strings.Contains(id, ":") {
 			continue
@@ -205,15 +181,18 @@ func EnhanceVirtualTriples(s Store) error {
 				continue
 			}
 			name := common.ExtractSymbolName(sID)
-			symbolLookup[name] = sID
+			lookup[name] = sID
 		}
 	}
+	return lookup
+}
 
-	// Route detection via regex — supports Gin (.GET/.POST) and Go 1.22 mux (HandleFunc("METHOD /path", handler))
+func detectRoutes(s Store, beSet map[string]bool, symbolLookup map[string]string) map[string]string {
 	ginRouteRegex := regexp.MustCompile(`\.(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\(\s*"([^"]+)"\s*,\s*([^,\)]+)`)
 	go122MuxRegex := regexp.MustCompile(`\.(HandleFunc|Handle)\s*\(\s*"(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\s+([^"]+)"\s*,\s*(.+)`)
 	paramRegex := regexp.MustCompile(`:([a-zA-Z_][a-zA-Z0-9_]*)`)
 
+	routeMap := make(map[string]string)
 	for id := range beSet {
 		if strings.Contains(id, ":") {
 			continue
@@ -224,7 +203,6 @@ func EnhanceVirtualTriples(s Store) error {
 		}
 		content := string(doc)
 
-		// Try Gin-style routes: r.GET("/path", handler)
 		if strings.Contains(content, "gin.Default") || strings.Contains(content, "gin.New") ||
 			strings.Contains(content, ".Group") || strings.Contains(content, "Router") {
 			for _, match := range ginRouteRegex.FindAllStringSubmatch(content, -1) {
@@ -247,7 +225,6 @@ func EnhanceVirtualTriples(s Store) error {
 			}
 		}
 
-		// Try Go 1.22+ ServeMux: mux.HandleFunc("METHOD /path", handler)
 		if strings.Contains(content, "http.NewServeMux") || strings.Contains(content, "HandleFunc(") || strings.Contains(content, "mux.Handle(") {
 			for _, match := range go122MuxRegex.FindAllStringSubmatch(content, -1) {
 				method := strings.ToUpper(match[2])
@@ -264,7 +241,6 @@ func EnhanceVirtualTriples(s Store) error {
 					}
 					upsertFact(s, targetID, config.PredicateHasRole, config.RoleAPIHandler)
 				} else {
-					// Handler not in symbol table — create synthetic ID for anonymous/wrapped functions
 					syntheticID := id + ":handler:" + method + "_" + route
 					routeMap[route] = syntheticID
 					upsertFact(s, route, config.PredicateHandledBy, syntheticID)
@@ -278,7 +254,10 @@ func EnhanceVirtualTriples(s Store) error {
 			}
 		}
 	}
+	return routeMap
+}
 
+func linkAPICalls(s Store, routeMap map[string]string) {
 	for fact, err := range s.Scan("", config.PredicateReferences, "") {
 		if err != nil {
 			continue
@@ -298,43 +277,50 @@ func EnhanceVirtualTriples(s Store) error {
 			safeAddFact(s, string(sID), config.PredicateCalls, targetID)
 		}
 	}
+}
 
-	type FileInfo struct {
-		ID      string
-		Content string
-		Symbols []string
-	}
-	var files []FileInfo
+type fileInfo struct {
+	ID      string
+	Content string
+	Symbols []string
+}
+
+func buildFileList(s Store, beSet map[string]bool) []fileInfo {
+	var files []fileInfo
 	for id := range beSet {
 		if strings.Contains(id, ":") {
 			continue
 		}
 		doc, err := s.GetContentByKey(string(id))
-		if err == nil {
-			content := string(doc)
-			var symbols []string
-			for fact, err := range s.Scan(id, config.PredicateDefines, "") {
-				if err != nil {
-					continue
-				}
-				obj, ok := fact.Object.(string)
-				if ok {
-					symbols = append(symbols, obj)
-				}
+		if err != nil {
+			continue
+		}
+		content := string(doc)
+		var symbols []string
+		for fact, err := range s.Scan(id, config.PredicateDefines, "") {
+			if err != nil {
+				continue
 			}
-			if len(symbols) > 0 {
-				files = append(files, FileInfo{ID: id, Content: content, Symbols: symbols})
+			obj, ok := fact.Object.(string)
+			if ok {
+				symbols = append(symbols, obj)
 			}
 		}
+		if len(symbols) > 0 {
+			files = append(files, fileInfo{ID: id, Content: content, Symbols: symbols})
+		}
 	}
+	return files
+}
 
+func buildMethodIndex(s Store, beSet map[string]bool) map[string][]string {
 	methodIndex := make(map[string][]string)
 	for fact, err := range s.Scan("", config.PredicateType, "method") {
 		if err != nil {
 			continue
 		}
 		id := fact.Subject
-		if beSet[id] || isTagged(id, beSet) {
+		if beSet[id] || isIDInSet(id, beSet) {
 			parts := strings.Split(id, ":")
 			if len(parts) > 1 {
 				name := parts[1]
@@ -345,10 +331,12 @@ func EnhanceVirtualTriples(s Store) error {
 			}
 		}
 	}
+	return methodIndex
+}
 
+func linkMethodCalls(s Store, files []fileInfo, methodIndex map[string][]string) {
 	logger.Info("Scanning internal BE calls")
 	methodCallRegex := regexp.MustCompile(`\.([A-Za-z0-9_]+)\(`)
-
 	for _, f := range files {
 		calledMethods := make(map[string]bool)
 		matches := methodCallRegex.FindAllStringSubmatch(f.Content, -1)
@@ -357,7 +345,6 @@ func EnhanceVirtualTriples(s Store) error {
 				calledMethods[m[1]] = true
 			}
 		}
-
 		for methodName, svcIDs := range methodIndex {
 			if calledMethods[methodName] {
 				for _, svcID := range svcIDs {
@@ -368,7 +355,9 @@ func EnhanceVirtualTriples(s Store) error {
 			}
 		}
 	}
+}
 
+func linkDataLineage(s Store, files []fileInfo) {
 	contractMap := make(map[string][]string)
 	for fact, err := range s.Scan("", config.PredicateHasRole, config.RoleDataContract) {
 		if err != nil {
@@ -390,7 +379,9 @@ func EnhanceVirtualTriples(s Store) error {
 			}
 		}
 	}
+}
 
+func linkFrontendExports(s Store, feSet map[string]bool) {
 	for id := range feSet {
 		if strings.Contains(id, ":") {
 			continue
@@ -409,8 +400,11 @@ func EnhanceVirtualTriples(s Store) error {
 			}
 		}
 	}
+}
 
+func injectFileMetaFacts(s Store, tagCfg *config.ProjectTagConfig) {
 	logger.Info("Injecting test file tags and in_file facts")
+	testSymbolRegex := regexp.MustCompile(`^(Test|Benchmark|Example)[A-Z].*`)
 	for fact, err := range s.Scan("", config.PredicateDefines, "") {
 		if err != nil {
 			continue
@@ -420,7 +414,6 @@ func EnhanceVirtualTriples(s Store) error {
 			continue
 		}
 
-		// Inject in_file fact for every symbol defined in this file
 		symbolID, ok := fact.Object.(string)
 		if ok && shouldInjectFact(s, symbolID, "in_file", fileID) {
 			s.AddFact(meb.Fact{Subject: symbolID, Predicate: "in_file", Object: fileID})
@@ -438,8 +431,6 @@ func EnhanceVirtualTriples(s Store) error {
 		}
 	}
 
-	// Tag test symbols (functions ending with Test, Tests, etc.)
-	testSymbolRegex := regexp.MustCompile(`^(Test|Benchmark|Example)[A-Z].*`)
 	for fact, err := range s.Scan("", config.PredicateDefines, "") {
 		if err != nil {
 			continue
@@ -454,7 +445,9 @@ func EnhanceVirtualTriples(s Store) error {
 			s.AddFact(meb.Fact{Subject: sID, Predicate: "is_test_symbol", Object: "true"})
 		}
 	}
+}
 
+func injectArchitecturalTags(s Store, feSet map[string]bool, beSet map[string]bool, tagCfg *config.ProjectTagConfig) {
 	logger.Info("Injecting architectural tags for security smell detection")
 	for id := range beSet {
 		configDrivenTagMatcher(s, id, tagCfg)
@@ -462,6 +455,24 @@ func EnhanceVirtualTriples(s Store) error {
 	for id := range feSet {
 		configDrivenTagMatcher(s, id, tagCfg)
 	}
+}
 
+func EnhanceVirtualTriples(s Store) error {
+	tagCfg := getTagConfig()
+	feSet := collectTaggedDefines(s, "frontend")
+	beSet := collectTaggedDefines(s, "backend")
+
+	symbolIdx := buildSymbolIndex(s, beSet)
+	routes := detectRoutes(s, beSet, symbolIdx)
+	linkAPICalls(s, routes)
+
+	files := buildFileList(s, beSet)
+	methodIdx := buildMethodIndex(s, beSet)
+	linkMethodCalls(s, files, methodIdx)
+	linkDataLineage(s, files)
+
+	linkFrontendExports(s, feSet)
+	injectFileMetaFacts(s, tagCfg)
+	injectArchitecturalTags(s, feSet, beSet, tagCfg)
 	return nil
 }

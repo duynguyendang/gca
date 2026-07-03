@@ -440,68 +440,62 @@ func applyConstraints(results []map[string]any, constraintAtoms []datalog.Atom) 
 	return filtered
 }
 
+type constraintChecker func(val any, constraint string) bool
+
+var constraintCheckers = map[string]constraintChecker{
+	"neq": func(val any, c string) bool { return fmt.Sprintf("%v", val) != c },
+	"!=":  func(val any, c string) bool { return fmt.Sprintf("%v", val) != c },
+	"eq":  func(val any, c string) bool { return fmt.Sprintf("%v", val) == c },
+	"=":   func(val any, c string) bool { return fmt.Sprintf("%v", val) == c },
+	"gt":  func(val any, c string) bool { return compareNumeric(val, c, ">") },
+	"gte": func(val any, c string) bool { return compareNumeric(val, c, ">=") },
+	"lt":  func(val any, c string) bool { return compareNumeric(val, c, "<") },
+	"lte": func(val any, c string) bool { return compareNumeric(val, c, "<=") },
+}
+
+func compareNumeric(val any, constraintStr string, op string) bool {
+	valNum, valOk := toFloat64(val)
+	constraintNum, constraintOk := toFloat64(constraintStr)
+	if valOk && constraintOk {
+		switch op {
+		case ">":
+			return valNum > constraintNum
+		case ">=":
+			return valNum >= constraintNum
+		case "<":
+			return valNum < constraintNum
+		case "<=":
+			return valNum <= constraintNum
+		}
+	}
+	sVal := fmt.Sprintf("%v", val)
+	switch op {
+	case ">":
+		return sVal > constraintStr
+	case ">=":
+		return sVal >= constraintStr
+	case "<":
+		return sVal < constraintStr
+	case "<=":
+		return sVal <= constraintStr
+	}
+	return false
+}
+
 func matchesConstraints(result map[string]any, constraints []datalog.Atom) bool {
 	for _, atom := range constraints {
-		switch atom.Predicate {
-		case "neq", "!=":
-			if len(atom.Args) >= 2 {
-				varName := atom.Args[0]
-				constraintVal := atom.Args[1]
-				if val, ok := result[varName]; ok {
-					if fmt.Sprintf("%v", val) == constraintVal {
-						return false
-					}
-				}
-			}
-		case "eq", "=":
-			if len(atom.Args) >= 2 {
-				varName := atom.Args[0]
-				constraintVal := atom.Args[1]
-				if val, ok := result[varName]; ok {
-					if fmt.Sprintf("%v", val) != constraintVal {
-						return false
-					}
-				}
-			}
-		case "gt":
-			if len(atom.Args) >= 2 {
-				varName := atom.Args[0]
-				constraintVal := atom.Args[1]
-				if val, ok := result[varName]; ok {
-					if !compareGT(val, constraintVal) {
-						return false
-					}
-				}
-			}
-		case "gte":
-			if len(atom.Args) >= 2 {
-				varName := atom.Args[0]
-				constraintVal := atom.Args[1]
-				if val, ok := result[varName]; ok {
-					if !compareGTE(val, constraintVal) {
-						return false
-					}
-				}
-			}
-		case "lt":
-			if len(atom.Args) >= 2 {
-				varName := atom.Args[0]
-				constraintVal := atom.Args[1]
-				if val, ok := result[varName]; ok {
-					if !compareLT(val, constraintVal) {
-						return false
-					}
-				}
-			}
-		case "lte":
-			if len(atom.Args) >= 2 {
-				varName := atom.Args[0]
-				constraintVal := atom.Args[1]
-				if val, ok := result[varName]; ok {
-					if !compareLTE(val, constraintVal) {
-						return false
-					}
-				}
+		if len(atom.Args) < 2 {
+			continue
+		}
+		checker, ok := constraintCheckers[atom.Predicate]
+		if !ok {
+			continue
+		}
+		varName := atom.Args[0]
+		constraintVal := atom.Args[1]
+		if val, ok := result[varName]; ok {
+			if !checker(val, constraintVal) {
+				return false
 			}
 		}
 	}
@@ -523,47 +517,6 @@ func resolveArg(arg string) string {
 		return ""
 	}
 	return arg
-}
-
-// compareGT compares two values, treating them as numbers when possible.
-func compareGT(val interface{}, constraintStr string) bool {
-	valNum, valOk := toFloat64(val)
-	constraintNum, constraintOk := toFloat64(constraintStr)
-	if valOk && constraintOk {
-		return valNum > constraintNum
-	}
-	// Fall back to string comparison
-	return fmt.Sprintf("%v", val) > constraintStr
-}
-
-// compareGTE compares two values, treating them as numbers when possible.
-func compareGTE(val interface{}, constraintStr string) bool {
-	valNum, valOk := toFloat64(val)
-	constraintNum, constraintOk := toFloat64(constraintStr)
-	if valOk && constraintOk {
-		return valNum >= constraintNum
-	}
-	return fmt.Sprintf("%v", val) >= constraintStr
-}
-
-// compareLT compares two values, treating them as numbers when possible.
-func compareLT(val interface{}, constraintStr string) bool {
-	valNum, valOk := toFloat64(val)
-	constraintNum, constraintOk := toFloat64(constraintStr)
-	if valOk && constraintOk {
-		return valNum < constraintNum
-	}
-	return fmt.Sprintf("%v", val) < constraintStr
-}
-
-// compareLTE compares two values, treating them as numbers when possible.
-func compareLTE(val interface{}, constraintStr string) bool {
-	valNum, valOk := toFloat64(val)
-	constraintNum, constraintOk := toFloat64(constraintStr)
-	if valOk && constraintOk {
-		return valNum <= constraintNum
-	}
-	return fmt.Sprintf("%v", val) <= constraintStr
 }
 
 // toFloat64 converts a value to float64 if possible.

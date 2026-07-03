@@ -651,23 +651,4 @@ func TestBuildSynthesisContext(t *testing.T) {
 	}
 }
 
-func TestBuildNeuroSymbolicContext(t *testing.T) {
-	result := &NeuroSymbolicResult{
-		TemplateID: "query_who_calls",
-		Query:      `triples(Symbol, "calls", _)`,
-		Entity:     "authHandler",
-		Reasoning:  "Selected query_who_calls to trace callers",
-		Results: []map[string]any{
-			{"Symbol": "authHandler", "Callee": "dbService"},
-		},
-	}
 
-	ctx := BuildNeuroSymbolicContext("who calls authHandler", result, "=== ATTENTION ===\nentry points: main\n===")
-
-	checks := []string{"query_who_calls", "authHandler", "Selected query_who_calls", "authHandler", "dbService", "=== ATTENTION ==="}
-	for _, check := range checks {
-		if !strings.Contains(ctx, check) {
-			t.Errorf("context should contain %q", check)
-		}
-	}
-}

@@ -302,6 +302,40 @@ func parameterizeWithFallback(templateBody, query string) string {
 	return result
 }
 
+type attentionSection struct {
+	queryName      string
+	header         string
+	limit          int
+	overflowSuffix string
+	formatFn       func(r map[string]any) string
+}
+
+func formatAttentionSection(ctx context.Context, store *meb.MEBStore, section attentionSection) string {
+	results, err := gcamdb.Query(ctx, store, attentionSinkQuery(section.queryName))
+	if err != nil || len(results) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\n" + section.header + ":\n")
+	count := 0
+	for _, r := range results {
+		line := section.formatFn(r)
+		if line == "" {
+			continue
+		}
+		if count >= section.limit {
+			break
+		}
+		sb.WriteString(fmt.Sprintf("  - %s\n", line))
+		count++
+	}
+	if len(results) > section.limit && section.overflowSuffix != "" {
+		sb.WriteString(fmt.Sprintf("  ... and %d more %s\n", len(results)-section.limit, section.overflowSuffix))
+	}
+	return sb.String()
+}
+
 func (c *NeuroSymbolicConfig) GetAttentionSink(ctx context.Context) (string, error) {
 	if c.AnalyticalStore == nil {
 		return "", nil
@@ -310,97 +344,61 @@ func (c *NeuroSymbolicConfig) GetAttentionSink(ctx context.Context) (string, err
 	var sb strings.Builder
 	sb.WriteString("=== ATTENTION SINK (Pre-computed Architectural Facts) ===\n")
 
-	if entries, err := gcamdb.Query(ctx, c.AnalyticalStore, attentionSinkQuery("entry_points")); err == nil && len(entries) > 0 {
-		sb.WriteString("\nEntry Points:\n")
-		count := 0
-		for _, r := range entries {
-			if subj, ok := r["Subject"].(string); ok && subj != "" && count < 10 {
-				sb.WriteString(fmt.Sprintf("  - %s\n", subj))
-				count++
-			}
-		}
-		if len(entries) > 10 {
-			sb.WriteString(fmt.Sprintf("  ... and %d more\n", len(entries)-10))
-		}
-	}
-
-	if hubs, err := gcamdb.Query(ctx, c.AnalyticalStore, attentionSinkQuery("hub_scores")); err == nil && len(hubs) > 0 {
-		sb.WriteString("\nHigh-Centrality Files (Hub):\n")
-		count := 0
-		for _, r := range hubs {
+	sb.WriteString(formatAttentionSection(ctx, c.AnalyticalStore, attentionSection{
+		queryName:      "entry_points",
+		header:         "Entry Points",
+		limit:          10,
+		overflowSuffix: "more",
+		formatFn: func(r map[string]any) string {
 			if subj, ok := r["Subject"].(string); ok && subj != "" {
-				scoreStr := ""
-				if s, ok := r["Score"].(string); ok {
-					scoreStr = s
-				}
-				if scoreStr != "" && count < 5 {
-					sb.WriteString(fmt.Sprintf("  - %s (hub_score: %s)\n", subj, scoreStr))
-					count++
-				}
+				return subj
 			}
-		}
-	}
+			return ""
+		},
+	}))
 
-	if smells, err := gcamdb.Query(ctx, c.AnalyticalStore, attentionSinkQuery("smells")); err == nil && len(smells) > 0 {
-		sb.WriteString("\nArchitectural Smells:\n")
-		count := 0
-		for _, r := range smells {
-			if subj, ok := r["Subject"].(string); ok && subj != "" {
-				obj := ""
-				if o, ok := r["Object"].(string); ok {
-					obj = o
-				}
-				if subj != "" && obj != "" && count < 10 {
-					smellType := obj
-					if idx := strings.Index(obj, ":"); idx > 0 {
-						smellType = obj[:idx]
-					}
-					sb.WriteString(fmt.Sprintf("  - %s (%s)\n", subj, smellType))
-					count++
-				}
+	sb.WriteString(formatAttentionSection(ctx, c.AnalyticalStore, attentionSection{
+		queryName:      "hub_scores",
+		header:         "High-Centrality Files (Hub)",
+		limit:          5,
+		overflowSuffix: "more",
+		formatFn: func(r map[string]any) string {
+			subj, ok := r["Subject"].(string)
+			if !ok || subj == "" {
+				return ""
 			}
-		}
-		if len(smells) > 10 {
-			sb.WriteString(fmt.Sprintf("  ... and %d more smells\n", len(smells)-10))
-		}
-	}
+			if s, ok := r["Score"].(string); ok && s != "" {
+				return fmt.Sprintf("%s (hub_score: %s)", subj, s)
+			}
+			return ""
+		},
+	}))
+
+	sb.WriteString(formatAttentionSection(ctx, c.AnalyticalStore, attentionSection{
+		queryName:      "smells",
+		header:         "Architectural Smells",
+		limit:          10,
+		overflowSuffix: "more smells",
+		formatFn: func(r map[string]any) string {
+			subj, ok := r["Subject"].(string)
+			if !ok || subj == "" {
+				return ""
+			}
+			obj, ok := r["Object"].(string)
+			if !ok || obj == "" {
+				return ""
+			}
+			smellType := obj
+			if idx := strings.Index(obj, ":"); idx > 0 {
+				smellType = obj[:idx]
+			}
+			return fmt.Sprintf("%s (%s)", subj, smellType)
+		},
+	}))
 
 	sb.WriteString("=================================================\n")
 
 	return sb.String(), nil
-}
-
-func BuildNeuroSymbolicContext(query string, nsResult *NeuroSymbolicResult, attentionSink string) string {
-	var sb strings.Builder
-
-	sb.WriteString(attentionSink)
-
-	sb.WriteString("\n=== QUERY RESULT ===\n")
-	sb.WriteString(fmt.Sprintf("User Query: %s\n", query))
-	if nsResult.Entity != "" {
-		sb.WriteString(fmt.Sprintf("Target Entity: %s\n", nsResult.Entity))
-	}
-	if nsResult.TemplateID != "" {
-		sb.WriteString(fmt.Sprintf("Template Used: %s\n", nsResult.TemplateID))
-		sb.WriteString(fmt.Sprintf("Datalog Query: %s\n", nsResult.Query))
-	}
-	if nsResult.Reasoning != "" {
-		sb.WriteString(fmt.Sprintf("Reasoning: %s\n", nsResult.Reasoning))
-	}
-	if len(nsResult.Results) > 0 {
-		sb.WriteString(fmt.Sprintf("Results Found: %d\n", len(nsResult.Results)))
-		for i, r := range nsResult.Results {
-			if i >= 5 {
-				sb.WriteString(fmt.Sprintf("  ... and %d more\n", len(nsResult.Results)-5))
-				break
-			}
-			for k, v := range r {
-				sb.WriteString(fmt.Sprintf("  %s = %v\n", k, v))
-			}
-		}
-	}
-
-	return sb.String()
 }
 
 func BuildSynthesisContext(query string, nsResult *NeuroSymbolicResult, attentionSink string) string {

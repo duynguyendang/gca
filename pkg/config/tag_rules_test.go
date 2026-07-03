@@ -32,68 +32,6 @@ func TestDefaultTagRules(t *testing.T) {
 	}
 }
 
-func TestLoadTagRulesFromYAML(t *testing.T) {
-	tests := []struct {
-		name    string
-		yaml    []map[string]any
-		wantErr bool
-		wantLen int
-	}{
-		{
-			name: "valid rules",
-			yaml: []map[string]any{
-				{"tag": "custom_tag", "pattern": ".*_test\\.go$", "weight": 5},
-			},
-			wantErr: false,
-			wantLen: 1,
-		},
-		{
-			name: "invalid regex",
-			yaml: []map[string]any{
-				{"tag": "bad", "pattern": "[", "weight": 1},
-			},
-			wantErr: true,
-			wantLen: 0,
-		},
-		{
-			name: "empty tag skipped",
-			yaml: []map[string]any{
-				{"tag": "", "pattern": ".*\\.go$", "weight": 1},
-			},
-			wantErr: false,
-			wantLen: 0,
-		},
-		{
-			name: "empty pattern skipped",
-			yaml: []map[string]any{
-				{"tag": "valid", "pattern": "", "weight": 1},
-			},
-			wantErr: false,
-			wantLen: 0,
-		},
-		{
-			name: "missing pattern uses weight 0",
-			yaml: []map[string]any{
-				{"tag": "no_weight", "pattern": ".*\\.go$"},
-			},
-			wantErr: false,
-			wantLen: 1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rules, err := LoadTagRulesFromYAML(tt.yaml)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("LoadTagRulesFromYAML() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if len(rules) != tt.wantLen {
-				t.Errorf("LoadTagRulesFromYAML() returned %d rules, want %d", len(rules), tt.wantLen)
-			}
-		})
-	}
-}
-
 func TestProjectTagConfig_MatchingTags(t *testing.T) {
 	cfg := &ProjectTagConfig{
 		Rules: []TagRule{

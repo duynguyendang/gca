@@ -13,14 +13,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/duynguyendang/gca/pkg/common"
 	apperrors "github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/ephemeral"
 	"github.com/duynguyendang/gca/pkg/export"
 	"github.com/duynguyendang/gca/pkg/ingest"
 	"github.com/duynguyendang/gca/pkg/logger"
-	mebpkg "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/ooda"
 	"github.com/duynguyendang/gca/pkg/service"
 	"github.com/duynguyendang/gca/pkg/service/ai"
@@ -71,9 +69,8 @@ func (s *Server) handleQuery(c *gin.Context) {
 		return
 	}
 
-	projectID := c.Query("project")
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
 	lazy := c.Query("lazy") == "true"
@@ -119,18 +116,15 @@ func (s *Server) handleQuery(c *gin.Context) {
 //
 // Response: JSON graph with nodes and links showing file relationships.
 func (s *Server) handleGraph(c *gin.Context) {
-	projectID := c.Query("project")
-	fileID := c.Query("file")
+	projectID, ok := extractProjectID(c)
+	if !ok {
+		return
+	}
+	fileID, ok := extractSymbolID(c, "file")
+	if !ok {
+		return
+	}
 	lazy := c.Query("lazy") == "true"
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
-		return
-	}
-	if err := ValidateSymbolID(fileID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "file ID is required or invalid", err))
-		return
-	}
 
 	graph, err := s.graphService.GetFileGraph(c.Request.Context(), projectID, fileID, lazy)
 	if err != nil {
@@ -150,15 +144,12 @@ func (s *Server) handleGraph(c *gin.Context) {
 //
 // Response: Plain text source code for the specified range.
 func (s *Server) handleSource(c *gin.Context) {
-	id := c.Query("id")
-	projectID := c.Query("project")
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
-	if err := ValidateSymbolID(id); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol/file ID is required or invalid", err))
+	id, ok := extractSymbolID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -203,9 +194,8 @@ func (s *Server) handleSource(c *gin.Context) {
 
 // handleSummary returns the project summary.
 func (s *Server) handleSummary(c *gin.Context) {
-	projectID := c.Query("project")
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
 	summary, err := s.graphService.GenerateSummary(projectID)
@@ -220,7 +210,6 @@ func (s *Server) handleSummary(c *gin.Context) {
 func (s *Server) handlePredicates(c *gin.Context) {
 	projectID := c.Query("project")
 
-	// If no project specified, try to pick the first one available
 	if projectID == "" {
 		projects, err := s.graphService.ListProjects()
 		if err == nil && len(projects) > 0 {
@@ -234,7 +223,7 @@ func (s *Server) handlePredicates(c *gin.Context) {
 	}
 
 	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
 		return
 	}
 
@@ -308,13 +297,11 @@ func (s *Server) handleSymbols(c *gin.Context) {
 // handleFiles returns a list of all ingested files for the project.
 // Optional: ?prefix=path/to/package to filter files by prefix
 func (s *Server) handleFiles(c *gin.Context) {
-	projectID := c.Query("project")
-	prefix := c.Query("prefix")
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
+	prefix := c.Query("prefix")
 
 	// Validate and sanitize prefix parameter
 	if prefix != "" {
@@ -366,9 +353,8 @@ func (s *Server) handleFiles(c *gin.Context) {
 
 // handleGraphMap returns a high-level view of file dependencies.
 func (s *Server) handleGraphMap(c *gin.Context) {
-	projectID := c.Query("project")
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
 
@@ -394,9 +380,8 @@ func (s *Server) handleGraphMap(c *gin.Context) {
 
 // handleGraphManifest returns a compressed project manifest for the AI.
 func (s *Server) handleGraphManifest(c *gin.Context) {
-	projectID := c.Query("project")
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
 
@@ -411,15 +396,12 @@ func (s *Server) handleGraphManifest(c *gin.Context) {
 
 // handleFileDetails returns detailed internal symbols for a file.
 func (s *Server) handleFileDetails(c *gin.Context) {
-	projectID := c.Query("project")
-	fileID := c.Query("file")
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
-	if err := ValidateSymbolID(fileID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+	fileID, ok := extractSymbolID(c, "file")
+	if !ok {
 		return
 	}
 
@@ -434,14 +416,12 @@ func (s *Server) handleFileDetails(c *gin.Context) {
 
 // handleHydrate returns the full hydrated symbol for a given ID.
 func (s *Server) handleHydrate(c *gin.Context) {
-	projectID := c.Query("project")
-	id := c.Query("id")
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
-	if err := ValidateSymbolID(id); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+	id, ok := extractSymbolID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -456,9 +436,8 @@ func (s *Server) handleHydrate(c *gin.Context) {
 
 // handleGraphBackbone returns a filtered graph showing only cross-file dependencies.
 func (s *Server) handleGraphBackbone(c *gin.Context) {
-	projectID := c.Query("project")
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
 
@@ -474,18 +453,15 @@ func (s *Server) handleGraphBackbone(c *gin.Context) {
 
 // handleFileCalls returns a recursive file-to-file call graph.
 func (s *Server) handleFileCalls(c *gin.Context) {
-	projectID := c.Query("project")
-	id := c.Query("id")
+	projectID, ok := extractProjectID(c)
+	if !ok {
+		return
+	}
+	id, ok := extractSymbolID(c, "id")
+	if !ok {
+		return
+	}
 	depthStr := c.Query("depth")
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
-		return
-	}
-	if err := ValidateSymbolID(id); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
-		return
-	}
 
 	depth := 1 // Default to direct dependencies only
 	if depthStr != "" {
@@ -517,20 +493,16 @@ func handleError(c *gin.Context, err error) {
 
 // handleFlowPath returns the shortest call graph path between two symbols/files.
 func (s *Server) handleFlowPath(c *gin.Context) {
-	projectID := c.Query("project")
-	from := c.Query("from")
-	to := c.Query("to")
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
-	if err := ValidateSymbolID(from); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+	from, ok := extractSymbolID(c, "from")
+	if !ok {
 		return
 	}
-	if err := ValidateSymbolID(to); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+	to, ok := extractSymbolID(c, "to")
+	if !ok {
 		return
 	}
 
@@ -545,20 +517,16 @@ func (s *Server) handleFlowPath(c *gin.Context) {
 
 // handleGraphPath returns the shortest interaction path between two symbols using BFS.
 func (s *Server) handleGraphPath(c *gin.Context) {
-	projectID := c.Query("project")
-	source := c.Query("source")
-	target := c.Query("target")
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
-	if err := ValidateSymbolID(source); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+	source, ok := extractSymbolID(c, "source")
+	if !ok {
 		return
 	}
-	if err := ValidateSymbolID(target); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+	target, ok := extractSymbolID(c, "target")
+	if !ok {
 		return
 	}
 
@@ -579,7 +547,10 @@ func (s *Server) handleGraphPath(c *gin.Context) {
 //
 // Response: JSON with query, count, and results array of matching symbols.
 func (s *Server) handleSemanticSearch(c *gin.Context) {
-	projectID := c.Query("project")
+	projectID, ok := extractProjectID(c)
+	if !ok {
+		return
+	}
 	query := c.Query("q")
 	kStr := c.DefaultQuery("k", "10")
 
@@ -589,11 +560,6 @@ func (s *Server) handleSemanticSearch(c *gin.Context) {
 	}
 	if k > 50 {
 		k = 50 // Cap results
-	}
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
-		return
 	}
 	if query == "" {
 		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Missing q parameter", nil))
@@ -629,13 +595,11 @@ func (s *Server) handleSemanticSearch(c *gin.Context) {
 // handleGraphCluster returns a clustered graph for large result sets.
 // GET /v1/graph/cluster?project=X&query=...
 func (s *Server) handleGraphCluster(c *gin.Context) {
-	projectID := c.Query("project")
-	query := c.Query("query")
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
+	query := c.Query("query")
 	if query == "" {
 		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Missing query parameter", nil))
 		return
@@ -667,9 +631,8 @@ func (s *Server) handleGraphSubgraph(c *gin.Context) {
 		return
 	}
 
-	projectID := c.Query("project")
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
 
@@ -690,9 +653,8 @@ func (s *Server) handleGraphSubgraph(c *gin.Context) {
 
 // handleGraphCommunities returns the hierarchical community structure.
 func (s *Server) handleGraphCommunities(c *gin.Context) {
-	projectID := c.Query("project")
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
 
@@ -707,9 +669,8 @@ func (s *Server) handleGraphCommunities(c *gin.Context) {
 
 // handleHybridCluster performs k-means clustering on vector results while preserving community structure.
 func (s *Server) handleHybridCluster(c *gin.Context) {
-	projectID := c.Query("project")
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
 
@@ -769,13 +730,11 @@ func (s *Server) handleHybridCluster(c *gin.Context) {
 //
 // Response: JSON graph with paginated nodes/links and next cursor.
 func (s *Server) handleGraphPaginated(c *gin.Context) {
-	projectID := c.Query("project")
-	query := c.Query("query")
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
+	query := c.Query("query")
 	if query == "" {
 		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Missing query parameter", nil))
 		return
@@ -845,14 +804,12 @@ func (s *Server) handleGraphPaginated(c *gin.Context) {
 //
 // Response: JSON graph with callers and call relationships.
 func (s *Server) handleWhoCalls(c *gin.Context) {
-	projectID := c.Query("project")
-	symbolID := c.Query("symbol")
-	depth, _ := strconv.Atoi(c.Query("depth"))
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
+	symbolID := c.Query("symbol")
+	depth, _ := strconv.Atoi(c.Query("depth"))
 	if symbolID == "" {
 		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Missing symbol parameter", nil))
 		return
@@ -892,14 +849,12 @@ func (s *Server) handleWhoCalls(c *gin.Context) {
 //
 // Response: JSON graph with callees and call relationships.
 func (s *Server) handleWhatCalls(c *gin.Context) {
-	projectID := c.Query("project")
-	symbolID := c.Query("symbol")
-	depth, _ := strconv.Atoi(c.Query("depth"))
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
+	symbolID := c.Query("symbol")
+	depth, _ := strconv.Atoi(c.Query("depth"))
 	if symbolID == "" {
 		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Missing symbol parameter", nil))
 		return
@@ -939,15 +894,13 @@ func (s *Server) handleWhatCalls(c *gin.Context) {
 //
 // Response: JSON with reachable: true/false
 func (s *Server) handleCheckReachability(c *gin.Context) {
-	projectID := c.Query("project")
+	projectID, ok := extractProjectID(c)
+	if !ok {
+		return
+	}
 	fromID := c.Query("from")
 	toID := c.Query("to")
 	depth, _ := strconv.Atoi(c.Query("depth"))
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
-		return
-	}
 	if fromID == "" || toID == "" {
 		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Missing from or to parameter", nil))
 		return
@@ -968,10 +921,8 @@ func (s *Server) handleCheckReachability(c *gin.Context) {
 //
 // Response: JSON with array of cycles (each cycle is array of symbol IDs)
 func (s *Server) handleDetectCycles(c *gin.Context) {
-	projectID := c.Query("project")
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
 
@@ -993,15 +944,13 @@ func (s *Server) handleDetectCycles(c *gin.Context) {
 //
 // Response: JSON with lca: symbol ID or null
 func (s *Server) handleFindLCA(c *gin.Context) {
-	projectID := c.Query("project")
+	projectID, ok := extractProjectID(c)
+	if !ok {
+		return
+	}
 	symbolA := c.Query("a")
 	symbolB := c.Query("b")
 	depth, _ := strconv.Atoi(c.Query("depth"))
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
-		return
-	}
 	if symbolA == "" || symbolB == "" {
 		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "Missing a or b parameter", nil))
 		return
@@ -1022,10 +971,8 @@ func (s *Server) handleFindLCA(c *gin.Context) {
 //
 // Response: JSON with status
 func (s *Server) handleEnrichCalledBy(c *gin.Context) {
-	projectID := c.Query("project")
-
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "project ID is required or invalid", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
 
@@ -1098,721 +1045,7 @@ func (s *Server) handleAsk(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// HealthSummary represents the health summary response.
-type HealthSummary struct {
-	ProjectID        string        `json:"project_id"`
-	Summary          HealthDetails `json:"summary"`
-	TotalSmells      int           `json:"total_smells"`
-	TotalHubs        int           `json:"total_hubs"`
-	TotalEntrypoints int           `json:"total_entry_points"`
-}
 
-// HealthDetails contains categorized health information.
-type HealthDetails struct {
-	CircularDeps    []SmellEntry `json:"circular_dependencies,omitempty"`
-	GodFiles        []SmellEntry `json:"god_files,omitempty"`
-	LayerViolations []SmellEntry `json:"layer_violations,omitempty"`
-	Hubs            []HubEntry   `json:"hubs,omitempty"`
-	Entrypoints     []string     `json:"entry_points,omitempty"`
-}
-
-// SmellEntry represents a detected smell.
-type SmellEntry struct {
-	File   string `json:"file"`
-	Smell  string `json:"smell"`
-	Detail string `json:"detail,omitempty"`
-}
-
-// HubEntry represents a hub file.
-type HubEntry struct {
-	File  string `json:"file"`
-	Score int    `json:"score"`
-}
-
-// handleHealthSummary returns a health summary from the Analytical Store.
-// Query parameters:
-//   - project: project ID to query
-//
-// Response: JSON health summary with smells, hubs, and entry points.
-func (s *Server) handleHealthSummary(c *gin.Context) {
-	projectID := c.Query("project")
-	if projectID == "" {
-		projects, err := s.graphService.ListProjects()
-		if err == nil && len(projects) > 0 {
-			projectID = projects[0].ID
-		}
-	}
-
-	if projectID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing project parameter"})
-		return
-	}
-
-	// Flat smells list for frontend compatibility
-	type Smell struct {
-		File      string `json:"file"`
-		SmellType string `json:"smell_type"`
-		Severity  string `json:"severity"`
-	}
-
-	summary := HealthDetails{}
-	var smells []Smell
-	totalSmells := 0
-	totalHubs := 0
-	totalEntrypoints := 0
-
-	// Fetch from the Analytical partition where the smells actually live.
-	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
-	if err != nil {
-		logger.Error("handleHealthSummary error", "project", projectID, "error", err)
-		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
-		return
-	}
-
-	// Query for smells - read structured facts from analytical store
-	type smellResult struct {
-		Subject   string
-		SmellType string
-		Severity  string
-		Category  string
-	}
-
-	var smellResults []smellResult
-
-	// Query has_smell_type facts
-	typeQuery := common.GetNamedQuery("smell_type")
-	if typeResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, typeQuery); err == nil {
-		for _, r := range typeResults {
-			if subject, ok := r["Subject"].(string); ok {
-				if smellType, ok := r["Type"].(string); ok {
-					smellResults = append(smellResults, smellResult{
-						Subject:   subject,
-						SmellType: smellType,
-					})
-				}
-			}
-		}
-	}
-
-	// Query has_smell_severity facts to get severity
-	severityQuery := common.GetNamedQuery("smell_severity")
-	if sevResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, severityQuery); err == nil {
-		severityMap := make(map[string]string)
-		for _, r := range sevResults {
-			if subject, ok := r["Subject"].(string); ok {
-				if severity, ok := r["Severity"].(string); ok {
-					severityMap[subject] = severity
-				}
-			}
-		}
-		for i := range smellResults {
-			if sev, ok := severityMap[smellResults[i].Subject]; ok {
-				smellResults[i].Severity = sev
-			}
-		}
-	}
-
-	// Categorize smells and build response
-	for _, sr := range smellResults {
-		totalSmells++
-
-		var entry SmellEntry
-		var smellLabel string
-
-		switch sr.SmellType {
-		case "circular_dependency":
-			entry = SmellEntry{File: sr.Subject, Smell: "circular_dependency"}
-			summary.CircularDeps = append(summary.CircularDeps, entry)
-			smellLabel = "Circular Dependency"
-		case "god_file":
-			entry = SmellEntry{File: sr.Subject, Smell: "god_file"}
-			summary.GodFiles = append(summary.GodFiles, entry)
-			smellLabel = "God File"
-		case "layer_violation":
-			entry = SmellEntry{File: sr.Subject, Smell: "layer_violation"}
-			summary.LayerViolations = append(summary.LayerViolations, entry)
-			smellLabel = "Layer Violation"
-		default:
-			entry = SmellEntry{File: sr.Subject, Smell: sr.SmellType}
-			summary.GodFiles = append(summary.GodFiles, entry)
-			smellLabel = sr.SmellType
-		}
-
-		severity := sr.Severity
-		if severity == "" {
-			severity = "Medium"
-		}
-
-		smells = append(smells, Smell{
-			File:      sr.Subject,
-			SmellType: smellLabel,
-			Severity:  severity,
-		})
-	}
-
-	// Query for hub scores
-	hubResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("hub_score"))
-	if err == nil {
-		for _, r := range hubResults {
-			subject, _ := r["Subject"].(string)
-			scoreStr, _ := r["Score"].(string)
-			if subject == "" {
-				continue
-			}
-			score := 0
-			if s, err := strconv.Atoi(scoreStr); err == nil {
-				score = s
-			}
-			summary.Hubs = append(summary.Hubs, HubEntry{
-				File:  subject,
-				Score: score,
-			})
-			totalHubs++
-		}
-	}
-
-	// Query for entry points
-	entryResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("entry_point"))
-	if err == nil {
-		for _, r := range entryResults {
-			subject, _ := r["Subject"].(string)
-			if subject != "" {
-				summary.Entrypoints = append(summary.Entrypoints, subject)
-				totalEntrypoints++
-			}
-		}
-	}
-
-	// Calculate overall score (0-100)
-	// Start with 100 and deduct for issues found
-	overallScore := 100
-	// Deduct 5 points per smell, 2 points per hub, 1 point per entry point (capped at 0)
-	overallScore -= totalSmells * 5
-	overallScore -= totalHubs * 2
-	overallScore -= totalEntrypoints
-	if overallScore < 0 {
-		overallScore = 0
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"overall_score":      overallScore,
-		"total_smells":       totalSmells,
-		"total_hubs":         totalHubs,
-		"total_entry_points": totalEntrypoints,
-		"smells":             smells,
-	})
-}
-
-// HealthSummaryV2 is the per-file risk leaderboard format.
-type HealthSummaryV2 struct {
-	OverallScore        int            `json:"overall_score"`
-	TotalSecurityAlerts int            `json:"total_security_alerts"`
-	TotalArchDebt       int            `json:"total_arch_debt"`
-	Files               []FileHealthV2 `json:"files"`
-}
-
-// FileHealthV2 is per-file health data for the risk leaderboard.
-type FileHealthV2 struct {
-	FileName       string   `json:"file_name"`
-	TotalDebtScore int      `json:"total_debt_score"`
-	SecurityIssues int      `json:"security_issues"`
-	ArchSmells     []string `json:"arch_smells"`
-}
-
-// handleHealthSummaryV2 returns the V2 health summary with per-file risk breakdown.
-func (s *Server) handleHealthSummaryV2(c *gin.Context) {
-	projectID := c.Query("project")
-	if projectID == "" {
-		projects, err := s.graphService.ListProjects()
-		if err == nil && len(projects) > 0 {
-			projectID = projects[0].ID
-		}
-	}
-	if projectID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing project parameter"})
-		return
-	}
-
-	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			handleError(c, apperrors.NewAppError(http.StatusNotFound, "project not found", err))
-			return
-		}
-		logger.Error("handleHealthSummaryV2 error", "project", projectID, "error", err)
-		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
-		return
-	}
-
-	// Build file -> smells mapping and pre-computed health debt.
-	fileSmells := make(map[string][]string)
-	fileHubScore := make(map[string]int)
-	fileDebt := make(map[string]int)
-
-	// Pre-computed health debt facts from scoring.mg
-	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("health_debt")); err == nil {
-		for _, r := range results {
-			subject, _ := r["Subject"].(string)
-			debtStr, _ := r["Debt"].(string)
-			if subject == "" || debtStr == "" {
-				continue
-			}
-			if debt, err := strconv.Atoi(debtStr); err == nil {
-				fileDebt[subject] = debt
-			}
-		}
-	}
-
-	// Smells: triples(Subject, "has_smell", Object)
-	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("smell")); err == nil {
-		for _, r := range results {
-			subject, _ := r["Subject"].(string)
-			object, _ := r["Object"].(string)
-			if subject == "" || object == "" {
-				continue
-			}
-			fileSmells[subject] = append(fileSmells[subject], object)
-		}
-	}
-
-	// Hub scores: triples(Subject, "has_hub_score", Score)
-	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("hub_score")); err == nil {
-		for _, r := range results {
-			subject, _ := r["Subject"].(string)
-			scoreStr, _ := r["Score"].(string)
-			if subject == "" {
-				continue
-			}
-			if score, err := strconv.Atoi(scoreStr); err == nil {
-				fileHubScore[subject] = score
-			}
-		}
-	}
-
-	// Smell weights are read from the Analytical Store via smellRegistry.
-	// This replaces the old hardcoded smellWeight map — adding a new smell
-	// type only requires a change to policies/smells/*.mg, no Go changes.
-
-	var files []FileHealthV2
-	totalArchDebt := 0
-	totalSecurity := 0
-
-	for file, smells := range fileSmells {
-		debt := 0
-		var archSmells []string
-		secIssues := 0
-
-		for _, smell := range smells {
-			if s.smellRegistry.IsSecurity(smell) {
-				secIssues++
-				totalSecurity++
-			} else {
-				archSmells = append(archSmells, smell)
-			}
-		}
-
-		// Use pre-computed debt if available, else sum weights + hub
-		if preComputedDebt, ok := fileDebt[file]; ok {
-			debt = preComputedDebt
-		} else {
-			for _, smell := range smells {
-				if w, ok := s.smellRegistry.Weight(smell); ok {
-					debt += w
-				} else {
-					debt += s.smellRegistry.DefaultWeight()
-				}
-			}
-			if hub, ok := fileHubScore[file]; ok {
-				debt += hub
-			}
-		}
-
-		files = append(files, FileHealthV2{
-			FileName:       file,
-			TotalDebtScore: debt,
-			SecurityIssues: secIssues,
-			ArchSmells:     archSmells,
-		})
-		totalArchDebt += debt
-	}
-
-	// Add files that have pre-computed debt but no smells detected
-	for file, debt := range fileDebt {
-		if _, exists := fileSmells[file]; !exists {
-			files = append(files, FileHealthV2{
-				FileName:       file,
-				TotalDebtScore: debt,
-				SecurityIssues: 0,
-				ArchSmells:     []string{},
-			})
-			totalArchDebt += debt
-		}
-	}
-
-	// Overall score: 100 minus total arch debt (capped at 0)
-	overallScore := 100 - totalArchDebt/10
-	if overallScore < 0 {
-		overallScore = 0
-	}
-
-	c.JSON(http.StatusOK, HealthSummaryV2{
-		OverallScore:        overallScore,
-		TotalSecurityAlerts: totalSecurity,
-		TotalArchDebt:       totalArchDebt,
-		Files:               files,
-	})
-}
-
-type SurpriseFactor struct {
-	Type  string  `json:"type"`
-	Score float64 `json:"score"`
-}
-
-type SurpriseEdge struct {
-	Source  string           `json:"source"`
-	Target  string           `json:"target"`
-	Score   float64          `json:"score"`
-	Factors []SurpriseFactor `json:"factors"`
-	SrcFile string           `json:"src_file,omitempty"`
-	TgtFile string           `json:"tgt_file,omitempty"`
-}
-
-type SurpriseResponse struct {
-	Edges       []SurpriseEdge `json:"edges"`
-	TotalCount  int            `json:"total_count"`
-	HighCount   int            `json:"high_count"`
-	MediumCount int            `json:"medium_count"`
-	LowCount    int            `json:"low_count"`
-}
-
-func (s *Server) handleSurpriseAnalysis(c *gin.Context) {
-	projectID := c.Query("project")
-	if projectID == "" {
-		projects, err := s.graphService.ListProjects()
-		if err == nil && len(projects) > 0 {
-			projectID = projects[0].ID
-		}
-	}
-	if projectID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing project parameter"})
-		return
-	}
-
-	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
-	if err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
-		return
-	}
-
-	type surpriseResult struct {
-		Subject      string
-		Target       string
-		SurpriseType string
-		Score        string
-	}
-
-	var surpriseResults []surpriseResult
-
-	query := common.GetNamedQuery("surprise")
-	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, query); err == nil {
-		for _, r := range results {
-			if subject, ok := r["Subject"].(string); ok {
-				if target, ok := r["Target"].(string); ok {
-					if stype, ok := r["Type"].(string); ok {
-						surpriseResults = append(surpriseResults, surpriseResult{
-							Subject:      subject,
-							Target:       target,
-							SurpriseType: stype,
-						})
-					}
-				}
-			}
-		}
-	}
-
-	// Also query for surprise score facts (composite scores)
-	scoreQuery := common.GetNamedQuery("surprise_score")
-	scoreMap := make(map[string]float64)
-	if scoreResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, scoreQuery); err == nil {
-		for _, r := range scoreResults {
-			if subject, ok := r["Subject"].(string); ok {
-				if scoreStr, ok := r["ScoreStr"].(string); ok {
-					var score float64
-					fmt.Sscanf(scoreStr, "%f", &score)
-					scoreMap[subject] = score
-				}
-			}
-		}
-	}
-
-	// Aggregate by edge (Subject->Target)
-	edgeMap := make(map[string]*SurpriseEdge)
-	for _, sr := range surpriseResults {
-		key := sr.Subject + "->" + sr.Target
-		if _, exists := edgeMap[key]; !exists {
-			edgeMap[key] = &SurpriseEdge{
-				Source:  sr.Subject,
-				Target:  sr.Target,
-				Factors: []SurpriseFactor{},
-			}
-		}
-		factorScore := 0.0
-		switch sr.SurpriseType {
-		case "surprise_cross_community":
-			factorScore = 0.30
-		case "surprise_cross_language":
-			factorScore = 0.20
-		case "surprise_peripheral_hub":
-			factorScore = 0.20
-		case "surprise_cross_test_boundary":
-			factorScore = 0.25
-		default:
-			factorScore = 0.10
-		}
-		edgeMap[key].Factors = append(edgeMap[key].Factors, SurpriseFactor{
-			Type:  sr.SurpriseType,
-			Score: factorScore,
-		})
-	}
-
-	var edges []SurpriseEdge
-	for _, e := range edgeMap {
-		var totalScore float64
-		for _, f := range e.Factors {
-			totalScore += f.Score
-		}
-		if totalScore > 1.0 {
-			totalScore = 1.0
-		}
-		e.Score = totalScore
-		edges = append(edges, *e)
-	}
-
-	// Sort by score descending
-	sort.Slice(edges, func(i, j int) bool {
-		return edges[j].Score < edges[i].Score
-	})
-
-	highCount, mediumCount, lowCount := 0, 0, 0
-	for _, e := range edges {
-		if e.Score >= 0.5 {
-			highCount++
-		} else if e.Score >= 0.2 {
-			mediumCount++
-		} else {
-			lowCount++
-		}
-	}
-
-	c.JSON(http.StatusOK, SurpriseResponse{
-		Edges:       edges,
-		TotalCount:  len(edges),
-		HighCount:   highCount,
-		MediumCount: mediumCount,
-		LowCount:    lowCount,
-	})
-}
-
-type KnowledgeGapItem struct {
-	Symbol   string `json:"symbol"`
-	GapType  string `json:"gap_type"`
-	Severity string `json:"severity"`
-	Detail   string `json:"detail"`
-	Degree   int    `json:"degree,omitempty"`
-}
-
-type KnowledgeGapsResponse struct {
-	IsolatedNodes      []KnowledgeGapItem `json:"isolated_nodes"`
-	UntestedHotspots   []KnowledgeGapItem `json:"untested_hotspots"`
-	ThinCommunities    []KnowledgeGapItem `json:"thin_communities"`
-	SingleFileClusters []KnowledgeGapItem `json:"single_file_clusters"`
-	TotalCount         int                `json:"total_count"`
-}
-
-func (s *Server) handleKnowledgeGaps(c *gin.Context) {
-	projectID := c.Query("project")
-	if projectID == "" {
-		projects, err := s.graphService.ListProjects()
-		if err == nil && len(projects) > 0 {
-			projectID = projects[0].ID
-		}
-	}
-	if projectID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing project parameter"})
-		return
-	}
-
-	analyticalStore, err := s.manager.GetAnalyticalStore(projectID)
-	if err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to access analytical store", err))
-		return
-	}
-
-	resp := KnowledgeGapsResponse{
-		IsolatedNodes:      []KnowledgeGapItem{},
-		UntestedHotspots:   []KnowledgeGapItem{},
-		ThinCommunities:    []KnowledgeGapItem{},
-		SingleFileClusters: []KnowledgeGapItem{},
-	}
-
-	// Query degree facts
-	inDegMap := make(map[string]int)
-	outDegMap := make(map[string]int)
-	if inResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, 	common.GetNamedQuery("in_degree_short")); err == nil {
-		for _, r := range inResults {
-			if s, ok := r["S"].(string); ok {
-				if d, ok := r["D"].(string); ok {
-					var deg int
-					fmt.Sscanf(d, "%d", &deg)
-					inDegMap[s] = deg
-				}
-			}
-		}
-	}
-	if outResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, 	common.GetNamedQuery("out_degree_short")); err == nil {
-		for _, r := range outResults {
-			if s, ok := r["S"].(string); ok {
-				if d, ok := r["D"].(string); ok {
-					var deg int
-					fmt.Sscanf(d, "%d", &deg)
-					outDegMap[s] = deg
-				}
-			}
-		}
-	}
-
-	// Query cluster facts
-	clusterMap := make(map[string]string)
-	if clusterResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("cluster_short")); err == nil {
-		for _, r := range clusterResults {
-			if s, ok := r["S"].(string); ok {
-				if c, ok := r["C"].(string); ok {
-					clusterMap[s] = c
-				}
-			}
-		}
-	}
-
-	// Isolated nodes: degree <= 1
-	allSymbols := make(map[string]bool)
-	for s := range inDegMap {
-		allSymbols[s] = true
-	}
-	for s := range outDegMap {
-		allSymbols[s] = true
-	}
-	for sym := range allSymbols {
-		in := inDegMap[sym]
-		out := outDegMap[sym]
-		if in+out <= 1 {
-			severity := "low"
-			if in+out == 0 {
-				severity = "medium"
-			}
-			resp.IsolatedNodes = append(resp.IsolatedNodes, KnowledgeGapItem{
-				Symbol:   sym,
-				GapType:  "isolated",
-				Severity: severity,
-				Detail:   fmt.Sprintf("Degree: %d (in=%d, out=%d)", in+out, in, out),
-				Degree:   in + out,
-			})
-		}
-	}
-
-	// Untested hotspots: degree >= 5 and not a test symbol
-	if testResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("test_symbol")); err == nil {
-		testSymbols := make(map[string]bool)
-		for _, r := range testResults {
-			if s, ok := r["S"].(string); ok {
-				testSymbols[s] = true
-			}
-		}
-		for sym := range allSymbols {
-			if testSymbols[sym] {
-				continue
-			}
-			in := inDegMap[sym]
-			out := outDegMap[sym]
-			if in+out >= 5 {
-				resp.UntestedHotspots = append(resp.UntestedHotspots, KnowledgeGapItem{
-					Symbol:   sym,
-					GapType:  "untested_hotspot",
-					Severity: "high",
-					Detail:   fmt.Sprintf("Degree: %d (in=%d, out=%d) - no test coverage", in+out, in, out),
-					Degree:   in + out,
-				})
-			}
-		}
-	}
-
-	// Count cluster sizes
-	clusterSizes := make(map[string]int)
-	for _, c := range clusterMap {
-		clusterSizes[c]++
-	}
-
-	// Thin communities: cluster size < 3
-	thinClusters := make(map[string]bool)
-	for c, size := range clusterSizes {
-		if size > 0 && size < 3 {
-			thinClusters[c] = true
-		}
-	}
-	for sym, c := range clusterMap {
-		if thinClusters[c] {
-			resp.ThinCommunities = append(resp.ThinCommunities, KnowledgeGapItem{
-				Symbol:   sym,
-				GapType:  "thin_community",
-				Severity: "low",
-				Detail:   fmt.Sprintf("Cluster %s has only %d member(s)", c, clusterSizes[c]),
-			})
-		}
-	}
-
-	// Single-file clusters: all members in same file
-	// Query in_file facts
-	fileMap := make(map[string]string)
-	if fileResults, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("in_file")); err == nil {
-		for _, r := range fileResults {
-			if s, ok := r["S"].(string); ok {
-				if f, ok := r["F"].(string); ok {
-					fileMap[s] = f
-				}
-			}
-		}
-	}
-	// Group cluster members by (cluster, file)
-	clusterFileGroups := make(map[string]map[string]bool)
-	for sym, c := range clusterMap {
-		f := fileMap[sym]
-		if f == "" {
-			continue
-		}
-		key := c + "|" + f
-		if clusterFileGroups[key] == nil {
-			clusterFileGroups[key] = make(map[string]bool)
-		}
-		clusterFileGroups[key][sym] = true
-	}
-	for key, members := range clusterFileGroups {
-		if len(members) >= 3 {
-			parts := strings.Split(key, "|")
-			clusterID := parts[0]
-			filePath := parts[1]
-			for sym := range members {
-				resp.SingleFileClusters = append(resp.SingleFileClusters, KnowledgeGapItem{
-					Symbol:   sym,
-					GapType:  "single_file_community",
-					Severity: "medium",
-					Detail:   fmt.Sprintf("Cluster %s has %d symbols all in %s", clusterID, len(members), filePath),
-				})
-			}
-		}
-	}
-
-	resp.TotalCount = len(resp.IsolatedNodes) + len(resp.UntestedHotspots) + len(resp.ThinCommunities) + len(resp.SingleFileClusters)
-	c.JSON(http.StatusOK, resp)
-}
 
 type GraphDiffRequest struct {
 	BeforeSnapshot string `json:"before_snapshot_path"`
@@ -1908,8 +1141,7 @@ func (s *Server) handleCreateSnapshot(c *gin.Context) {
 		return
 	}
 
-	if err := ValidateProjectID(req.ProjectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
+	if !extractProjectIDFromBody(c, req.ProjectID) {
 		return
 	}
 
@@ -1953,9 +1185,8 @@ func (s *Server) handleCreateSnapshot(c *gin.Context) {
 }
 
 func (s *Server) handleListSnapshots(c *gin.Context) {
-	projectID := c.Query("project")
-	if err := ValidateProjectID(projectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
+	projectID, ok := extractProjectID(c)
+	if !ok {
 		return
 	}
 
@@ -2012,8 +1243,7 @@ func (s *Server) handleIncrementalIngest(c *gin.Context) {
 		return
 	}
 
-	if err := ValidateProjectID(req.ProjectID); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "invalid project ID", err))
+	if !extractProjectIDFromBody(c, req.ProjectID) {
 		return
 	}
 

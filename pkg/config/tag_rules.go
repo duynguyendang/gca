@@ -54,32 +54,6 @@ func DefaultTagRules() []TagRule {
 	}
 }
 
-// LoadTagRulesFromYAML parses a gca.yaml map into []TagRule.
-// The yaml map comes from parsing `tagging_rules:` in gca.yaml.
-func LoadTagRulesFromYAML(yamlRules []map[string]any) ([]TagRule, error) {
-	rules := make([]TagRule, 0, len(yamlRules))
-	for _, r := range yamlRules {
-		tag, ok := r["tag"].(string)
-		if !ok || tag == "" {
-			continue
-		}
-		patternStr, ok := r["pattern"].(string)
-		if !ok || patternStr == "" {
-			continue
-		}
-		re, err := regexp.Compile(patternStr)
-		if err != nil {
-			return nil, err
-		}
-		weight := 0
-		if w, ok := r["weight"].(int); ok {
-			weight = w
-		}
-		rules = append(rules, TagRule{Tag: tag, Pattern: re, Weight: weight})
-	}
-	return rules, nil
-}
-
 // MatchingTags returns all tags that match the given file path.
 func (ptc *ProjectTagConfig) MatchingTags(filePath string) []string {
 	var tags []string

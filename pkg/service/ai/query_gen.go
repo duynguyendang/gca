@@ -309,7 +309,7 @@ func searchSymbols(store *meb.MEBStore, query string) []string {
 			continue
 		}
 
-		symName := extractSymbolName(symID)
+		symName := common.ExtractSymbolName(symID)
 		symNameUpper := strings.ToUpper(symName)
 		symNameLower := strings.ToLower(symName)
 
@@ -331,12 +331,7 @@ func searchSymbols(store *meb.MEBStore, query string) []string {
 	return results
 }
 
-func extractSymbolName(symID string) string {
-	if idx := strings.LastIndex(symID, ":"); idx >= 0 && idx < len(symID)-1 {
-		return symID[idx+1:]
-	}
-	return symID
-}
+
 
 func buildQueryFromSymbols(symbols []string, intent Intent, original string) string {
 	if len(symbols) == 0 {

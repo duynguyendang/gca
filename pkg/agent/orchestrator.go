@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/duynguyendang/gca/pkg/logger"
@@ -72,8 +73,8 @@ func (o *Orchestrator) Run(ctx context.Context, projectID, query string, predica
 
 // buildFallbackNarrative creates a simple summary when AI synthesis fails.
 func (o *Orchestrator) buildFallbackNarrative(session *ExecutionSession) string {
-	var sb string
-	sb += fmt.Sprintf("Analysis of: %s\n\n", session.Query)
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Analysis of: %s\n\n", session.Query)
 
 	successCount := 0
 	totalResults := 0
@@ -84,22 +85,21 @@ func (o *Orchestrator) buildFallbackNarrative(session *ExecutionSession) string 
 		}
 	}
 
-	sb += fmt.Sprintf("Completed %d/%d analysis steps, finding %d results.\n", successCount, len(session.Steps), totalResults)
+	fmt.Fprintf(&sb, "Completed %d/%d analysis steps, finding %d results.\n", successCount, len(session.Steps), totalResults)
 
 	if totalResults > 0 {
-		sb += "\nKey findings:\n"
-		// Show first few hydrated nodes
+		sb.WriteString("\nKey findings:\n")
 		count := 0
 		for _, step := range session.Steps {
 			for _, h := range step.Hydrated {
 				if count >= 5 {
 					break
 				}
-				sb += fmt.Sprintf("- %s (%s)\n", h.ID, h.Kind)
+				fmt.Fprintf(&sb, "- %s (%s)\n", h.ID, h.Kind)
 				count++
 			}
 		}
 	}
 
-	return sb
+	return sb.String()
 }

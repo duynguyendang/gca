@@ -685,35 +685,9 @@ func (e *TreeSitterExtractor) extractGoRefs(n *sitter.Node, content []byte, relP
 			}
 		}
 	case "call_expression":
-		if currentScope != "" {
-			funcNode := n.ChildByFieldName("function")
-			if funcNode != nil {
-				callee := clean(funcNode.Utf8Text(content))
-				if callee != "" && !isStdLibCall(callee, "go") {
-					*refs = append(*refs, Reference{
-						Subject:   currentScope,
-						Predicate: config.PredicateCalls,
-						Object:    callee,
-						Line:      e.lineOf( n.StartByte()),
-					})
-				}
-			}
-		}
+		e.tryEmitCallRef(n, content, currentScope, refs, "go", 0)
 	case "interpreted_string_literal", "raw_string_literal", "string_literal":
-		strVal := clean(n.Utf8Text(content))
-		// Heuristic: If string starts with "/" and looks like a path/route
-		if strings.HasPrefix(strVal, "/") && !strings.Contains(strVal, "\n") {
-			subj := currentScope
-			if subj == "" {
-				subj = relPath
-			}
-			*refs = append(*refs, Reference{
-				Subject:   subj,
-				Predicate: config.PredicateReferences,
-				Object:    strVal,
-				Line:      e.lineOf( n.StartByte()),
-			})
-		}
+		e.emitPathRef(n, content, currentScope, relPath, refs)
 	case "type_identifier":
 		name := clean(n.Utf8Text(content))
 		if currentScope != "" && !isGoBuiltIn(name) {
@@ -799,15 +773,7 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 	nextScope := currentScope
 	switch n.Kind() {
 	case "function_definition", "class_definition":
-		nameNode := n.ChildByFieldName("name")
-		if nameNode != nil {
-			name := clean(nameNode.Utf8Text(content))
-			if currentScope == "" {
-				nextScope = fmt.Sprintf("%s:%s", relPath, name)
-			} else {
-				nextScope = fmt.Sprintf("%s.%s", currentScope, name)
-			}
-		}
+		nextScope = e.updateHierarchicalScope(n, content, relPath, currentScope)
 	case "import_statement":
 		// import X
 		for i := uint(0); i < uint(n.ChildCount()); i++ {
@@ -849,20 +815,7 @@ func (e *TreeSitterExtractor) extractPythonRefs(n *sitter.Node, content []byte, 
 			})
 		}
 	case "call":
-		if currentScope != "" {
-			funcNode := n.ChildByFieldName("function")
-			if funcNode != nil {
-				callee := clean(funcNode.Utf8Text(content))
-				if !isStdLibCall(callee, "python") {
-					*refs = append(*refs, Reference{
-						Subject:   currentScope,
-						Predicate: config.PredicateCalls,
-						Object:    callee,
-						Line:      e.lineOf( n.StartByte()),
-					})
-				}
-			}
-		}
+		e.tryEmitCallRef(n, content, currentScope, refs, "python", 0)
 	}
 	return nextScope
 }
@@ -915,35 +868,39 @@ func (e *TreeSitterExtractor) extractJSNode(n *sitter.Node, content []byte, relP
 			symType = TypeInterface
 		}
 	case "lexical_declaration", "variable_declaration":
-		// const x = ..., let y = ...
-		for i := uint(0); i < uint(n.ChildCount()); i++ {
-			child := n.Child(i)
-			if child.Kind() == "variable_declarator" {
-				nameNode := child.ChildByFieldName("name")
-				valNode := child.ChildByFieldName("value")
-				if nameNode != nil {
-					name = clean(nameNode.Utf8Text(content))
-					// Check if it's an arrow function or function expression
-					if valNode != nil && (valNode.Kind() == "arrow_function" || valNode.Kind() == "function_expression") {
-						symType = TypeFunction
-						e.addGenericSymbol(name, symType, receiver, n, content, relPath, parentScope, symbols)
-						name = "" // reset
-					} else {
-						if n.Parent().Kind() == "program" || n.Parent().Kind() == "export_statement" {
-							symType = TypeVariable
-							e.addGenericSymbol(name, symType, "variable", n, content, relPath, parentScope, symbols)
-							name = ""
-						}
-					}
-				}
-			}
-		}
+		e.extractJSVarDecl(n, content, relPath, parentScope, symbols)
 	}
 
 	if name != "" {
 		newScope = e.addGenericSymbol(name, symType, receiver, n, content, relPath, parentScope, symbols)
 	}
 	return newScope
+}
+
+func (e *TreeSitterExtractor) extractJSVarDecl(n *sitter.Node, content []byte, relPath, parentScope string, symbols *[]Symbol) {
+	for i := uint(0); i < uint(n.ChildCount()); i++ {
+		child := n.Child(i)
+		if child.Kind() != "variable_declarator" {
+			continue
+		}
+		nameNode := child.ChildByFieldName("name")
+		valNode := child.ChildByFieldName("value")
+		if nameNode == nil {
+			continue
+		}
+
+		name := clean(nameNode.Utf8Text(content))
+		// Check if it's an arrow function or function expression
+		if valNode != nil && (valNode.Kind() == "arrow_function" || valNode.Kind() == "function_expression") {
+			e.addGenericSymbol(name, TypeFunction, "", n, content, relPath, parentScope, symbols)
+			continue
+		}
+
+		// Top-level variable declaration (e.g. const x = ... at module scope)
+		if n.Parent().Kind() == "program" || n.Parent().Kind() == "export_statement" {
+			e.addGenericSymbol(name, TypeVariable, "variable", n, content, relPath, parentScope, symbols)
+		}
+	}
 }
 
 func (e *TreeSitterExtractor) addGenericSymbol(name, symType, receiver string, n *sitter.Node, content []byte, relPath, parentScope string, symbols *[]Symbol) string {
@@ -984,16 +941,7 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 
 	switch kind {
 	case "function_declaration", "method_definition", "class_declaration", "class_definition":
-		// Update scope
-		nameNode := n.ChildByFieldName("name")
-		if nameNode != nil {
-			name := clean(nameNode.Utf8Text(content))
-			if currentScope == "" {
-				nextScope = fmt.Sprintf("%s:%s", relPath, name)
-			} else {
-				nextScope = fmt.Sprintf("%s.%s", currentScope, name)
-			}
-		}
+		nextScope = e.updateHierarchicalScope(n, content, relPath, currentScope)
 	case "import_statement":
 		// import { X } from 'Y'; or import X from 'Y';
 		sourceNode := n.ChildByFieldName("source")
@@ -1008,49 +956,9 @@ func (e *TreeSitterExtractor) extractJSRefs(n *sitter.Node, content []byte, relP
 			})
 		}
 	case "call_expression":
-		if currentScope != "" {
-			funcNode := n.ChildByFieldName("function")
-			if funcNode != nil {
-				callee := clean(funcNode.Utf8Text(content))
-				if len(callee) < 1024 && !isStdLibCall(callee, "js") {
-					*refs = append(*refs, Reference{
-						Subject:   currentScope,
-						Predicate: config.PredicateCalls,
-						Object:    callee,
-						Line:      e.lineOf( n.StartByte()),
-					})
-				}
-			}
-		}
-	case "string", "template_string":
-		strVal := strings.Trim(n.Utf8Text(content), " \t\n\r\"'`")
-		if strings.HasPrefix(strVal, "/") && !strings.Contains(strVal, "\n") && len(strVal) < 1024 {
-			subj := currentScope
-			if subj == "" {
-				subj = relPath
-			}
-			*refs = append(*refs, Reference{
-				Subject:   subj,
-				Predicate: config.PredicateReferences,
-				Object:    strVal,
-				Line:      e.lineOf( n.StartByte()),
-			})
-		}
-	case "string_fragment":
-		strVal := strings.Trim(n.Utf8Text(content), " \t\n\r\"'`")
-		// Fragments in templates might be paths like /v1/ai/ask
-		if strings.HasPrefix(strVal, "/") && !strings.Contains(strVal, "\n") && len(strVal) < 1024 {
-			subj := currentScope
-			if subj == "" {
-				subj = relPath
-			}
-			*refs = append(*refs, Reference{
-				Subject:   subj,
-				Predicate: config.PredicateReferences,
-				Object:    strVal,
-				Line:      e.lineOf( n.StartByte()),
-			})
-		}
+		e.tryEmitCallRef(n, content, currentScope, refs, "js", 1024)
+	case "string", "template_string", "string_fragment":
+		e.emitPathRef(n, content, currentScope, relPath, refs)
 	}
 
 	return nextScope
@@ -1221,6 +1129,9 @@ func (e *TreeSitterExtractor) getReceiverType(n *sitter.Node, content []byte) st
 }
 
 func resolveImportPath(relPath, importPath string) string {
+	if currentState == nil {
+		return importPath
+	}
 	// 1. Handle Relative Imports
 	if strings.HasPrefix(importPath, ".") {
 		dir := filepath.Dir(relPath)
@@ -1335,6 +1246,61 @@ func normalizeKind(t string) string {
 	default:
 		return t
 	}
+}
+
+func (e *TreeSitterExtractor) tryEmitCallRef(n *sitter.Node, content []byte, currentScope string, refs *[]Reference, langName string, maxLen int) {
+	if currentScope == "" {
+		return
+	}
+	funcNode := n.ChildByFieldName("function")
+	if funcNode == nil {
+		return
+	}
+	callee := clean(funcNode.Utf8Text(content))
+	if callee == "" || isStdLibCall(callee, langName) {
+		return
+	}
+	if maxLen > 0 && len(callee) >= maxLen {
+		return
+	}
+	*refs = append(*refs, Reference{
+		Subject:   currentScope,
+		Predicate: config.PredicateCalls,
+		Object:    callee,
+		Line:      e.lineOf(n.StartByte()),
+	})
+}
+
+func (e *TreeSitterExtractor) emitPathRef(n *sitter.Node, content []byte, currentScope, relPath string, refs *[]Reference) {
+	strVal := clean(n.Utf8Text(content))
+	if !strings.HasPrefix(strVal, "/") || strings.Contains(strVal, "\n") {
+		return
+	}
+	subj := currentScope
+	if subj == "" {
+		subj = relPath
+	}
+	*refs = append(*refs, Reference{
+		Subject:   subj,
+		Predicate: config.PredicateReferences,
+		Object:    strVal,
+		Line:      e.lineOf(n.StartByte()),
+	})
+}
+
+func (e *TreeSitterExtractor) updateHierarchicalScope(n *sitter.Node, content []byte, relPath, currentScope string) string {
+	nameNode := n.ChildByFieldName("name")
+	if nameNode == nil {
+		return currentScope
+	}
+	name := clean(nameNode.Utf8Text(content))
+	if name == "" {
+		return currentScope
+	}
+	if currentScope == "" {
+		return fmt.Sprintf("%s:%s", relPath, name)
+	}
+	return fmt.Sprintf("%s.%s", currentScope, name)
 }
 
 func clean(s string) string {
