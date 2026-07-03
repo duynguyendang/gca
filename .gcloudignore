@@ -6,6 +6,7 @@ gca-fe/
 .claude/
 .git/
 *.log
+*.bak
 *.db
 *.db.lock
 *.db.wal
