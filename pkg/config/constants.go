@@ -199,7 +199,11 @@ const (
 )
 
 // SkippedDirectories lists directory names excluded from filesystem walks during ingestion.
-var SkippedDirectories = []string{"node_modules", ".git", "dist", "build", ".next"}
+var SkippedDirectories = []string{
+	"node_modules", ".git", "dist", "build", ".next",
+	"doc-snippets", "docs", "examples", "example",
+	"testdata", "__tests__", "__mocks__", "vendor", "coverage", ".cache",
+}
 
 // IsSkippedDir returns true if the directory name should be skipped during walks.
 func IsSkippedDir(name string) bool {

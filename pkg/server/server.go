@@ -292,6 +292,9 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/api/v1/health/summary", s.handleHealthSummary)
 	s.router.GET("/api/v1/health/summary/v2", s.handleHealthSummaryV2)
 
+	// Store health (meb v0.6 DebugInfo)
+	s.router.GET("/api/v1/store/health", s.handleStoreHealth)
+
 	// Analysis Endpoints
 	s.router.GET("/api/v1/analysis/surprise", s.handleSurpriseAnalysis)
 	s.router.GET("/api/v1/analysis/knowledge-gaps", s.handleKnowledgeGaps)

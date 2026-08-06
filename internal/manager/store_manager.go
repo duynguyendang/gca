@@ -72,6 +72,7 @@ type StoreManager struct {
 	readOnly      bool
 	embeddingDim  int    // Vector dimension for MEB's vector registry (0 = MEB default 1536)
 	indexType     string // Vector index type: brute, ivfpq, hnsw
+	mebProfile    string // MEB profile: Ingest-Heavy, Safe-Serving, ReadOnly, Minimum ("" = default)
 	cachedList    []ProjectMetadata
 	lastListBuild time.Time
 	telemetrySink meb.TelemetrySink
@@ -117,6 +118,20 @@ func (sm *StoreManager) SetIndexType(indexType string) {
 	}
 }
 
+// SetMebProfile sets the MEB store profile. Must be called before the first
+// GetStore() call. Accepted values: "Ingest-Heavy", "Safe-Serving",
+// "ReadOnly", "Minimum" (meb store/badger.go validProfiles). An empty string
+// leaves MEB to apply its default profile-specific cache settings.
+func (sm *StoreManager) SetMebProfile(profile string) {
+	switch profile {
+	case "", "Ingest-Heavy", "Safe-Serving", "ReadOnly", "Minimum":
+		sm.mebProfile = profile
+	default:
+		log.Printf("WARNING: unknown MEB_PROFILE %q, ignoring (default profile applies)", profile)
+		sm.mebProfile = ""
+	}
+}
+
 // SetVectorFullDim sets the embedding vector dimension for MEB's vector registry.
 // This must match the output dimension of the configured embedding model.
 // Setting to 0 leaves MEB's default (1536). Call before first GetStore() call.
@@ -147,8 +162,19 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 	cfg.ReadOnly = sm.readOnly
 	cfg.SyncWrites = true
 
-	// Apply Memory Profile
-	if sm.profile == MemoryProfileLow {
+	// Apply MEB profile (MEB_PROFILE env var) when explicitly set.
+	// Default (empty) preserves the previous explicit cache settings.
+	if sm.mebProfile != "" {
+		cfg.Profile = sm.mebProfile
+		if sm.mebProfile == "Minimum" {
+			// Minimum profile: zero caches (MEB applies lean defaults on zero),
+			// durability via WAL rather than per-transaction fsync, GC off.
+			cfg.BlockCacheSize = 0
+			cfg.IndexCacheSize = 0
+			cfg.SyncWrites = false
+			cfg.EnableAutoGC = false
+		}
+	} else if sm.profile == MemoryProfileLow {
 		cfg.BlockCacheSize = 64 << 20 // 64 MB
 		cfg.IndexCacheSize = 64 << 20 // 64 MB
 		cfg.Profile = "Safe-Serving"
@@ -159,7 +185,9 @@ func (sm *StoreManager) GetStore(projectID string) (*meb.MEBStore, error) {
 	}
 
 	// Enable auto-GC for long-running server mode
-	cfg.EnableAutoGC = !sm.readOnly
+	if sm.mebProfile != "Minimum" {
+		cfg.EnableAutoGC = !sm.readOnly
+	}
 	cfg.GCRatio = 0.5
 	cfg.Verbose = false
 
@@ -414,10 +442,21 @@ func (sm *StoreManager) GetAnalyticalStore(projectID string) (*meb.MEBStore, err
 	return s, nil
 }
 
-// clearVectorSnapshot deletes the stale TQ vector snapshot keys from a
-// Badger DB, so that meb can rebuild a fresh snapshot on next open.
-// This is needed after a meb v0.3→v0.4 upgrade where the snapshot format
-// changed (clean break).
+// snapshotKeyPrefixes are the key prefixes used for vector snapshot storage.
+// meb v0.6+ writes binary snapshot keys (SystemPrefix 0xFF + type byte),
+// replacing the legacy string "sys:tq:" keys used by meb v0.3–v0.5.
+var snapshotKeyPrefixes = [][]byte{
+	[]byte("sys:tq:"), // legacy v0.3–v0.5 snapshot meta + vector chunks
+	{0xFF, 0x10},      // snapshot vector chunks
+	{0xFF, 0x11},      // snapshot ID chunks
+	{0xFF, 0x12},      // snapshot meta
+	{0xFF, 0x13},      // snapshot dirty flag
+}
+
+// clearVectorSnapshot deletes stale vector snapshot keys from a Badger DB,
+// so that meb can rebuild a fresh snapshot on next open.
+// This is needed after a meb upgrade where the snapshot format changed
+// (clean break), e.g. v0.3→v0.4 and v0.5→v0.6 (binary keys).
 func clearVectorSnapshot(projectDir string) error {
 	badgerPath := filepath.Join(projectDir, "badger")
 	opts := badger.DefaultOptions(badgerPath).
@@ -429,15 +468,16 @@ func clearVectorSnapshot(projectDir string) error {
 	}
 	defer db.Close()
 
-	// Collect all keys with "sys:tq:" prefix (snapshot meta + vector chunks)
+	// Collect all keys matching any snapshot prefix (legacy + binary)
 	var keys [][]byte
 	err = db.View(func(txn *badger.Txn) error {
 		it := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer it.Close()
-		prefix := []byte("sys:tq:")
-		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-			key := it.Item().KeyCopy(nil)
-			keys = append(keys, key)
+		for _, prefix := range snapshotKeyPrefixes {
+			for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+				key := it.Item().KeyCopy(nil)
+				keys = append(keys, key)
+			}
 		}
 		return nil
 	})

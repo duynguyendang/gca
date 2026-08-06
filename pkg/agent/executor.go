@@ -60,8 +60,8 @@ func (e *Executor) ExecuteStep(ctx context.Context, session *ExecutionSession, s
 
 	var results []map[string]any
 
-	err := e.store.CircuitBreaker().ExecuteContext(queryCtx, func() error {
-		r, err := gcamdb.Query(queryCtx, e.store, resolvedQuery)
+	err := e.store.CircuitBreaker().ExecuteContext(queryCtx, func(ctx context.Context) error {
+		r, err := gcamdb.Query(ctx, e.store, resolvedQuery)
 		if err != nil {
 			return err
 		}

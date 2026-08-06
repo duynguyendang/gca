@@ -4,8 +4,9 @@ go 1.25.1
 
 require (
 	github.com/agext/levenshtein v1.2.3
+	github.com/dgraph-io/badger/v4 v4.9.1
 	github.com/duynguyendang/manglekit v0.0.0-20260330150740-81e7572ffb31
-	github.com/duynguyendang/meb v0.5.0
+	github.com/duynguyendang/meb v0.6.1
 	github.com/firebase/genkit/go v1.4.0
 	github.com/gin-gonic/gin v1.11.0
 	github.com/go-git/go-git/v5 v5.18.0
@@ -44,7 +45,6 @@ require (
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/cyphar/filepath-securejoin v0.4.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/dgraph-io/badger/v4 v4.9.1 // indirect
 	github.com/dgraph-io/ristretto/v2 v2.2.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect

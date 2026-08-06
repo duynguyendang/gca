@@ -22,9 +22,10 @@ var (
 	cfgFile   string
 	dataDir   string
 	sourceDir string
-	lowMem    bool
-	port      string
-	mebIndex  string
+	lowMem     bool
+	port       string
+	mebIndex   string
+	mebProfile string
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -55,6 +56,9 @@ Datalog, natural language, and semantic search.`,
 		}
 		if idx := os.Getenv("MEB_INDEX"); idx != "" {
 			mebIndex = idx
+		}
+		if prof := os.Getenv("MEB_PROFILE"); prof != "" {
+			mebProfile = prof
 		}
 
 		return nil

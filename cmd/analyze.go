@@ -45,6 +45,7 @@ Computes centrality, entry points, and detects architectural smells.`,
 		// Initialize store manager
 		storeManager := manager.NewStoreManager(dataDir, getMemoryProfile(), false)
 		storeManager.SetIndexType(mebIndex)
+		storeManager.SetMebProfile(mebProfile)
 		defer func() {
 			fmt.Println("Closing database connections and flushing to disk...")
 			storeManager.CloseAll()
