@@ -19,14 +19,15 @@ import (
 )
 
 var (
-	cfgFile   string
-	dataDir   string
-	sourceDir string
+	cfgFile    string
+	dataDir    string
+	sourceDir  string
 	lowMem     bool
 	port       string
 	mebIndex   string
 	mebProfile string
 	writable   bool
+	noMCP      bool
 )
 
 // rootCmd represents the base command when called without any subcommands

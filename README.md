@@ -401,37 +401,53 @@ LOW_MEM=true ./gca ingest ./my-project ./data/my-project
 # > .exit
 ```
 
-## MCP Integration (Beta)
+## MCP Integration
 
-GCA exposes its knowledge graph through the [Model Context Protocol](https://modelcontextprotocol.io), enabling MCP-compatible tools to query codebase structure.
+GCA exposes its knowledge graph through the [Model Context Protocol](https://modelcontextprotocol.io), enabling MCP-compatible tools (Claude Desktop, Cursor, VS Code) to query codebase structure, analysis, and OKF knowledge.
+
+### Transports
+
+- **Stdio** — `./gca mcp <data-dir>` for local MCP clients.
+- **Streamable HTTP** — mounted at `/mcp` on the REST server (`./gca server`). Disable with `--no-mcp`.
+
+Both are multi-project: every tool takes a required `project` argument.
 
 ### Tools
 
-| Tool | What You Can Query |
-|------|-------------------|
+| Tool | Description |
+|------|-------------|
+| `list_projects` | List available projects |
+| `datalog_query` | Execute a raw Datalog `triples(...)` query against a project's Source Store |
 | `search_nodes` | Find symbols or files matching a pattern |
 | `get_outgoing_edges` | List what a symbol calls |
 | `get_incoming_edges` | List what calls a symbol |
-| `scan_facts` | Raw Datalog queries against the graph |
+| `scan_facts` | Scan raw Source Store facts (Subject/Predicate/Object) |
 | `get_clusters` | Detect logical communities (Leiden algorithm) |
 | `trace_impact_path` | Shortest path between two symbols |
 | `get_node_metadata` | Metadata for a symbol (kind, package, tags) |
-| `okf_ingest` | Ingest an OKF v0.1 bundle (markdown + YAML frontmatter) as knowledge concepts |
-| `okf_export` | Export the code graph as a portable OKF bundle (file/package/cluster scope) |
+| `get_health_summary` | Per-file health summary (debt, smells, security issues) |
+| `list_smells` | Detected code smells from the Analytical Store |
+| `semantic_search` | Vector similarity search (requires embeddings + LLM key) |
+| `agent_execute` | Multi-step reasoning agent (requires LLM key) |
+| `okf_ingest` | Ingest an OKF v0.1 bundle (markdown + YAML frontmatter) as knowledge concepts (requires `--writable`) |
+| `okf_export` | Export a project's OKF concepts to a bundle directory |
 
-### Resources
+### Resources (templates)
 
 | URI | Description |
 |-----|-------------|
-| `gca://graph/summary` | Project statistics (fact count, etc.) |
-| `gca://files/{path}` | Source code content |
+| `gca://projects/{project}/summary` | Project statistics (fact count, etc.) |
+| `gca://projects/{project}/files/{path}` | Source code content |
 | `gca://schema/conventions` | Architectural conventions and node types |
 
 ### Usage
 
 ```bash
-# Start the MCP server (stdio mode — connect via any MCP client)
-./gca mcp ./data/my-project
+# Stdio mode — connect via any local MCP client
+./gca mcp ./data
+
+# Streamable HTTP — MCP available at http://localhost:8080/mcp
+./gca server --port 8080
 ```
 
 ## Configuration

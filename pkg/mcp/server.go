@@ -4,223 +4,994 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/duynguyendang/gca/internal/manager"
+	"github.com/duynguyendang/gca/pkg/agent"
+	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
+	gcamdb "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/okf"
+	"github.com/duynguyendang/gca/pkg/registry"
 	"github.com/duynguyendang/gca/pkg/service"
+	"github.com/duynguyendang/gca/pkg/service/ai"
 	"github.com/duynguyendang/meb"
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-// SingleProjectManager adapts a single store to the ProjectStoreManager interface.
-type SingleProjectManager struct {
-	store *meb.MEBStore
+// Default limits for tool results.
+const (
+	defaultSearchLimit = 10
+	defaultQueryLimit  = 50
+	defaultScanLimit   = 50
+	defaultSemanticK   = 10
+)
+
+// Options configures the MCP server.
+type Options struct {
+	Manager       *manager.StoreManager
+	AIService     *ai.AIService
+	SmellRegistry *registry.SmellRegistry
 }
 
-func (m *SingleProjectManager) GetStore(projectID string) (*meb.MEBStore, error) {
-	return m.store, nil
-}
-
-func (m *SingleProjectManager) ListProjects() ([]manager.ProjectMetadata, error) {
-	return []manager.ProjectMetadata{{Name: "default"}}, nil
-}
-
-// MCPServer wraps the GCA store to expose it via MCP.
-type MCPServer struct {
-	store      *meb.MEBStore
+// Server is a manager-based MCP server. It multiplexes the Source and
+// Analytical stores per project and serializes store access, because both
+// partitions share a single *meb.MEBStore whose TopicID is mutable.
+type Server struct {
+	mgr        *manager.StoreManager
+	aiSvc      *ai.AIService
+	smellReg   *registry.SmellRegistry
 	graph      *service.GraphService
 	clustering *service.ClusteringService
+	mu         sync.Mutex
 }
 
-// Run starts the MCP server on Stdio.
-func Run(ctx context.Context, store *meb.MEBStore) error {
-	s := server.NewMCPServer(
-		"GCA-Backend",
-		"0.1.0",
-		server.WithResourceCapabilities(true, true),
-		server.WithLogging(),
-	)
+// New builds a mark3labs MCPServer with all resources and tools registered.
+func New(opts Options) *mcpserver.MCPServer {
+	smellReg := opts.SmellRegistry
+	if smellReg == nil {
+		smellReg = registry.NewSmellRegistry(opts.Manager)
+	}
 
-	mgr := &SingleProjectManager{store: store}
-	ms := &MCPServer{
-		store:      store,
-		graph:      service.NewGraphService(mgr),
+	s := &Server{
+		mgr:        opts.Manager,
+		aiSvc:      opts.AIService,
+		smellReg:   smellReg,
+		graph:      service.NewGraphService(opts.Manager),
 		clustering: service.NewClusteringService(),
 	}
 
-	// --- Resources ---
-
-	// Resource: Graph Summary
-	s.AddResource(
-		mcp.NewResource(
-			"gca://graph/summary",
-			"Graph Summary",
-			mcp.WithResourceDescription("Summary statistics of the graph database"),
-			mcp.WithMIMEType("application/json"),
-		),
-		ms.handleGraphSummary,
+	ms := mcpserver.NewMCPServer(
+		"GCA-Backend",
+		"0.2.0",
+		mcpserver.WithResourceCapabilities(true, true),
+		mcpserver.WithLogging(),
 	)
 
-	// Resource: File Content
-	// Pattern: gca://files/{path}
-	s.AddResource(
-		mcp.NewResource(
-			"gca://files/{path}",
+	s.registerResources(ms)
+	s.registerTools(ms)
+	return ms
+}
+
+// --- Argument helpers ---
+
+func requireProject(args map[string]any) (string, error) {
+	p, ok := args["project"].(string)
+	if !ok || p == "" {
+		return "", fmt.Errorf("project argument required")
+	}
+	return p, nil
+}
+
+func requireString(args map[string]any, name string) (string, error) {
+	v, ok := args[name].(string)
+	if !ok || v == "" {
+		return "", fmt.Errorf("%s argument required", name)
+	}
+	return v, nil
+}
+
+func optionalInt(args map[string]any, name string, defaultVal int) int {
+	if v, ok := args[name].(float64); ok {
+		return int(v)
+	}
+	return defaultVal
+}
+
+// --- Result helpers ---
+
+func jsonResult(v any) *mcp.CallToolResult {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("json marshal failed: %v", err))
+	}
+	return mcp.NewToolResultText(string(b))
+}
+
+func errorResult(format string, args ...any) *mcp.CallToolResult {
+	return mcp.NewToolResultError(fmt.Sprintf(format, args...))
+}
+
+// --- Resource registration ---
+
+func (s *Server) registerResources(ms *mcpserver.MCPServer) {
+	ms.AddResourceTemplate(
+		mcp.NewResourceTemplate(
+			"gca://projects/{project}/summary",
+			"Project Graph Summary",
+			mcp.WithTemplateDescription("Summary statistics of a project's graph database"),
+			mcp.WithTemplateMIMEType("application/json"),
+		),
+		s.handleGraphSummary,
+	)
+	ms.AddResourceTemplate(
+		mcp.NewResourceTemplate(
+			"gca://projects/{project}/files/{+path}",
 			"File Content",
-			mcp.WithResourceDescription("Content of a source file"),
-			mcp.WithMIMEType("text/plain"), // Most source files are text
+			mcp.WithTemplateDescription("Content of a source file in a project"),
+			mcp.WithTemplateMIMEType("text/plain"),
 		),
-		ms.handleFileContent,
+		s.handleFileContent,
 	)
-
-	// Resource: Schema Conventions
-	s.AddResource(
+	ms.AddResource(
 		mcp.NewResource(
 			"gca://schema/conventions",
 			"Schema Conventions",
 			mcp.WithResourceDescription("Architectural schema and naming conventions for GCA"),
 			mcp.WithMIMEType("text/markdown"),
 		),
-		ms.handleSchemaConventions,
+		s.handleSchemaConventions,
+	)
+}
+
+// --- Tool registration ---
+
+func (s *Server) registerTools(ms *mcpserver.MCPServer) {
+	// Project management
+	ms.AddTool(
+		mcp.NewTool("list_projects",
+			mcp.WithDescription("List available projects in the GCA data directory.")),
+		s.handleListProjects,
 	)
 
-	// --- Tools ---
-
-	// Tool: Search Nodes
-	s.AddTool(
-		mcp.NewTool(
-			"search_nodes",
-			mcp.WithDescription("Search for nodes (symbols, files) in the graph."),
+	// Graph query tools (Source Store)
+	ms.AddTool(
+		mcp.NewTool("search_nodes",
+			mcp.WithDescription("Search for nodes (symbols, files) in a project's graph."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
 			mcp.WithString("query", mcp.Required(), mcp.Description("The search query string")),
-			mcp.WithNumber("limit", mcp.Description("Max number of results (default 10)")),
-		),
-		ms.handleSearchNodes,
+			mcp.WithNumber("limit", mcp.Description("Max results (default 10)"))),
+		s.handleSearchNodes,
 	)
-
-	// Tool: Get Outgoing Edges (Dependencies)
-	s.AddTool(
-		mcp.NewTool(
-			"get_outgoing_edges",
+	ms.AddTool(
+		mcp.NewTool("get_outgoing_edges",
 			mcp.WithDescription("Get outgoing edges (dependencies/calls) from a specific node."),
-			mcp.WithString("node_id", mcp.Required(), mcp.Description("The ID of the source node")),
-		),
-		ms.handleGetOutgoingEdges,
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithString("node_id", mcp.Required(), mcp.Description("The ID of the source node"))),
+		s.handleGetOutgoingEdges,
 	)
-
-	// Tool: Get Incoming Edges (Consumers)
-	s.AddTool(
-		mcp.NewTool(
-			"get_incoming_edges",
+	ms.AddTool(
+		mcp.NewTool("get_incoming_edges",
 			mcp.WithDescription("Get incoming edges (consumers/callers) to a specific node."),
-			mcp.WithString("node_id", mcp.Required(), mcp.Description("The ID of the target node")),
-		),
-		ms.handleGetIncomingEdges,
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithString("node_id", mcp.Required(), mcp.Description("The ID of the target node"))),
+		s.handleGetIncomingEdges,
 	)
-
-	// Tool: Scan Facts (Direct DB Access)
-	s.AddTool(
-		mcp.NewTool(
-			"scan_facts",
-			mcp.WithDescription("Scan raw facts from the database (Subject, Predicate, Object). Empty fields act as wildcards."),
+	ms.AddTool(
+		mcp.NewTool("scan_facts",
+			mcp.WithDescription("Scan raw source-store facts (Subject, Predicate, Object). Empty fields act as wildcards."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
 			mcp.WithString("subject", mcp.Description("Subject filter")),
 			mcp.WithString("predicate", mcp.Description("Predicate filter")),
-			mcp.WithString("object", mcp.Description("Object filter")),
-		),
-		ms.handleScanFacts,
+			mcp.WithString("object", mcp.Description("Object filter"))),
+		s.handleScanFacts,
 	)
-
-	// Tool: Get Clusters (Community Detection)
-	s.AddTool(
-		mcp.NewTool(
-			"get_clusters",
-			mcp.WithDescription("Detect clusters/communities in the graph using Leiden algorithm."),
-		),
-		ms.handleGetClusters,
-	)
-
-	// Tool: Get Node Metadata
-	s.AddTool(
-		mcp.NewTool(
-			"get_node_metadata",
+	ms.AddTool(
+		mcp.NewTool("get_node_metadata",
 			mcp.WithDescription("Get detailed metadata for a node (kind, package, tags, etc.)."),
-			mcp.WithString("node_id", mcp.Required(), mcp.Description("The ID of the node")),
-		),
-		ms.handleGetNodeMetadata,
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithString("node_id", mcp.Required(), mcp.Description("The ID of the node"))),
+		s.handleGetNodeMetadata,
 	)
-
-	// Tool: Trace Impact Path
-	s.AddTool(
-		mcp.NewTool(
-			"trace_impact_path",
-			mcp.WithDescription("Trace the shortest dependency path between two nodes, considering edge weights."),
+	ms.AddTool(
+		mcp.NewTool("trace_impact_path",
+			mcp.WithDescription("Trace the shortest dependency path between two nodes."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
 			mcp.WithString("start_node", mcp.Required(), mcp.Description("Start node ID")),
-			mcp.WithString("end_node", mcp.Required(), mcp.Description("End node ID")),
-		),
-		ms.handleTraceImpactPath,
+			mcp.WithString("end_node", mcp.Required(), mcp.Description("End node ID"))),
+		s.handleTraceImpactPath,
+	)
+	ms.AddTool(
+		mcp.NewTool("get_clusters",
+			mcp.WithDescription("Detect clusters/communities in a project's graph using the Leiden algorithm."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID"))),
+		s.handleGetClusters,
+	)
+	ms.AddTool(
+		mcp.NewTool("datalog_query",
+			mcp.WithDescription("Execute a raw Datalog query (triples(...) atoms) against a project's Source Store."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithString("query", mcp.Required(), mcp.Description("Datalog query, e.g. triples(Subject, \"calls\", \"target\")")),
+			mcp.WithNumber("limit", mcp.Description("Max results (default 50)"))),
+		s.handleDatalogQuery,
 	)
 
-	// Start the server on Stdio
-	slog.Info("Starting MCP server on Stdio")
-	return server.ServeStdio(s)
+	// Analysis tools (Analytical Store)
+	ms.AddTool(
+		mcp.NewTool("get_health_summary",
+			mcp.WithDescription("Get the per-file health summary for a project (health debt, smells, security issues)."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID"))),
+		s.handleHealthSummary,
+	)
+	ms.AddTool(
+		mcp.NewTool("list_smells",
+			mcp.WithDescription("List detected code smells for a project from the Analytical Store."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID"))),
+		s.handleListSmells,
+	)
+
+	// Semantic search + agent (require AI service)
+	if s.aiSvc != nil {
+		ms.AddTool(
+			mcp.NewTool("semantic_search",
+				mcp.WithDescription("Vector similarity search over a project's embedded symbols. Errors if the project has no embeddings."),
+				mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+				mcp.WithString("query", mcp.Required(), mcp.Description("Natural language query")),
+				mcp.WithNumber("k", mcp.Description("Number of results (default 10)"))),
+			s.handleSemanticSearch,
+		)
+		ms.AddTool(
+			mcp.NewTool("agent_execute",
+				mcp.WithDescription("Run the GCA multi-step reasoning agent: plan analysis steps, execute datalog queries, and synthesize a narrative."),
+				mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+				mcp.WithString("query", mcp.Required(), mcp.Description("Natural language analysis request"))),
+			s.handleAgentExecute,
+		)
+	}
+
+	// OKF ingest/export
+	ms.AddTool(
+		mcp.NewTool("okf_ingest",
+			mcp.WithDescription("Ingest an OKF v0.1 bundle directory (markdown + YAML frontmatter) as knowledge concepts. Requires a writable server."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithString("bundle_dir", mcp.Required(), mcp.Description("Absolute path to the OKF bundle directory"))),
+		s.handleOKFIngest,
+	)
+	ms.AddTool(
+		mcp.NewTool("okf_export",
+			mcp.WithDescription("Export a project's OKF concepts to a bundle directory as markdown files with YAML frontmatter."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithString("output_dir", mcp.Required(), mcp.Description("Absolute path to write the bundle"))),
+		s.handleOKFExport,
+	)
 }
 
 // --- Resource Handlers ---
 
-func (ms *MCPServer) handleGraphSummary(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-	count := ms.store.Count()
-	summary := map[string]interface{}{
-		"fact_count": count,
+func (s *Server) handleGraphSummary(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	project := templateParam(request, "project")
+	if project == "" {
+		return nil, fmt.Errorf("missing project in resource URI")
 	}
 
-	jsonBytes, err := json.MarshalIndent(summary, "", "  ")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	store, err := s.mgr.GetSourceStore(project)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal summary: %w", err)
+		return nil, fmt.Errorf("project not found: %s", project)
 	}
-
 	return []mcp.ResourceContents{
 		mcp.TextResourceContents{
 			URI:      request.Params.URI,
 			MIMEType: "application/json",
-			Text:     string(jsonBytes),
+			Text:     string(mustJSON(map[string]any{"project": project, "fact_count": store.Count()})),
 		},
 	}, nil
 }
 
-func (ms *MCPServer) handleFileContent(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-	// Extract path from URI: gca://files/{path}
-	uriStr := request.Params.URI
-	prefix := "gca://files/"
-	if !strings.HasPrefix(uriStr, prefix) {
-		return nil, fmt.Errorf("invalid URI format")
+func (s *Server) handleFileContent(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	project := templateParam(request, "project")
+	path := templateParam(request, "path")
+	if project == "" || path == "" {
+		return nil, fmt.Errorf("invalid resource URI")
 	}
-	path := strings.TrimPrefix(uriStr, prefix)
 
-	// Retrieve document
-	// DocumentID in store seems to be just the string path/ID
-	doc, err := ms.store.GetContentByKey(string(path))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	store, err := s.mgr.GetSourceStore(project)
 	if err != nil {
+		return nil, fmt.Errorf("project not found: %s", project)
+	}
+	doc, err := store.GetContentByKey(path)
+	if err != nil || doc == nil {
 		return nil, fmt.Errorf("file not found: %s", path)
 	}
-
-	if doc == nil {
-		return nil, fmt.Errorf("no content available for file: %s", path)
-	}
-
 	return []mcp.ResourceContents{
 		mcp.TextResourceContents{
 			URI:      request.Params.URI,
-			MIMEType: "text/plain", // TODO: Detect mime type if possible, or assume text for code
+			MIMEType: "text/plain",
 			Text:     string(doc),
 		},
 	}, nil
 }
 
-func (ms *MCPServer) handleSchemaConventions(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-	content := `
-# GCA Knowledge Graph Conventions
+func (s *Server) handleSchemaConventions(_ context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	return []mcp.ResourceContents{
+		mcp.TextResourceContents{
+			URI:      request.Params.URI,
+			MIMEType: "text/markdown",
+			Text:     schemaConventionsMarkdown,
+		},
+	}, nil
+}
+
+// --- Tool Handlers ---
+
+func (s *Server) handleListProjects(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	projects, err := s.mgr.ListProjects()
+	if err != nil {
+		return errorResult("failed to list projects: %v", err), nil
+	}
+	return jsonResult(projects), nil
+}
+
+func (s *Server) handleSearchNodes(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	query, err := requireString(args, "query")
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	limit := optionalInt(args, "limit", defaultSearchLimit)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	store, err := s.mgr.GetSourceStore(project)
+	if err != nil {
+		return errorResult("project not found: %s", project), nil
+	}
+
+	var results []string
+	lowerQuery := strings.ToLower(query)
+	for fact := range store.Scan("", config.PredicateDefines, "") {
+		if obj, ok := fact.Object.(string); ok {
+			if strings.Contains(strings.ToLower(obj), lowerQuery) {
+				results = append(results, obj)
+				if len(results) >= limit {
+					break
+				}
+			}
+		}
+	}
+	return mcp.NewToolResultText(strings.Join(results, "\n")), nil
+}
+
+func (s *Server) handleGetOutgoingEdges(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	nodeID, err := requireString(args, "node_id")
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	store, err := s.mgr.GetSourceStore(project)
+	if err != nil {
+		return errorResult("project not found: %s", project), nil
+	}
+
+	var lines []string
+	for fact := range store.Scan(nodeID, "", "") {
+		lines = append(lines, fmt.Sprintf("%s -> %s", fact.Predicate, fact.Object))
+	}
+	if len(lines) == 0 {
+		return mcp.NewToolResultText("No outgoing edges found."), nil
+	}
+	return mcp.NewToolResultText(strings.Join(lines, "\n")), nil
+}
+
+func (s *Server) handleGetIncomingEdges(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	nodeID, err := requireString(args, "node_id")
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	store, err := s.mgr.GetSourceStore(project)
+	if err != nil {
+		return errorResult("project not found: %s", project), nil
+	}
+
+	var lines []string
+	for fact := range store.Scan("", "", nodeID) {
+		lines = append(lines, fmt.Sprintf("%s -> %s", fact.Subject, fact.Predicate))
+	}
+	if len(lines) == 0 {
+		return mcp.NewToolResultText("No incoming edges found."), nil
+	}
+	return mcp.NewToolResultText(strings.Join(lines, "\n")), nil
+}
+
+func (s *Server) handleScanFacts(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	subj, _ := args["subject"].(string)
+	pred, _ := args["predicate"].(string)
+	obj, _ := args["object"].(string)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	store, err := s.mgr.GetSourceStore(project)
+	if err != nil {
+		return errorResult("project not found: %s", project), nil
+	}
+
+	var lines []string
+	for fact := range store.Scan(subj, pred, obj) {
+		lines = append(lines, fmt.Sprintf("%s --[%s]--> %s", fact.Subject, fact.Predicate, fact.Object))
+		if len(lines) >= defaultScanLimit {
+			lines = append(lines, "... (truncated)")
+			break
+		}
+	}
+	if len(lines) == 0 {
+		return mcp.NewToolResultText("No facts found."), nil
+	}
+	return mcp.NewToolResultText(strings.Join(lines, "\n")), nil
+}
+
+func (s *Server) handleGetNodeMetadata(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	nodeID, err := requireString(args, "node_id")
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	store, err := s.mgr.GetSourceStore(project)
+	if err != nil {
+		return errorResult("project not found: %s", project), nil
+	}
+
+	hydrated, err := s.graph.HydrateShallow(ctx, store, []string{nodeID})
+	if err != nil {
+		return errorResult("hydration failed: %v", err), nil
+	}
+	if len(hydrated) == 0 {
+		return mcp.NewToolResultText("{}"), nil
+	}
+	h := hydrated[0]
+	return jsonResult(map[string]any{
+		"id":             h.ID,
+		"kind":           h.Kind,
+		"metadata":       h.Metadata,
+		"children_count": len(h.Children),
+	}), nil
+}
+
+func (s *Server) handleTraceImpactPath(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	startNode, err := requireString(args, "start_node")
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	endNode, err := requireString(args, "end_node")
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	graph, err := s.graph.FindShortestPath(ctx, project, startNode, endNode)
+	if err != nil {
+		return errorResult("pathfinding failed: %v", err), nil
+	}
+	return jsonResult(graph), nil
+}
+
+func (s *Server) handleGetClusters(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	store, err := s.mgr.GetSourceStore(project)
+	if err != nil {
+		return errorResult("project not found: %s", project), nil
+	}
+
+	nodes, links := buildStructuralGraph(store)
+	result := s.clustering.DetectCommunitiesLeiden(nodes, links)
+	return jsonResult(result), nil
+}
+
+func (s *Server) handleDatalogQuery(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	query, err := requireString(args, "query")
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	limit := optionalInt(args, "limit", defaultQueryLimit)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	results, err := s.graph.ExecuteQuery(ctx, project, query)
+	if err != nil {
+		return errorResult("query failed: %v", err), nil
+	}
+	if len(results) > limit {
+		results = results[:limit]
+	}
+	return jsonResult(results), nil
+}
+
+// --- Health summary ---
+
+type fileHealth struct {
+	FileName       string   `json:"file_name"`
+	TotalDebtScore int      `json:"total_debt_score"`
+	SecurityIssues int      `json:"security_issues"`
+	ArchSmells     []string `json:"arch_smells"`
+}
+
+func (s *Server) handleHealthSummary(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	analytical, err := s.mgr.GetAnalyticalStore(project)
+	if err != nil {
+		return errorResult("project not found: %s", project), nil
+	}
+
+	fileDebt := queryDebtMap(ctx, analytical)
+	fileSmells := querySmellMap(ctx, analytical)
+	fileHubScore := queryHubScoreMap(ctx, analytical)
+
+	files, totalArchDebt, totalSecurity := s.computeFileHealth(fileDebt, fileSmells, fileHubScore)
+	overallScore := 100 - totalArchDebt/10
+	if overallScore < 0 {
+		overallScore = 0
+	}
+
+	return jsonResult(map[string]any{
+		"overall_score":         overallScore,
+		"total_security_alerts": totalSecurity,
+		"total_arch_debt":       totalArchDebt,
+		"files":                 files,
+	}), nil
+}
+
+func queryDebtMap(ctx context.Context, store *meb.MEBStore) map[string]int {
+	result := make(map[string]int)
+	rows, err := gcamdb.Query(ctx, store, common.GetNamedQuery("health_debt"))
+	if err != nil {
+		return result
+	}
+	for _, r := range rows {
+		subject, _ := r["Subject"].(string)
+		debtStr, _ := r["Debt"].(string)
+		if subject == "" || debtStr == "" {
+			continue
+		}
+		if debt, err := strconv.Atoi(debtStr); err == nil {
+			result[subject] = debt
+		}
+	}
+	return result
+}
+
+func querySmellMap(ctx context.Context, store *meb.MEBStore) map[string][]string {
+	result := make(map[string][]string)
+	rows, err := gcamdb.Query(ctx, store, common.GetNamedQuery("smell"))
+	if err != nil {
+		return result
+	}
+	for _, r := range rows {
+		subject, _ := r["Subject"].(string)
+		object, _ := r["Object"].(string)
+		if subject != "" && object != "" {
+			result[subject] = append(result[subject], object)
+		}
+	}
+	return result
+}
+
+func queryHubScoreMap(ctx context.Context, store *meb.MEBStore) map[string]int {
+	result := make(map[string]int)
+	rows, err := gcamdb.Query(ctx, store, common.GetNamedQuery("hub_score"))
+	if err != nil {
+		return result
+	}
+	for _, r := range rows {
+		subject, _ := r["Subject"].(string)
+		scoreStr, _ := r["Score"].(string)
+		if subject == "" {
+			continue
+		}
+		if score, err := strconv.Atoi(scoreStr); err == nil {
+			result[subject] = score
+		}
+	}
+	return result
+}
+
+func (s *Server) computeFileHealth(
+	fileDebt map[string]int,
+	fileSmells map[string][]string,
+	fileHubScore map[string]int,
+) ([]fileHealth, int, int) {
+	var files []fileHealth
+	totalArchDebt := 0
+	totalSecurity := 0
+
+	for file, smells := range fileSmells {
+		debt, secIssues, archSmells := s.scoreFile(file, smells, fileDebt, fileHubScore)
+		files = append(files, fileHealth{
+			FileName:       file,
+			TotalDebtScore: debt,
+			SecurityIssues: secIssues,
+			ArchSmells:     archSmells,
+		})
+		totalArchDebt += debt
+		totalSecurity += secIssues
+	}
+	for file, debt := range fileDebt {
+		if _, exists := fileSmells[file]; !exists {
+			files = append(files, fileHealth{FileName: file, TotalDebtScore: debt})
+			totalArchDebt += debt
+		}
+	}
+	return files, totalArchDebt, totalSecurity
+}
+
+func (s *Server) scoreFile(
+	file string,
+	smells []string,
+	fileDebt map[string]int,
+	fileHubScore map[string]int,
+) (debt int, secIssues int, archSmells []string) {
+	for _, smell := range smells {
+		if s.smellReg.IsSecurity(smell) {
+			secIssues++
+		} else {
+			archSmells = append(archSmells, smell)
+		}
+	}
+	if pre, ok := fileDebt[file]; ok {
+		return pre, secIssues, archSmells
+	}
+	for _, smell := range smells {
+		if w, ok := s.smellReg.Weight(smell); ok {
+			debt += w
+		} else {
+			debt += s.smellReg.DefaultWeight()
+		}
+	}
+	if hub, ok := fileHubScore[file]; ok {
+		debt += hub
+	}
+	return debt, secIssues, archSmells
+}
+
+// --- Smells ---
+
+type smellEntry struct {
+	Subject  string `json:"subject"`
+	Type     string `json:"type"`
+	Severity string `json:"severity,omitempty"`
+}
+
+func (s *Server) handleListSmells(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	analytical, err := s.mgr.GetAnalyticalStore(project)
+	if err != nil {
+		return errorResult("project not found: %s", project), nil
+	}
+
+	typeBySubject := queryMultiMap(ctx, analytical, common.GetNamedQuery("smell_type"), "Subject", "Type")
+	sevBySubject := queryMultiMap(ctx, analytical, common.GetNamedQuery("smell_severity"), "Subject", "Severity")
+
+	var entries []smellEntry
+	for subject, types := range typeBySubject {
+		sevs := sevBySubject[subject]
+		for i, typ := range types {
+			sev := ""
+			if i < len(sevs) {
+				sev = sevs[i]
+			}
+			entries = append(entries, smellEntry{Subject: subject, Type: typ, Severity: sev})
+		}
+	}
+	return jsonResult(entries), nil
+}
+
+// queryMultiMap runs a named query and returns a map of subject -> []value.
+func queryMultiMap(ctx context.Context, store *meb.MEBStore, query, subjectKey, valueKey string) map[string][]string {
+	result := make(map[string][]string)
+	rows, err := gcamdb.Query(ctx, store, query)
+	if err != nil {
+		return result
+	}
+	for _, r := range rows {
+		subject, _ := r[subjectKey].(string)
+		value, _ := r[valueKey].(string)
+		if subject != "" && value != "" {
+			result[subject] = append(result[subject], value)
+		}
+	}
+	return result
+}
+
+// --- Semantic search ---
+
+func (s *Server) handleSemanticSearch(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.aiSvc == nil {
+		return errorResult("semantic search unavailable: AI service not initialized"), nil
+	}
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	query, err := requireString(args, "query")
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	k := optionalInt(args, "k", defaultSemanticK)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	store, err := s.mgr.GetSourceStore(project)
+	if err != nil {
+		return errorResult("project not found: %s", project), nil
+	}
+	if store.DebugInfo().NumVectors <= 0 {
+		return errorResult("project %s has no embeddings; re-ingest with embeddings to use semantic search", project), nil
+	}
+
+	results, err := s.graph.SemanticSearch(ctx, project, query, k, s.aiSvc)
+	if err != nil {
+		return errorResult("semantic search failed: %v", err), nil
+	}
+	return jsonResult(results), nil
+}
+
+// --- Agent ---
+
+func (s *Server) handleAgentExecute(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.aiSvc == nil {
+		return errorResult("agent unavailable: AI service not initialized"), nil
+	}
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	query, err := requireString(args, "query")
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	store, err := s.mgr.GetStore(project)
+	if err != nil {
+		return errorResult("project not found: %s", project), nil
+	}
+
+	modelAdapter := ai.NewAIServiceModelAdapter(s.aiSvc)
+	orch := agent.NewOrchestrator(modelAdapter, store)
+	predicateNames := []string{
+		config.PredicateDefines,
+		config.PredicateCalls,
+		config.PredicateImports,
+		config.PredicateHasDoc,
+		config.PredicateInPackage,
+		config.PredicateHasRole,
+		config.PredicateHasTag,
+		config.PredicateKind,
+	}
+
+	session, err := orch.Run(ctx, project, query, predicateNames)
+	if err != nil {
+		return errorResult("agent execution failed: %v", err), nil
+	}
+	return jsonResult(agent.AgentResponse{
+		SessionID: session.ID,
+		Steps:     session.Steps,
+		Narrative: session.Narrative,
+	}), nil
+}
+
+// --- OKF ---
+
+func (s *Server) handleOKFIngest(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.mgr.ReadOnly() {
+		return errorResult("server is read-only; start with --writable (or GCA_WRITABLE=true) to ingest OKF bundles"), nil
+	}
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	bundleDir, err := requireString(args, "bundle_dir")
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	if !filepath.IsAbs(bundleDir) {
+		return errorResult("bundle_dir must be an absolute path"), nil
+	}
+	if info, statErr := os.Stat(bundleDir); statErr != nil || !info.IsDir() {
+		return errorResult("bundle_dir does not exist or is not a directory: %s", bundleDir), nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.mgr.EnsureProject(project); err != nil {
+		return errorResult("failed to ensure project: %v", err), nil
+	}
+	report, err := okf.Ingest(ctx, s.mgr, s.mgr.BaseDir(), okf.IngestOptions{
+		ProjectID: project,
+		BundleDir: bundleDir,
+	})
+	if err != nil {
+		return errorResult("okf ingest failed: %v", err), nil
+	}
+	return jsonResult(report), nil
+}
+
+func (s *Server) handleOKFExport(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	outputDir, err := requireString(args, "output_dir")
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	if !filepath.IsAbs(outputDir) {
+		return errorResult("output_dir must be an absolute path"), nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	report, err := okf.Export(ctx, s.mgr, okf.ExportOptions{
+		ProjectID: project,
+		OutputDir: outputDir,
+	})
+	if err != nil {
+		return errorResult("okf export failed: %v", err), nil
+	}
+	return jsonResult(report), nil
+}
+
+// --- Helpers ---
+
+// templateParam extracts a named variable from a resource template request.
+// mcp-go passes matched template arguments via Params.Arguments; the value is
+// the uritemplate Value whose V field is a []string (single-element for
+// non-list captures).
+func templateParam(request mcp.ReadResourceRequest, name string) string {
+	v, ok := request.Params.Arguments[name]
+	if !ok {
+		return ""
+	}
+	switch val := v.(type) {
+	case string:
+		return val
+	case []string:
+		if len(val) > 0 {
+			return val[0]
+		}
+	}
+	return ""
+}
+
+func mustJSON(v any) []byte {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return []byte(fmt.Sprintf(`{"error": %q}`, err.Error()))
+	}
+	return b
+}
+
+// buildStructuralGraph collects nodes and links from structural predicates
+// (calls, imports, defines) for clustering.
+func buildStructuralGraph(store *meb.MEBStore) ([]service.GraphNode, []service.GraphLink) {
+	var nodes []service.GraphNode
+	var links []service.GraphLink
+	nodeSet := make(map[string]bool)
+	preds := []string{config.PredicateCalls, config.PredicateImports, config.PredicateDefines}
+
+	for _, pred := range preds {
+		for fact := range store.Scan("", pred, "") {
+			src := fact.Subject
+			dst, ok := fact.Object.(string)
+			if !ok {
+				continue
+			}
+			if !nodeSet[src] {
+				nodes = append(nodes, service.GraphNode{ID: src})
+				nodeSet[src] = true
+			}
+			if !nodeSet[dst] {
+				nodes = append(nodes, service.GraphNode{ID: dst})
+				nodeSet[dst] = true
+			}
+			links = append(links, service.GraphLink{Source: src, Target: dst})
+		}
+	}
+	return nodes, links
+}
+
+// schemaConventionsMarkdown is the static schema documentation resource.
+var schemaConventionsMarkdown = `# GCA Knowledge Graph Conventions
 
 ## 1. Node Types
 - 'file': A source code file (e.g., github.com/duynguyendang/meb/store.go)
@@ -240,237 +1011,3 @@ func (ms *MCPServer) handleSchemaConventions(ctx context.Context, request mcp.Re
 - To find architecture: Search for 'belongs_to' to see the logical grouping.
 - To trace file-level deps: Use the 'imports' predicate.
 `
-	return []mcp.ResourceContents{
-		mcp.TextResourceContents{
-			URI:      request.Params.URI,
-			MIMEType: "text/markdown",
-			Text:     content,
-		},
-	}, nil
-}
-
-// --- Tool Handlers ---
-
-func (ms *MCPServer) handleSearchNodes(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := request.GetArguments()
-	query, ok := args["query"].(string)
-	if !ok {
-		return mcp.NewToolResultError("query argument required"), nil
-	}
-
-	limit := 10
-	if l, ok := args["limit"].(float64); ok {
-		limit = int(l)
-	}
-
-	// Use manual scan
-	var results []string
-	count := 0
-	for fact, err := range ms.store.Scan("", "defines", "") {
-		if err != nil {
-			continue
-		}
-		if obj, ok := fact.Object.(string); ok {
-			if strings.Contains(strings.ToLower(obj), strings.ToLower(query)) {
-				results = append(results, obj)
-				count++
-				if count >= limit {
-					break
-				}
-			}
-		}
-	}
-
-	return mcp.NewToolResultText(strings.Join(results, "\n")), nil
-}
-
-func (ms *MCPServer) handleGetOutgoingEdges(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := request.GetArguments()
-	nodeID, ok := args["node_id"].(string)
-	if !ok {
-		return mcp.NewToolResultError("node_id argument required"), nil
-	}
-
-	var formatted []string
-	// Scan(s=nodeID, p="", o="")
-	for fact, err := range ms.store.Scan(nodeID, "", "") {
-		if err != nil {
-			continue
-		}
-		// Format: Predicate -> Object
-		formatted = append(formatted, fmt.Sprintf("%s -> %s", fact.Predicate, fact.Object))
-	}
-
-	if len(formatted) == 0 {
-		return mcp.NewToolResultText("No outgoing edges found."), nil
-	}
-
-	return mcp.NewToolResultText(strings.Join(formatted, "\n")), nil
-}
-
-func (ms *MCPServer) handleGetIncomingEdges(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := request.GetArguments()
-	nodeID, ok := args["node_id"].(string)
-	if !ok {
-		return mcp.NewToolResultError("node_id argument required"), nil
-	}
-
-	var formatted []string
-	// Scan(s="", p="", o=nodeID)
-	for fact, err := range ms.store.Scan("", "", nodeID) {
-		if err != nil {
-			continue
-		}
-		// Format: Subject -> Predicate
-		formatted = append(formatted, fmt.Sprintf("%s -> %s", fact.Subject, fact.Predicate))
-	}
-
-	if len(formatted) == 0 {
-		return mcp.NewToolResultText("No incoming edges found."), nil
-	}
-
-	return mcp.NewToolResultText(strings.Join(formatted, "\n")), nil
-}
-
-func (ms *MCPServer) handleScanFacts(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := request.GetArguments()
-	s, _ := args["subject"].(string)
-	p, _ := args["predicate"].(string)
-	o, _ := args["object"].(string)
-
-	var formatted []string
-	count := 0
-	maxResults := 50 // Safety limit
-
-	for fact, err := range ms.store.Scan(s, p, o) {
-		if err != nil {
-			continue // Skip errors during iteration
-		}
-		formatted = append(formatted, fmt.Sprintf("%s --[%s]--> %s", fact.Subject, fact.Predicate, fact.Object))
-		count++
-		if count >= maxResults {
-			formatted = append(formatted, "... (truncated)")
-			break
-		}
-	}
-
-	if len(formatted) == 0 {
-		return mcp.NewToolResultText("No facts found."), nil
-	}
-
-	return mcp.NewToolResultText(strings.Join(formatted, "\n")), nil
-}
-
-func (ms *MCPServer) handleGetClusters(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// 1. Build simple graph from store
-	nodes := []service.GraphNode{}
-	links := []service.GraphLink{}
-	nodeSet := make(map[string]bool)
-
-	// Scan all triples is too expensive for huge graph tool call, but for clustering we need structure.
-	// We'll limit to "calls", "imports", "defines" using iterator logic if possible, but Scan is iterable.
-	// For "GetClusters", scanning whole DB might be slow.
-	// Let's rely on cached graph or just scan specific predicates.
-	// Or we scan EVERYTHING and filter.
-
-	// Scanning everything
-	// NOTE: This might be slow on large DBs.
-	// Optimized approach: Only scan structural edges.
-	structuralPreds := []string{config.PredicateCalls, config.PredicateImports, config.PredicateDefines}
-
-	for _, pred := range structuralPreds {
-		for fact, err := range ms.store.Scan("", pred, "") {
-			if err != nil {
-				continue
-			}
-			src := fact.Subject
-			dst, ok := fact.Object.(string)
-			if !ok {
-				continue
-			}
-
-			if !nodeSet[src] {
-				nodes = append(nodes, service.GraphNode{ID: src})
-				nodeSet[src] = true
-			}
-			if !nodeSet[dst] {
-				nodes = append(nodes, service.GraphNode{ID: dst})
-				nodeSet[dst] = true
-			}
-			links = append(links, service.GraphLink{Source: src, Target: dst})
-		}
-	}
-
-	// 2. Run Clustering
-	result := ms.clustering.DetectCommunitiesLeiden(nodes, links)
-
-	// 3. Return JSON
-	jsonBytes, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return mcp.NewToolResultError("failed to marshal clusters"), nil
-	}
-
-	return mcp.NewToolResultText(string(jsonBytes)), nil
-}
-
-func (ms *MCPServer) handleGetNodeMetadata(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := request.GetArguments()
-	nodeID, ok := args["node_id"].(string)
-	if !ok {
-		return mcp.NewToolResultError("node_id argument required"), nil
-	}
-
-	// Use Hydrate to get metadata
-	ids := []string{string(nodeID)}
-	hydrated, err := ms.graph.HydrateShallow(ctx, ms.store, ids) // shallow hydration
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("hydration failed: %v", err)), nil
-	}
-	if len(hydrated) == 0 {
-		return mcp.NewToolResultText("{}"), nil // Not found
-	}
-
-	h := hydrated[0]
-	// Clean up for JSON
-	meta := map[string]interface{}{
-		"id":             h.ID,
-		"kind":           h.Kind,
-		"metadata":       h.Metadata,
-		"children_count": len(h.Children),
-	}
-
-	jsonBytes, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return mcp.NewToolResultError("failed to marshal metadata"), nil
-	}
-	return mcp.NewToolResultText(string(jsonBytes)), nil
-}
-
-func (ms *MCPServer) handleTraceImpactPath(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := request.GetArguments()
-	startNode, ok1 := args["start_node"].(string)
-	endNode, ok2 := args["end_node"].(string)
-	if !ok1 || !ok2 {
-		return mcp.NewToolResultError("start_node and end_node arguments required"), nil
-	}
-
-	// Use GraphService.FindShortestPath
-	// We need to pass a ProjectID. In Single Store Mode, ProjectID is used for prefixes but store is shared.
-	// Our SingleProjectManager returns the store regardless of ID.
-	// So we can pass a dummy project ID or derive it.
-	projectID := "default"
-	if strings.Contains(startNode, "/") {
-		projectID = strings.Split(startNode, "/")[0]
-	}
-
-	graph, err := ms.graph.FindShortestPath(ctx, projectID, startNode, endNode)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("pathfinding failed: %v", err)), nil
-	}
-
-	jsonBytes, err := json.MarshalIndent(graph, "", "  ")
-	if err != nil {
-		return mcp.NewToolResultError("failed to marshal graph"), nil
-	}
-	return mcp.NewToolResultText(string(jsonBytes)), nil
-}

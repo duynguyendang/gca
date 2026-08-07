@@ -37,6 +37,9 @@ and AI-powered code analysis.`,
 		defer mgr.CloseAll()
 
 		srv := server.NewServer(mgr, sourceDir)
+		if !noMCP {
+			srv.EnableMCP()
+		}
 		defer srv.Close()
 		addr := ":" + port
 
@@ -84,4 +87,5 @@ and AI-powered code analysis.`,
 func init() {
 	rootCmd.AddCommand(serverCmd)
 	serverCmd.Flags().BoolVar(&writable, "writable", false, "open stores read-write (enables write endpoints like OKF ingest)")
+	serverCmd.Flags().BoolVar(&noMCP, "no-mcp", false, "disable the MCP Streamable HTTP server at /mcp")
 }

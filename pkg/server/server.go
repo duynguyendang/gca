@@ -14,6 +14,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/ephemeral"
 	"github.com/duynguyendang/gca/pkg/logger"
+	"github.com/duynguyendang/gca/pkg/mcp"
 	"github.com/duynguyendang/gca/pkg/registry"
 	"github.com/duynguyendang/gca/pkg/service"
 	"github.com/duynguyendang/gca/pkg/service/ai"
@@ -93,6 +94,22 @@ type Server struct {
 	rateLimiter    *RateLimiter
 	sourceDir      string
 	router         *gin.Engine
+	mcpEnabled     bool
+}
+
+// EnableMCP mounts the MCP Streamable HTTP server at /mcp on the REST router.
+func (s *Server) EnableMCP() {
+	s.mcpEnabled = true
+
+	var aiSvc *ai.AIService
+	if s.aiService != nil {
+		if concrete, ok := s.aiService.(*ai.AIService); ok {
+			aiSvc = concrete
+		}
+	}
+	mcpHandler := mcp.NewHTTPServer(s.manager, aiSvc)
+	s.router.Any("/mcp", gin.WrapH(mcpHandler))
+	logger.Info("MCP Streamable HTTP server mounted at /mcp")
 }
 
 // NewServer creates a new Server instance.
@@ -395,8 +412,8 @@ func (s *Server) handleAIAsk(c *gin.Context) {
 // GET or POST /api/v1/ai/classify
 func (s *Server) handleAIClassify(c *gin.Context) {
 	var req struct {
-		ProjectID           string `json:"project_id" form:"project_id"`
-		Query               string `json:"query" form:"query"`
+		ProjectID           string                `json:"project_id" form:"project_id"`
+		Query               string                `json:"query" form:"query"`
 		ConversationHistory []ai.ConversationTurn `json:"conversation_history"`
 	}
 
