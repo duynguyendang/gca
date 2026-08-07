@@ -27,7 +27,10 @@ and AI-powered code analysis.`,
 		fmt.Printf("Starting REST API Server. Project Root: %s\n", dataDir)
 
 		// Initialize StoreManager
-		mgr := manager.NewStoreManager(dataDir, getMemoryProfile(), true)
+		// Default is read-only serving; --writable (or GCA_WRITABLE=true) opts into
+		// read-write mode so write endpoints (OKF ingest, incremental ingest,
+		// enrich-called-by) can modify stores.
+		mgr := manager.NewStoreManager(dataDir, getMemoryProfile(), !writable)
 		mgr.SetVectorFullDim(llmconfig.GetEmbeddingDim(""))
 		mgr.SetIndexType(mebIndex)
 		mgr.SetMebProfile(mebProfile)
@@ -80,4 +83,5 @@ and AI-powered code analysis.`,
 
 func init() {
 	rootCmd.AddCommand(serverCmd)
+	serverCmd.Flags().BoolVar(&writable, "writable", false, "open stores read-write (enables write endpoints like OKF ingest)")
 }

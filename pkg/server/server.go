@@ -319,6 +319,7 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/api/v1/okf/orphans", s.handleOKFOrphans)
 	s.router.GET("/api/v1/okf/concepts", s.handleOKFConceptsBatch)
 	s.router.GET("/api/v1/okf/links", s.handleOKFLinksBatch)
+	s.router.POST("/api/v1/okf/ingest", s.handleOKFIngest)
 
 	// Route Discovery
 	s.router.GET("/api/v1/routes", s.handleRoutes)

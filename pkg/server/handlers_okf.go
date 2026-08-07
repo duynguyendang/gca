@@ -3,7 +3,10 @@ package server
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 
+	"github.com/duynguyendang/gca/pkg/okf"
 	"github.com/duynguyendang/meb"
 	"github.com/gin-gonic/gin"
 )
@@ -181,4 +184,51 @@ func scanFacts(store *meb.MEBStore, ctx context.Context, predicate string, fn fu
 	for fact := range store.ScanContext(ctx, "", predicate, "") {
 		fn(fact)
 	}
+}
+
+// handleOKFIngest ingests an OKF bundle directory into a project's stores.
+// POST /api/v1/okf/ingest  { project_id, bundle_dir }
+func (s *Server) handleOKFIngest(c *gin.Context) {
+	if s.manager.ReadOnly() {
+		c.JSON(http.StatusConflict, gin.H{
+			"error": "server is running in read-only mode; start with --writable (or GCA_WRITABLE=true) to ingest OKF bundles",
+		})
+		return
+	}
+
+	var req struct {
+		ProjectID string `json:"project_id" binding:"required"`
+		BundleDir string `json:"bundle_dir" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "project_id and bundle_dir are required", "details": err.Error()})
+		return
+	}
+
+	// Validate bundle_dir: must be an absolute path to an existing directory.
+	if !filepath.IsAbs(req.BundleDir) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bundle_dir must be an absolute path"})
+		return
+	}
+	if info, err := os.Stat(req.BundleDir); err != nil || !info.IsDir() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bundle_dir does not exist or is not a directory", "details": req.BundleDir})
+		return
+	}
+
+	// Ensure the project store exists so OKF-only projects can be created.
+	if err := s.manager.EnsureProject(req.ProjectID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	report, err := okf.Ingest(c.Request.Context(), s.manager, s.manager.BaseDir(), okf.IngestOptions{
+		ProjectID: req.ProjectID,
+		BundleDir: req.BundleDir,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, report)
 }

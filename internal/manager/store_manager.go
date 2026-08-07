@@ -132,6 +132,42 @@ func (sm *StoreManager) SetMebProfile(profile string) {
 	}
 }
 
+// BaseDir returns the store data base directory.
+func (sm *StoreManager) BaseDir() string {
+	return sm.baseDir
+}
+
+// ReadOnly reports whether stores are opened read-only (serving mode).
+func (sm *StoreManager) ReadOnly() bool {
+	return sm.readOnly
+}
+
+// EnsureProject creates the project directory (with metadata) if it does not
+// already exist, so that stores can be opened for a new project.
+func (sm *StoreManager) EnsureProject(projectID string) error {
+	projectDir := filepath.Join(sm.baseDir, projectID)
+	if _, err := os.Stat(projectDir); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("failed to stat project dir: %w", err)
+	}
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create project dir: %w", err)
+	}
+	metaPath := filepath.Join(projectDir, "metadata.json")
+	if _, err := os.Stat(metaPath); os.IsNotExist(err) {
+		meta := map[string]string{"name": projectID, "description": "OKF project"}
+		data, err := json.Marshal(meta)
+		if err != nil {
+			return fmt.Errorf("failed to marshal metadata: %w", err)
+		}
+		if err := os.WriteFile(metaPath, data, 0o644); err != nil {
+			return fmt.Errorf("failed to write metadata: %w", err)
+		}
+	}
+	return nil
+}
+
 // SetVectorFullDim sets the embedding vector dimension for MEB's vector registry.
 // This must match the output dimension of the configured embedding model.
 // Setting to 0 leaves MEB's default (1536). Call before first GetStore() call.

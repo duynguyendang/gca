@@ -26,6 +26,7 @@ var (
 	port       string
 	mebIndex   string
 	mebProfile string
+	writable   bool
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -59,6 +60,9 @@ Datalog, natural language, and semantic search.`,
 		}
 		if prof := os.Getenv("MEB_PROFILE"); prof != "" {
 			mebProfile = prof
+		}
+		if w := os.Getenv("GCA_WRITABLE"); w != "" && !cmd.Flags().Changed("writable") {
+			writable = strings.ToLower(w) == "true"
 		}
 
 		return nil
