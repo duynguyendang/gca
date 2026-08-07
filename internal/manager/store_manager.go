@@ -10,13 +10,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dgraph-io/badger/v4"
 	"github.com/duynguyendang/gca/pkg/common"
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/ephemeral"
 	"github.com/duynguyendang/gca/pkg/telemetry"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/store"
 	"github.com/duynguyendang/meb/vector"
-	"github.com/dgraph-io/badger/v4"
 	lru "github.com/hashicorp/golang-lru/v2"
 )
 
@@ -33,7 +34,7 @@ type ProjectMetadata struct {
 
 // CurrentSchemaVersion is the current version of the knowledge schema.
 // Bump this when breaking changes require re-ingestion.
-const CurrentSchemaVersion = "2.0"
+const CurrentSchemaVersion = config.SchemaVersion
 
 // MemoryProfile defines the memory optimization strategy
 type MemoryProfile string
@@ -539,5 +540,3 @@ func clearVectorSnapshot(projectDir string) error {
 
 	return nil
 }
-
-

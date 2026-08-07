@@ -237,6 +237,9 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 		}
 	}
 
+	// Record the schema version used to produce this store.
+	SaveSchemaVersion(s, config.SchemaVersion)
+
 	if embeddingService != nil {
 		logger.Info("Waiting for embeddings to complete")
 		embeddingWg.Wait()
@@ -254,16 +257,16 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 
 // ProcessFileConfig holds all dependencies for processFile.
 type ProcessFileConfig struct {
-	Store        *meb.MEBStore
-	Extractor    Extractor
-	Embedder     *EmbeddingService
-	ProjectName  string
-	SourceRoot   string
-	Meta         *ProjectMetadata
-	EmbeddingWg  *sync.WaitGroup
-	Sem          chan struct{}
-	State        *IngestState
-	Options      *IngestOptions
+	Store       *meb.MEBStore
+	Extractor   Extractor
+	Embedder    *EmbeddingService
+	ProjectName string
+	SourceRoot  string
+	Meta        *ProjectMetadata
+	EmbeddingWg *sync.WaitGroup
+	Sem         chan struct{}
+	State       *IngestState
+	Options     *IngestOptions
 }
 
 func processFile(ctx context.Context, path string, cfg *ProcessFileConfig) error {

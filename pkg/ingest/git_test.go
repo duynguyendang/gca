@@ -330,6 +330,50 @@ func getHEAD(t *testing.T, dir string) string {
 	return sha
 }
 
+func TestCountCommitsBehind(t *testing.T) {
+	dir := setupTestRepo(t)
+	sha1 := getHEAD(t, dir)
+
+	// Second commit.
+	writeFile(t, dir, "main2.go", "package main\n")
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "second commit")
+	sha2 := getHEAD(t, dir)
+
+	// 0 behind when source is at HEAD.
+	behind, err := CountCommitsBehind(dir, sha2)
+	if err != nil {
+		t.Fatalf("CountCommitsBehind(HEAD) failed: %v", err)
+	}
+	if behind != 0 {
+		t.Errorf("expected 0 behind at HEAD, got %d", behind)
+	}
+
+	// 1 behind when source points at the first commit.
+	behind, err = CountCommitsBehind(dir, sha1)
+	if err != nil {
+		t.Fatalf("CountCommitsBehind(first) failed: %v", err)
+	}
+	if behind != 1 {
+		t.Errorf("expected 1 behind, got %d", behind)
+	}
+}
+
+func TestCountCommitsBehindEmptySHA(t *testing.T) {
+	dir := setupTestRepo(t)
+	if _, err := CountCommitsBehind(dir, ""); err == nil {
+		t.Error("expected error for empty fromSHA")
+	}
+}
+
+func TestCountCommitsBehindNonAncestor(t *testing.T) {
+	dir := setupTestRepo(t)
+	// A detatched/unknown SHA should error.
+	if _, err := CountCommitsBehind(dir, "0000000000000000000000000000000000000000"); err == nil {
+		t.Error("expected error for unknown SHA")
+	}
+}
+
 func openRepo(dir string) (*git.Repository, error) {
 	return git.PlainOpen(dir)
 }

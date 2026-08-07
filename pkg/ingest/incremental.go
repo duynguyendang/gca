@@ -41,6 +41,11 @@ type IncrementalState struct {
 
 const MetadataSubject = "gca:metadata"
 
+// SchemaVersionSubject is a dedicated metadata subject for the schema version
+// fact, kept separate from MetadataSubject because SaveLastCommitSHA deletes
+// all facts on MetadataSubject.
+const SchemaVersionSubject = "gca:metadata:schema"
+
 // GetLastCommitSHA retrieves the last ingested commit SHA from the store.
 func GetLastCommitSHA(s *meb.MEBStore) string {
 	for fact, err := range s.Scan(MetadataSubject, config.PredicateLastCommitSHA, "") {
@@ -61,6 +66,32 @@ func SaveLastCommitSHA(s *meb.MEBStore, sha string) {
 		Subject:   MetadataSubject,
 		Predicate: config.PredicateLastCommitSHA,
 		Object:    sha,
+	})
+}
+
+// GetSchemaVersion retrieves the knowledge schema version the store was
+// ingested with. Returns "" when the store predates schema version tracking.
+func GetSchemaVersion(s *meb.MEBStore) string {
+	for fact, err := range s.Scan(SchemaVersionSubject, config.PredicateSchemaVersion, "") {
+		if err != nil {
+			continue
+		}
+		if v, ok := fact.Object.(string); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// SaveSchemaVersion records the knowledge schema version used to ingest the store.
+// Uses a dedicated subject so it is not clobbered by SaveLastCommitSHA, which
+// deletes all facts on MetadataSubject.
+func SaveSchemaVersion(s *meb.MEBStore, version string) {
+	s.DeleteFactsBySubject(SchemaVersionSubject)
+	s.AddFact(meb.Fact{
+		Subject:   SchemaVersionSubject,
+		Predicate: config.PredicateSchemaVersion,
+		Object:    version,
 	})
 }
 
@@ -380,6 +411,9 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 			SaveLastCommitSHA(s, head)
 		}
 	}
+
+	// Record the schema version used to produce this store.
+	SaveSchemaVersion(s, config.SchemaVersion)
 
 	newState := &IncrementalState{
 		FileHashes: newHashes,

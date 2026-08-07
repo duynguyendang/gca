@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -285,3 +286,44 @@ func deduplicatePaths(paths []string) []string {
 	}
 	return result
 }
+
+// CountCommitsBehind returns the number of commits between fromSHA and HEAD
+// in dir. Returns an error when git is unavailable or fromSHA is not an
+// ancestor of HEAD.
+func CountCommitsBehind(dir, fromSHA string) (int, error) {
+	if fromSHA == "" {
+		return 0, fmt.Errorf("empty fromSHA")
+	}
+	repo, err := git.PlainOpen(dir)
+	if err != nil {
+		return 0, fmt.Errorf("failed to open repo: %w", err)
+	}
+	from, err := ResolveCommit(repo, fromSHA)
+	if err != nil {
+		return 0, fmt.Errorf("failed to resolve fromSHA %q: %w", fromSHA, err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get HEAD: %w", err)
+	}
+	cIter, err := repo.Log(&git.LogOptions{From: head.Hash()})
+	if err != nil {
+		return 0, fmt.Errorf("failed to walk log: %w", err)
+	}
+	defer cIter.Close()
+
+	count := 0
+	if err := cIter.ForEach(func(c *object.Commit) error {
+		if c.Hash == from {
+			return errStopIteration
+		}
+		count++
+		return nil
+	}); err != nil && err != errStopIteration {
+		return 0, fmt.Errorf("failed to iterate log: %w", err)
+	}
+	return count, nil
+}
+
+// errStopIteration stops the commit iterator once the from commit is reached.
+var errStopIteration = errors.New("stop iteration")

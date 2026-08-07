@@ -1045,8 +1045,6 @@ func (s *Server) handleAsk(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-
-
 type GraphDiffRequest struct {
 	BeforeSnapshot string `json:"before_snapshot_path"`
 	AfterSnapshot  string `json:"after_snapshot_path"`
@@ -1237,6 +1235,13 @@ type IncrementalIngestRequest struct {
 }
 
 func (s *Server) handleIncrementalIngest(c *gin.Context) {
+	if s.manager.ReadOnly() {
+		c.JSON(http.StatusConflict, gin.H{
+			"error": "server is running in read-only mode; start with --writable (or GCA_WRITABLE=true) to run incremental ingest",
+		})
+		return
+	}
+
 	var req IncrementalIngestRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "details": err.Error()})
@@ -1266,7 +1271,7 @@ func (s *Server) handleIncrementalIngest(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"project_id":  req.ProjectID,
+		"project_id": req.ProjectID,
 		"status":     "completed",
 		"symbols":    len(state.SymbolTable),
 		"files":      len(state.FileIndex),
@@ -1314,11 +1319,11 @@ type TestGenerateAllRequest struct {
 }
 
 type TestGenerateAllResponse struct {
-	Results   map[string]string         `json:"results"`
-	Errors    map[string]string         `json:"errors"`
-	Total     int                       `json:"total"`
-	Generated int                       `json:"generated"`
-	Failed    int                       `json:"failed"`
+	Results   map[string]string `json:"results"`
+	Errors    map[string]string `json:"errors"`
+	Total     int               `json:"total"`
+	Generated int               `json:"generated"`
+	Failed    int               `json:"failed"`
 }
 
 func (s *Server) handleTestGenerateAll(c *gin.Context) {
@@ -1439,12 +1444,12 @@ func (s *Server) handleCreateReviewSession(c *gin.Context) {
 		"facts", count)
 
 	c.JSON(http.StatusOK, gin.H{
-		"session_id":    session.ID,
-		"project_id":    req.ProjectID,
-		"expires_at":    session.ExpiresAt.Format(time.RFC3339),
-		"facts_parsed":  count,
-		"base_commit":   req.BaseCommit,
-		"head_commit":   req.HeadCommit,
+		"session_id":   session.ID,
+		"project_id":   req.ProjectID,
+		"expires_at":   session.ExpiresAt.Format(time.RFC3339),
+		"facts_parsed": count,
+		"base_commit":  req.BaseCommit,
+		"head_commit":  req.HeadCommit,
 	})
 }
 

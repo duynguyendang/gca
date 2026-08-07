@@ -9,6 +9,7 @@ import (
 
 	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/ingest"
 	"github.com/duynguyendang/gca/pkg/registry"
 	"github.com/duynguyendang/gca/pkg/service"
 	mebpkg "github.com/duynguyendang/meb"
@@ -198,4 +199,61 @@ func TestResourceTemplatesRegistered(t *testing.T) {
 	_, mgr := newTestServer(t)
 	ms := New(Options{Manager: mgr})
 	require.NotNil(t, ms)
+}
+
+func TestIngestStatus(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.seedSource(t, "testproj", []mebpkg.Fact{
+		{Subject: "a", Predicate: config.PredicateDefines, Object: "a"},
+		{Subject: ingest.MetadataSubject, Predicate: config.PredicateLastCommitSHA, Object: "abc123"},
+		{Subject: ingest.SchemaVersionSubject, Predicate: config.PredicateSchemaVersion, Object: config.SchemaVersion},
+	})
+	res := callTool(t, srv.handleIngestStatus, "testproj", nil)
+	require.False(t, res.IsError)
+	body := resultText(t, res)
+	require.Contains(t, body, "abc123")
+	require.Contains(t, body, config.SchemaVersion)
+	require.Contains(t, body, `"version_mismatch": false`)
+}
+
+func TestIngestStatusVersionMismatch(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.seedSource(t, "testproj", []mebpkg.Fact{
+		{Subject: ingest.SchemaVersionSubject, Predicate: config.PredicateSchemaVersion, Object: "1.0"},
+	})
+	res := callTool(t, srv.handleIngestStatus, "testproj", nil)
+	require.False(t, res.IsError)
+	body := resultText(t, res)
+	require.Contains(t, body, `"version_mismatch": true`)
+	require.Contains(t, body, "re-ingest recommended")
+}
+
+func TestIngestStatusMissingProject(t *testing.T) {
+	srv, _ := newTestServer(t)
+	res := callTool(t, srv.handleIngestStatus, "nope", nil)
+	require.True(t, res.IsError)
+	require.Contains(t, resultText(t, res), "not found")
+}
+
+func TestIngestIncrementalReadOnly(t *testing.T) {
+	dataDir := t.TempDir()
+	mgr := manager.NewStoreManager(dataDir, manager.MemoryProfileDefault, true)
+	srv := &Server{mgr: mgr, smellReg: registry.NewSmellRegistry(mgr)}
+	res := callTool(t, srv.handleIngestIncremental, "testproj", map[string]any{"source_dir": "/tmp"})
+	require.True(t, res.IsError)
+	require.Contains(t, resultText(t, res), "read-only")
+}
+
+func TestIngestIncrementalRequiresAbsoluteSourceDir(t *testing.T) {
+	srv, _ := newTestServer(t)
+	res := callTool(t, srv.handleIngestIncremental, "testproj", map[string]any{"source_dir": "relative/path"})
+	require.True(t, res.IsError)
+	require.Contains(t, resultText(t, res), "absolute")
+}
+
+func TestIngestIncrementalMissingSourceDir(t *testing.T) {
+	srv, _ := newTestServer(t)
+	res := callTool(t, srv.handleIngestIncremental, "testproj", map[string]any{"source_dir": "/definitely/not/a/real/gca/source/dir/xyz"})
+	require.True(t, res.IsError)
+	require.Contains(t, resultText(t, res), "does not exist")
 }

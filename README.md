@@ -431,6 +431,8 @@ Both are multi-project: every tool takes a required `project` argument.
 | `agent_execute` | Multi-step reasoning agent (requires LLM key) |
 | `okf_ingest` | Ingest an OKF v0.1 bundle (markdown + YAML frontmatter) as knowledge concepts (requires `--writable`) |
 | `okf_export` | Export a project's OKF concepts to a bundle directory |
+| `ingest_status` | Report ingest state: last commit, schema version (+ mismatch warning), file count, optional git staleness |
+| `ingest_incremental` | Re-ingest only files changed since the last ingest (requires `--writable` + absolute `source_dir`) |
 
 ### Resources (templates)
 

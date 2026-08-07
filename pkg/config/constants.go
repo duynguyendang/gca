@@ -106,11 +106,11 @@ const (
 
 // Additional predicates
 const (
-	PredicateName       = "name"
-	PredicateReferences = "references"
-	PredicateDocumentedBy   = "documented_by"
+	PredicateName             = "name"
+	PredicateReferences       = "references"
+	PredicateDocumentedBy     = "documented_by"
 	PredicateDocumentedHeader = "documented_header"
-	PredicateCallsLine  = "calls_line"
+	PredicateCallsLine        = "calls_line"
 )
 
 // Special values
@@ -132,7 +132,13 @@ const (
 	PredicateHasHealthScore  = "has_health_score"
 	PredicateHasHealthDebt   = "has_health_debt"
 	PredicateLastCommitSHA   = "last_commit_sha"
+	PredicateSchemaVersion   = "schema_version"
 )
+
+// SchemaVersion is the current version of the knowledge schema. It is written
+// to the store at ingest time and checked by ingest_status to detect stores
+// produced by an older version of GCA.
+const SchemaVersion = "2.0"
 
 // Centrality configuration
 const (
@@ -148,8 +154,8 @@ const (
 
 // Hub and analysis thresholds
 const (
-	HubClassificationThreshold    = 5  // Min callers to classify as hub
-	CentralityHighConnectThreshold  = 10 // Min calls to flag high-connectivity symbol
+	HubClassificationThreshold     = 5  // Min callers to classify as hub
+	CentralityHighConnectThreshold = 10 // Min calls to flag high-connectivity symbol
 )
 
 // Virtual Attention Sink configuration
@@ -164,7 +170,7 @@ const (
 // in policies/smells/scoring.mg and read dynamically at handler time.
 const (
 	SmellWeightCircularDependency = 10
-	SmellWeightCircularTransitive  = 15
+	SmellWeightCircularTransitive = 15
 	SmellWeightLayerViolation     = 8
 	SmellWeightGodFile            = 6
 	SmellWeightHubAnomaly         = 4

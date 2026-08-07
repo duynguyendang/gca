@@ -14,6 +14,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/agent"
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/ingest"
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/okf"
 	"github.com/duynguyendang/gca/pkg/registry"
@@ -268,6 +269,25 @@ func (s *Server) registerTools(ms *mcpserver.MCPServer) {
 			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
 			mcp.WithString("output_dir", mcp.Required(), mcp.Description("Absolute path to write the bundle"))),
 		s.handleOKFExport,
+	)
+
+	// Incremental ingestion
+	ms.AddTool(
+		mcp.NewTool("ingest_status",
+			mcp.WithDescription("Report a project's ingest state: last ingested commit, schema version, file count. Optionally compare against a git working tree."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithString("source_dir", mcp.Description("Absolute path to the project source for git comparison"))),
+		s.handleIngestStatus,
+	)
+	ms.AddTool(
+		mcp.NewTool("ingest_incremental",
+			mcp.WithDescription("Re-ingest only files changed since the last ingest. Requires a writable server and an absolute source_dir."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithString("source_dir", mcp.Required(), mcp.Description("Absolute path to the project source directory")),
+			mcp.WithString("from_commit", mcp.Description("Start commit for git-based incremental (default: last ingested commit)")),
+			mcp.WithString("to_commit", mcp.Description("End commit for git-based incremental (default: working tree)")),
+			mcp.WithBoolean("skip_embed", mcp.Description("Skip embedding generation"))),
+		s.handleIngestIncremental,
 	)
 }
 
@@ -929,6 +949,114 @@ func (s *Server) handleOKFExport(ctx context.Context, request mcp.CallToolReques
 		return errorResult("okf export failed: %v", err), nil
 	}
 	return jsonResult(report), nil
+}
+
+// --- Ingest ---
+
+func (s *Server) handleIngestStatus(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	sourceDir, _ := args["source_dir"].(string)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	store, err := s.mgr.GetSourceStore(project)
+	if err != nil {
+		return errorResult("project not found: %s", project), nil
+	}
+
+	status := map[string]any{
+		"project":                project,
+		"last_commit_sha":        ingest.GetLastCommitSHA(store),
+		"schema_version":         ingest.GetSchemaVersion(store),
+		"current_schema_version": config.SchemaVersion,
+		"version_mismatch":       false,
+		"fact_count":             store.Count(),
+	}
+
+	storedVersion := ingest.GetSchemaVersion(store)
+	if storedVersion != "" && storedVersion != config.SchemaVersion {
+		status["version_mismatch"] = true
+		status["warning"] = fmt.Sprintf("store was ingested with schema version %s; re-ingest recommended (current: %s)", storedVersion, config.SchemaVersion)
+	}
+
+	incrState, stateErr := ingest.LoadIncrementalState(store)
+	if stateErr == nil {
+		status["file_count"] = len(incrState.FileHashes)
+	}
+
+	// Optional git comparison against a working tree.
+	if sourceDir != "" {
+		if !filepath.IsAbs(sourceDir) {
+			return errorResult("source_dir must be an absolute path"), nil
+		}
+		if ingest.IsGitRepo(sourceDir) {
+			head, headErr := ingest.GetHEADCommitSHA(sourceDir)
+			if headErr == nil {
+				status["head_commit"] = head
+			}
+			last := ingest.GetLastCommitSHA(store)
+			if last != "" {
+				if behind, behindErr := ingest.CountCommitsBehind(sourceDir, last); behindErr == nil {
+					status["commits_behind"] = behind
+				}
+			}
+		}
+	}
+	return jsonResult(status), nil
+}
+
+func (s *Server) handleIngestIncremental(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.mgr.ReadOnly() {
+		return errorResult("server is read-only; start with --writable (or GCA_WRITABLE=true) to run incremental ingest"), nil
+	}
+	args := request.GetArguments()
+	project, err := requireProject(args)
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	sourceDir, err := requireString(args, "source_dir")
+	if err != nil {
+		return errorResult("%v", err), nil
+	}
+	if !filepath.IsAbs(sourceDir) {
+		return errorResult("source_dir must be an absolute path"), nil
+	}
+	if info, statErr := os.Stat(sourceDir); statErr != nil || !info.IsDir() {
+		return errorResult("source_dir does not exist or is not a directory: %s", sourceDir), nil
+	}
+
+	fromCommit, _ := args["from_commit"].(string)
+	toCommit, _ := args["to_commit"].(string)
+	skipEmbed, _ := args["skip_embed"].(bool)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	store, err := s.mgr.GetStore(project)
+	if err != nil {
+		return errorResult("project not found: %s", project), nil
+	}
+
+	opts := &ingest.IngestOptions{
+		SkipEmbeddings: skipEmbed,
+		FromCommit:     fromCommit,
+		ToCommit:       toCommit,
+	}
+	state := ingest.NewIngestState()
+	if err := ingest.RunIncrementalWithOptions(store, project, sourceDir, state, opts); err != nil {
+		return errorResult("incremental ingest failed: %v", err), nil
+	}
+	return jsonResult(map[string]any{
+		"project_id": project,
+		"status":     "completed",
+		"symbols":    len(state.SymbolTable),
+		"files":      len(state.FileIndex),
+	}), nil
 }
 
 // --- Helpers ---
