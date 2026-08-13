@@ -125,6 +125,12 @@ func (a *Analyzer) RunPostIngestAnalysis(ctx context.Context, projectID string) 
 		logger.Warn("Centrality computation failed", "error", err)
 	}
 
+	// Dead-code detection is a Go-side pass (the template engine cannot express
+	// "no incoming calls" negation). Emits has_smell_type=dead_code.
+	if err := a.detectDeadCode(ctx, projectID); err != nil {
+		logger.Warn("Dead-code detection failed", "error", err)
+	}
+
 	// Write okf_age_days facts so the stale smell policy (stale.mg) can fire.
 	sourceStore, srcErr := a.storeManager.GetSourceStore(projectID)
 	if srcErr == nil {

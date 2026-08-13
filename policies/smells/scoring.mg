@@ -13,6 +13,7 @@ smell_weight("circular_transitive", 15).
 smell_weight("layer_violation", 8).
 smell_weight("god_file", 6).
 smell_weight("hub_anomaly", 4).
+smell_weight("dead_code", 3).
 smell_weight("unsanitized_db_access", 50).
 smell_weight("security_risk", 50).
 
