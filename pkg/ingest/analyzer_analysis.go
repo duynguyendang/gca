@@ -18,7 +18,9 @@ func (a *Analyzer) clearAnalyticalData(ctx context.Context, projectID string) er
 	}
 
 	predicatesToClear := map[string]bool{
-		"has_smell":          true,
+		// Smell predicates — analyzer writes has_smell_type/category/severity.
+		// "has_smell" is legacy; no facts are written with this predicate.
+		"has_smell":          true, // keep clearing for old ingests; no new facts use it
 		"has_smell_type":     true,
 		"has_smell_category": true,
 		"has_smell_severity": true,
@@ -39,7 +41,13 @@ func (a *Analyzer) clearAnalyticalData(ctx context.Context, projectID string) er
 	subjectsToDelete := make(map[string]bool)
 	predCounts := make(map[string]int)
 
-	for fact, err := range analyticalStore.ScanContext(ctx, "", "", "") {
+	// Scan ONLY the analytical partition (Window topic). The all-empty
+	// ScanContext is topic-agnostic and would collect subjects from the
+	// Global (source) partition too; DeleteFactsBySubject on a subject with
+	// no Window-topic facts finds nothing to delete and triggers a full-scan
+	// dict cleanup that removes live dict entries (see meb knowledge_store).
+	// Scoping to the analytical topic keeps deletes real, not no-ops.
+	for fact, err := range analyticalStore.ScanInTopicContext(ctx, analyticalStore.TopicID(), "", "", "") {
 		if err != nil {
 			logger.Warn("Error scanning facts", "error", err)
 			continue
@@ -135,6 +143,12 @@ func (a *Analyzer) RunPostIngestAnalysis(ctx context.Context, projectID string) 
 	// files containing identical function bodies.
 	if err := a.detectDuplicates(ctx, projectID); err != nil {
 		logger.Warn("Duplicate detection failed", "error", err)
+	}
+
+	// Security smells are graph-based (defines × calls × defines joins) and
+	// cannot be expressed by the template engine — see analyzer_security.go.
+	if err := a.detectSecuritySmells(ctx, projectID); err != nil {
+		logger.Warn("Security smell detection failed", "error", err)
 	}
 
 	// Write okf_age_days facts so the stale smell policy (stale.mg) can fire.

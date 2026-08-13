@@ -3,9 +3,11 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"strings"
 
-	mebpkg "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/internal/manager"
 	"github.com/duynguyendang/gca/pkg/logger"
+	mebpkg "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/meb"
 )
 
@@ -86,8 +88,49 @@ func (a *Analyzer) RunStaticAnalysis(ctx context.Context, projectID string) erro
 		logger.Warn("Failed to clear old analytical data", "error", err)
 	}
 
+	// computeCentrality MUST run before executeRulesFromTemplates.
+	// Templates like surprise.mg and knowledge_gaps.mg query facts written by
+	// computeCentrality (has_in_degree, has_out_degree, belongs_to_cluster).
 	if err := a.computeCentrality(ctx, projectID); err != nil {
 		logger.Warn("Centrality computation failed", "error", err)
+	}
+
+	// Dead-code detection is a Go-side pass (the template engine cannot express
+	// "no incoming calls" negation). Emits has_smell_type=dead_code.
+	if err := a.detectDeadCode(ctx, projectID); err != nil {
+		logger.Warn("Dead-code detection failed", "error", err)
+	}
+
+	// Duplicate detection groups functions by body hash and flags
+	// files containing identical function bodies.
+	if err := a.detectDuplicates(ctx, projectID); err != nil {
+		logger.Warn("Duplicate detection failed", "error", err)
+	}
+
+	// Security smells are graph-based (defines × calls × defines joins) and
+	// cannot be expressed by the template engine — see analyzer_security.go.
+	if err := a.detectSecuritySmells(ctx, projectID); err != nil {
+		logger.Warn("Security smell detection failed", "error", err)
+	}
+
+	// Precompute facts that smell templates read. These must be written to the
+	// Source Store because executeRulesFromTemplates runs template bodies
+	// against the Source Store (see analyzer_analysis.go).
+	if sourceStore, err := a.storeManager.GetSourceStore(projectID); err == nil {
+		if err := a.writeOKFAgeDays(ctx, sourceStore); err != nil {
+			logger.Warn("OKF age days computation failed", "error", err)
+		}
+		if err := a.writeFileStats(ctx, sourceStore); err != nil {
+			logger.Warn("File stats computation failed", "error", err)
+		}
+		if analyticalStore, err := a.storeManager.GetAnalyticalStore(projectID); err == nil {
+			if err := a.writeThinCommunities(ctx, sourceStore, analyticalStore); err != nil {
+				logger.Warn("Thin community computation failed", "error", err)
+			}
+		}
+		if err := a.computeSurpriseScores(ctx, projectID); err != nil {
+			logger.Warn("Surprise scoring failed", "error", err)
+		}
 	}
 
 	if err := a.executeRulesFromTemplates(ctx, projectID); err != nil {
@@ -120,15 +163,23 @@ func (a *Analyzer) executeRulesFromTemplates(ctx context.Context, projectID stri
 		return nil
 	}
 
+	// Both stores share the same underlying meb.MEBStore pointer; only the
+	// current TopicID differs. Template bodies must query the Source Store
+	// (Global topic) because facts they read (e.g. has_define_count) are
+	// Global-only — but emitted smells belong in the Analytical Store (Window).
+	// GetSourceStore/GetAnalyticalStore just flip this shared pointer's topic,
+	// so we must reset it to Global before querying and to Window before emitting.
 	sourceStore, err := a.storeManager.GetSourceStore(projectID)
 	if err != nil {
 		return fmt.Errorf("failed to get source store: %w", err)
 	}
 
-	analyticalStore, err := a.storeManager.GetAnalyticalStore(projectID)
-	if err != nil {
-		return fmt.Errorf("failed to get analytical store: %w", err)
+	type emitRequest struct {
+		store  *meb.MEBStore
+		result map[string]any
+		tmpl   *TemplateStoreQuery
 	}
+	var emits []emitRequest
 
 	totalResults := 0
 
@@ -136,7 +187,15 @@ func (a *Analyzer) executeRulesFromTemplates(ctx context.Context, projectID stri
 		if tmpl.Body == "" {
 			continue
 		}
+		// Skip templates that are not meb-executable triples queries
+		// (e.g. Mangle-only rules like memory/promotion.mg is_sticky(...)).
+		if !strings.Contains(tmpl.Body, "triples(") {
+			logger.Debug("Skipping non-triples template", "template", tmpl.ID)
+			continue
+		}
 
+		// Reset to Global topic so the shared pointer queries the Source Store.
+		sourceStore.SetTopicID(manager.GlobalTopicID(projectID))
 		results, err := mebpkg.Query(ctx, sourceStore, tmpl.Body)
 		if err != nil {
 			logger.Warn("Template query failed", "template", tmpl.ID, "error", err)
@@ -146,11 +205,23 @@ func (a *Analyzer) executeRulesFromTemplates(ctx context.Context, projectID stri
 		logger.Debug("Template returned results", "template", tmpl.ID, "count", len(results))
 
 		for _, r := range results {
-			if err := a.emitFactFromTemplate(analyticalStore, r, tmpl); err != nil {
-				logger.Warn("Failed to emit fact for template", "template", tmpl.ID, "error", err)
-			} else {
-				totalResults++
-			}
+			emits = append(emits, emitRequest{store: sourceStore, result: r, tmpl: tmpl})
+			totalResults++
+		}
+	}
+
+	// Emit smells to the Analytical Store (Window topic). Re-fetching the
+	// analytical store flips the shared pointer back to the Window topic.
+	analyticalStore, err := a.storeManager.GetAnalyticalStore(projectID)
+	if err != nil {
+		return fmt.Errorf("failed to get analytical store: %w", err)
+	}
+	for _, e := range emits {
+		// Re-assert Window topic on each emit (the shared pointer may have been
+		// left on Global by the query phase).
+		e.store.SetTopicID(manager.AnalyticalTopicID(projectID))
+		if err := a.emitFactFromTemplate(analyticalStore, e.result, e.tmpl); err != nil {
+			logger.Warn("Failed to emit fact for template", "template", e.tmpl.ID, "error", err)
 		}
 	}
 
