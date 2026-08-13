@@ -116,7 +116,7 @@ func (ts *TemplateStore) parseTemplateFile(content string) ([]*QueryTemplate, er
 	// Extract query templates
 	// Format: query("name", A, B) :- triples(...).
 	queryPattern := regexp.MustCompile(`query\s*\(\s*"([^"]+)"\s*,([^:]+)\)\s*:-`)
-	queryMatches := queryPattern.FindAllStringSubmatch(content, -1)
+	queryMatches := queryPattern.FindAllStringSubmatchIndex(content, -1)
 
 	// Collect names that already have a template from metadata
 	hasMetadataTemplate := make(map[string]bool)
@@ -124,24 +124,20 @@ func (ts *TemplateStore) parseTemplateFile(content string) ([]*QueryTemplate, er
 		hasMetadataTemplate[t.ID] = true
 	}
 
-	for _, match := range queryMatches {
-		name := match[1]
-		vars := strings.TrimSpace(match[2])
+	for _, loc := range queryMatches {
+		name := content[loc[2]:loc[3]]
+		vars := strings.TrimSpace(content[loc[4]:loc[5]])
 
 		meta, ok := metaMap[name]
 		if !ok {
 			meta = make(map[string]string)
 		}
 
-		// Extract template body by finding the rule body after :-
-		rulePattern := regexp.MustCompile(fmt.Sprintf(`query\s*\(\s*"%s"\s*,%s\)\s*:-(.+)`, regexp.QuoteMeta(name), regexp.QuoteMeta(vars)))
-		ruleMatch := rulePattern.FindStringSubmatch(content)
-		var body string
-		if len(ruleMatch) > 1 {
-			body = strings.TrimSpace(ruleMatch[1])
-			// Clean up the body - remove trailing period if present
-			body = strings.TrimSuffix(body, ".")
-		}
+		// Extract the rule body: the text after ":-" up to the terminating "."
+		// (a period at end of line or EOF). Rule bodies commonly span multiple
+		// lines, so a simple `:-:-(.+)` regex (which cannot cross newlines)
+		// would silently drop them.
+		body := findRuleBody(content[loc[1]:])
 
 		// Skip if body is empty (means template metadata already provided the template)
 		if body == "" {
@@ -156,6 +152,8 @@ func (ts *TemplateStore) parseTemplateFile(content string) ([]*QueryTemplate, er
 		tmpl := &QueryTemplate{
 			ID:          name,
 			Body:        body,
+			Predicate:   meta["Predicate"],
+			SmellType:   meta["smell_type"],
 			Category:    meta["category"],
 			Severity:    meta["severity"],
 			Description: meta["description"],
@@ -166,6 +164,23 @@ func (ts *TemplateStore) parseTemplateFile(content string) ([]*QueryTemplate, er
 	}
 
 	return templates, nil
+}
+
+// findRuleBody extracts a rule body from the text following ":-" up to the
+// terminating "." — the first period at end-of-line (or EOF). The body may span
+// multiple lines; the final body line ends with ".".
+func findRuleBody(s string) string {
+	lines := strings.Split(s, "\n")
+	var parts []string
+	for _, line := range lines {
+		parts = append(parts, line)
+		if strings.HasSuffix(strings.TrimRight(line, " \t"), ".") {
+			body := strings.Join(parts, "\n")
+			return strings.TrimSpace(strings.TrimSuffix(body, "."))
+		}
+	}
+	// No terminating period found: take the whole remainder.
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 // extractParameters extracts parameter names from query variable list.

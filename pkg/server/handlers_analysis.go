@@ -281,8 +281,8 @@ func (s *Server) handleHealthSummaryV2(c *gin.Context) {
 		}
 	}
 
-	// Smells: triples(Subject, "has_smell", Object)
-	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("smell")); err == nil {
+	// Smells: triples(Subject, "has_smell_type", Type) — canonical smell predicate
+	if results, err := mebpkg.Query(c.Request.Context(), analyticalStore, common.GetNamedQuery("smell_type")); err == nil {
 		for _, r := range results {
 			subject, _ := r["Subject"].(string)
 			object, _ := r["Object"].(string)

@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
-	mebpkg "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/logger"
+	mebpkg "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/meb"
 )
 
@@ -40,7 +41,9 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 		}
 	}
 
-	// Write hub score facts for files with multiple callers
+	// Write hub score facts for files with multiple callers.
+	// Written to BOTH stores: the Analytical Store is canonical, but templates
+	// (smell_hub) execute against the Source Store.
 	for file, count := range callerCounts {
 		if count > config.HubClassificationThreshold {
 			fact := meb.Fact{
@@ -51,24 +54,35 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 			if err := analyticalStore.AddFact(fact); err != nil {
 				logger.Warn("Failed to add hub score", "file", file, "error", err)
 			}
+			if err := sourceStore.AddFact(fact); err != nil {
+				logger.Warn("Failed to add hub score to source store", "file", file, "error", err)
+			}
 		}
 	}
 
-	// Compute entry points - files that define main, init, or have many callees
-	entryResults, err := mebpkg.Query(ctx, sourceStore, common.GetNamedQuery("entry_candidates"))
-	if err != nil {
-		logger.Warn("Entry point query failed", "error", err)
-	} else {
-		for _, r := range entryResults {
-			if file, ok := r["File"].(string); ok {
-				fact := meb.Fact{
-					Subject:   file,
-					Predicate: "is_entry_point",
-					Object:    "true",
-				}
-				if err := analyticalStore.AddFact(fact); err != nil {
-					logger.Warn("Failed to add entry point", "file", file, "error", err)
-				}
+	// Compute entry points - files that define main/init. Done in Go because the
+	// original `or(contains(Symbol, "main"), contains(Symbol, "init"))` named
+	// query uses or() which the meb query layer rejects loudly (contract.md §5).
+	entryCount := 0
+	for fact := range sourceStore.ScanContext(ctx, "", config.PredicateDefines, "") {
+		fileID := fact.Subject
+		if strings.Contains(fileID, ":") {
+			continue
+		}
+		symID, ok := fact.Object.(string)
+		if !ok {
+			continue
+		}
+		name := common.ExtractSymbolName(symID)
+		if name == "main" || name == "init" {
+			entryCount++
+			fact := meb.Fact{
+				Subject:   fileID,
+				Predicate: "is_entry_point",
+				Object:    "true",
+			}
+			if err := analyticalStore.AddFact(fact); err != nil {
+				logger.Warn("Failed to add entry point", "file", fileID, "error", err)
 			}
 		}
 	}
@@ -101,7 +115,7 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 		}
 	}
 
-	logger.Info("Centrality analysis complete", "hub_files", len(callerCounts), "entry_points", len(entryResults))
+	logger.Info("Centrality analysis complete", "hub_files", len(callerCounts), "entry_points", entryCount)
 
 	// Write degree facts for ALL symbols (not just high-centrality ones)
 	// This enables Datalog queries for surprise scoring and knowledge gap analysis
@@ -118,6 +132,10 @@ func (a *Analyzer) computeCentrality(ctx context.Context, projectID string) erro
 }
 
 // writeDegreeFacts computes in/out degree for all symbols and writes as facts.
+// Facts are written to BOTH stores: the Analytical Store is the canonical home,
+// but executeRulesFromTemplates runs template bodies against the Source Store, and
+// templates like smell_hub, gap_isolated, surprise_peripheral_hub and
+// okf_hub_anomaly query has_in_degree/has_out_degree (see analyzer_analysis.go).
 func (a *Analyzer) writeDegreeFacts(ctx context.Context, sourceStore, analyticalStore *meb.MEBStore) error {
 	inDegree := make(map[string]int)
 	outDegree := make(map[string]int)
@@ -164,6 +182,11 @@ func (a *Analyzer) writeDegreeFacts(ctx context.Context, sourceStore, analytical
 
 	factCount := 0
 	for sym := range allSymbols {
+		if sym == "" {
+			// Some call facts carry empty subject/object strings (garbage rows
+			// from deleted symbols). Skip them instead of erroring on AddFact.
+			continue
+		}
 		in := inDegree[sym]
 		out := outDegree[sym]
 
@@ -173,12 +196,18 @@ func (a *Analyzer) writeDegreeFacts(ctx context.Context, sourceStore, analytical
 		} else {
 			factCount++
 		}
+		if err := sourceStore.AddFact(inFact); err != nil {
+			logger.Warn("Failed to add in_degree fact to source store", "symbol", sym, "error", err)
+		}
 
 		outFact := meb.Fact{Subject: sym, Predicate: "has_out_degree", Object: fmt.Sprintf("%d", out)}
 		if err := analyticalStore.AddFact(outFact); err != nil {
 			logger.Warn("Failed to add out_degree fact", "symbol", sym, "error", err)
 		} else {
 			factCount++
+		}
+		if err := sourceStore.AddFact(outFact); err != nil {
+			logger.Warn("Failed to add out_degree fact to source store", "symbol", sym, "error", err)
 		}
 	}
 
@@ -234,6 +263,177 @@ func (a *Analyzer) writeOKFAgeDays(ctx context.Context, sourceStore *meb.MEBStor
 	}
 
 	logger.Debug("OKF age days facts written", "facts", factCount)
+	return nil
+}
+
+// writeFileStats computes per-file import/define counts and flags god files
+// ("excessive" imports/defines). Thresholds mirror the design doc
+// (docs/designs/architecture-smell-detection.md): >30 defines, >50 imports.
+// Facts are written to the Source Store so the smell_god_file template fires.
+func (a *Analyzer) writeFileStats(ctx context.Context, sourceStore *meb.MEBStore) error {
+	importCount := make(map[string]int)
+	defineCount := make(map[string]int)
+
+	for fact := range sourceStore.ScanContext(ctx, "", config.PredicateImports, "") {
+		if !strings.Contains(fact.Subject, ":") {
+			importCount[fact.Subject]++
+		}
+	}
+	for fact := range sourceStore.ScanContext(ctx, "", config.PredicateDefines, "") {
+		if !strings.Contains(fact.Subject, ":") {
+			defineCount[fact.Subject]++
+		}
+	}
+
+	factCount := 0
+	for file, count := range importCount {
+		if count > config.GodFileImportThreshold {
+			f := meb.Fact{Subject: file, Predicate: "has_import_count", Object: "excessive"}
+			if err := sourceStore.AddFact(f); err != nil {
+				logger.Warn("Failed to add has_import_count", "file", file, "error", err)
+			} else {
+				factCount++
+			}
+		}
+	}
+	for file, count := range defineCount {
+		if count > config.GodFileDefineThreshold {
+			f := meb.Fact{Subject: file, Predicate: "has_define_count", Object: "excessive"}
+			if err := sourceStore.AddFact(f); err != nil {
+				logger.Warn("Failed to add has_define_count", "file", file, "error", err)
+			} else {
+				factCount++
+			}
+		}
+	}
+
+	logger.Debug("File stats written", "facts", factCount, "god_imports", len(importCount), "god_defines", len(defineCount))
+	return nil
+}
+
+// writeThinCommunities flags clusters with fewer than minMembers nodes as thin
+// communities (knowledge gap). Replaces the gap_thin_community template, which
+// used `Count = 1` (aggregation the meb query layer cannot express).
+func (a *Analyzer) writeThinCommunities(ctx context.Context, sourceStore, analyticalStore *meb.MEBStore) error {
+	members := make(map[string]int)
+	for fact := range sourceStore.ScanContext(ctx, "", "belongs_to_cluster", "") {
+		if obj, ok := fact.Object.(string); ok {
+			members[obj]++
+		}
+	}
+
+	const minMembers = 3
+	factCount := 0
+	for cluster, count := range members {
+		if count < minMembers {
+			// Emit on each member node so consumers can group by cluster.
+			for fact := range sourceStore.ScanContext(ctx, "", "belongs_to_cluster", cluster) {
+				f := meb.Fact{Subject: fact.Subject, Predicate: "has_knowledge_gap", Object: "thin"}
+				if err := analyticalStore.AddFact(f); err != nil {
+					logger.Warn("Failed to add thin community", "node", fact.Subject, "error", err)
+				} else {
+					factCount++
+				}
+			}
+		}
+	}
+
+	logger.Debug("Thin communities written", "facts", factCount, "clusters", len(members))
+	return nil
+}
+
+// computeSurpriseScores scores call edges by how "surprising" the coupling is.
+// Replaces the surprise_score/surprise_top/surprise_hotspot templates, which
+// used `Score = 1` / `Count > 0` (aggregation the meb query layer cannot express).
+// Each surprise flag adds to an edge score; per-file totals are also recorded.
+func (a *Analyzer) computeSurpriseScores(ctx context.Context, projectID string) error {
+	sourceStore, err := a.storeManager.GetSourceStore(projectID)
+	if err != nil {
+		return err
+	}
+	analyticalStore, err := a.storeManager.GetAnalyticalStore(projectID)
+	if err != nil {
+		return err
+	}
+
+	clusterOf := make(map[string]string)
+	for fact := range sourceStore.ScanContext(ctx, "", "belongs_to_cluster", "") {
+		if obj, ok := fact.Object.(string); ok {
+			clusterOf[fact.Subject] = obj
+		}
+	}
+	langOf := make(map[string]string)
+	for fact := range sourceStore.ScanContext(ctx, "", config.PredicateHasLanguage, "") {
+		if obj, ok := fact.Object.(string); ok {
+			langOf[fact.Subject] = obj
+		}
+	}
+	isTest := make(map[string]bool)
+	for fact := range sourceStore.ScanContext(ctx, "", "is_test_symbol", "true") {
+		isTest[fact.Subject] = true
+	}
+	outDegree := make(map[string]int)
+	for fact := range sourceStore.ScanContext(ctx, "", "has_out_degree", "") {
+		if obj, ok := fact.Object.(string); ok {
+			var n int
+			if _, err := fmt.Sscanf(obj, "%d", &n); err == nil {
+				outDegree[fact.Subject] = n
+			}
+		}
+	}
+
+	edgeScore := make(map[string]map[string]int) // subject -> target -> score
+	fileScore := make(map[string]int)            // file (in_file of subject) -> total score
+
+	for fact := range sourceStore.ScanContext(ctx, "", config.PredicateCalls, "") {
+		target, ok := fact.Object.(string)
+		if !ok || target == "" {
+			continue
+		}
+		src := fact.Subject
+		score := 0
+		if clusterOf[src] != "" && clusterOf[target] != "" && clusterOf[src] != clusterOf[target] {
+			score++
+		}
+		if langOf[src] != "" && langOf[target] != "" && langOf[src] != langOf[target] {
+			score++
+		}
+		if !isTest[src] && isTest[target] {
+			score += 2
+		}
+		if outDegree[src] == 0 && outDegree[target] > 0 {
+			score++
+		}
+		if score == 0 {
+			continue
+		}
+		if edgeScore[src] == nil {
+			edgeScore[src] = make(map[string]int)
+		}
+		edgeScore[src][target] = score
+
+		if edgeFact := (meb.Fact{
+			Subject:   src,
+			Predicate: "has_surprise_score",
+			Object:    fmt.Sprintf("%d", score),
+		}); analyticalStore.AddFact(edgeFact) != nil {
+			// best-effort; individual failure not fatal
+		}
+
+		// Attribute to the file containing src (surprise_hotspot aggregation).
+		for ff := range sourceStore.ScanContext(ctx, "", "in_file", src) {
+			fileScore[ff.Subject] += score
+		}
+	}
+
+	// Emit per-file hotspot facts (surprise_hotspot replacement).
+	for file, total := range fileScore {
+		if f := (meb.Fact{Subject: file, Predicate: "has_surprise", Object: fmt.Sprintf("hotspot_%d", total)}); analyticalStore.AddFact(f) != nil {
+			// best-effort
+		}
+	}
+
+	logger.Debug("Surprise scores computed", "edges", len(edgeScore), "files", len(fileScore))
 	return nil
 }
 

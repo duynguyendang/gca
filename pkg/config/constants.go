@@ -155,9 +155,11 @@ const (
 // Hub and analysis thresholds
 const (
 	HubClassificationThreshold     = 5  // Min callers to classify as hub
-	ComplexityHigh           = 15 // Cyclomatic complexity threshold for high
-	ComplexityVeryHigh       = 25 // Cyclomatic complexity threshold for very high
+	ComplexityHigh                 = 15 // Cyclomatic complexity threshold for high
+	ComplexityVeryHigh             = 25 // Cyclomatic complexity threshold for very high
 	CentralityHighConnectThreshold = 10 // Min calls to flag high-connectivity symbol
+	GodFileImportThreshold         = 50 // Min imports to flag god file (excessive imports)
+	GodFileDefineThreshold         = 30 // Min definitions to flag god file (excessive defines)
 )
 
 // Virtual Attention Sink configuration
@@ -165,45 +167,6 @@ const (
 	VirtualAttentionThreshold = 0.05  // Minimum centrality score (0-1) to include symbol
 	MaxAttentionSymbols       = 8     // Maximum symbols to include in prompt context
 	StickyOnlyMode            = false // If true, query only GlobalTopicID (skip Window)
-)
-
-// Smell weight constants — must match policies/smells/scoring.mg
-// Deprecated: Use SmellRegistry.Weight() instead. These constants are defined
-// in policies/smells/scoring.mg and read dynamically at handler time.
-const (
-	SmellWeightCircularDependency = 10
-	SmellWeightCircularTransitive = 15
-	SmellWeightLayerViolation     = 8
-	SmellWeightGodFile            = 6
-	SmellWeightHubAnomaly         = 4
-	SmellWeightUnsanitizedDB      = 50
-	SmellWeightDefault            = 2
-)
-
-// Datalog query constants
-// Deprecated: Use common.GetNamedQuery(name) instead. These constants are
-// defined in policies/queries.mg and loaded dynamically at runtime.
-// They remain here for backward compatibility but new code should use
-// common.GetNamedQuery().
-const (
-	QuerySmellType      = `triples(Subject, "has_smell_type", Type)`
-	QuerySmellSeverity  = `triples(Subject, "has_smell_severity", Severity)`
-	QuerySmell          = `triples(Subject, "has_smell", Object)`
-	QueryHubScore       = `triples(Subject, "has_hub_score", Score)`
-	QueryEntryPoint     = `triples(Subject, "is_entry_point", "true")`
-	QueryCentrality     = `triples(Subject, "has_centrality", Score)`
-	QueryInDegree       = `triples(Subject, "has_in_degree", Degree)`
-	QueryOutDegree      = `triples(Subject, "has_out_degree", Degree)`
-	QueryCluster        = `triples(Subject, "belongs_to_cluster", Cluster)`
-	QueryHealthDebt     = `triples(Subject, "has_health_debt", Debt)`
-	QueryHealthScore    = `triples(Subject, "has_health_score", Score)`
-	QuerySurprise       = `triples(Subject, "has_surprise", Type), triples(Subject, "calls", Target)`
-	QuerySurpriseScore  = `triples(Subject, "has_surprise_score", ScoreStr)`
-	QueryInDegreeShort  = `triples(S, "has_in_degree", D)`
-	QueryOutDegreeShort = `triples(S, "has_out_degree", D)`
-	QueryClusterShort   = `triples(S, "belongs_to_cluster", C)`
-	QueryTestSymbol     = `triples(S, "is_test_symbol", "true")`
-	QueryInFile         = `triples(S, "in_file", F)`
 )
 
 // SkippedDirectories lists directory names excluded from filesystem walks during ingestion.

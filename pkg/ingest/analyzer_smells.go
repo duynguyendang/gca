@@ -4,9 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/duynguyendang/gca/pkg/config"
-	mebpkg "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/logger"
+	mebpkg "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/meb"
 )
 
@@ -92,73 +91,5 @@ func (a *Analyzer) emitStructuredFact(store *meb.MEBStore, result map[string]any
 		}
 	}
 
-	return nil
-}
-
-// computeHealthScores executes scoring.mg rules against the Analytical Store
-// and writes pre-computed health scores and debt facts.
-func (a *Analyzer) computeHealthScores(ctx context.Context, projectID string) error {
-	analyticalStore, err := a.storeManager.GetAnalyticalStore(projectID)
-	if err != nil {
-		return fmt.Errorf("failed to get analytical store: %w", err)
-	}
-
-	healthDebtQuery := `health_debt_with_hub(File, Total)`
-	results, err := mebpkg.Query(ctx, analyticalStore, healthDebtQuery)
-	if err != nil {
-		return fmt.Errorf("health_debt query failed: %w", err)
-	}
-
-	debtCount := 0
-	for _, r := range results {
-		file, ok := r["File"].(string)
-		if !ok || file == "" {
-			continue
-		}
-		total, ok := r["Total"].(float64)
-		if !ok {
-			continue
-		}
-		fact := meb.Fact{
-			Subject:   file,
-			Predicate: config.PredicateHasHealthDebt,
-			Object:    fmt.Sprintf("%.0f", total),
-		}
-		if err := analyticalStore.AddFact(fact); err != nil {
-			logger.Warn("Failed to add health_debt fact", "file", file, "error", err)
-		} else {
-			debtCount++
-		}
-	}
-
-	healthScoreQuery := `health_score(File, Score)`
-	scoreResults, err := mebpkg.Query(ctx, analyticalStore, healthScoreQuery)
-	if err != nil {
-		return fmt.Errorf("health_score query failed: %w", err)
-	}
-
-	scoreCount := 0
-	for _, r := range scoreResults {
-		file, ok := r["File"].(string)
-		if !ok || file == "" {
-			continue
-		}
-		score, ok := r["Score"].(float64)
-		if !ok {
-			continue
-		}
-		fact := meb.Fact{
-			Subject:   file,
-			Predicate: config.PredicateHasHealthScore,
-			Object:    fmt.Sprintf("%.0f", score),
-		}
-		if err := analyticalStore.AddFact(fact); err != nil {
-			logger.Warn("Failed to add health_score fact", "file", file, "error", err)
-		} else {
-			scoreCount++
-		}
-	}
-
-	logger.Info("Health scores computed", "debt_facts", debtCount, "score_facts", scoreCount)
 	return nil
 }
