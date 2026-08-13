@@ -542,6 +542,26 @@ func (e *TreeSitterExtractor) processSymbols(bundle *AnalysisBundle, symbols []S
 			})
 		}
 
+		// Complexity + duplication: only for func/method bodies.
+		if sym.Type == TypeFunction || sym.Type == TypeMethod {
+			complexity := countBranchKeywords(sym.Content)
+			if complexity > 0 {
+				bundle.Facts = append(bundle.Facts, meb.Fact{
+					Subject:   string(sym.ID),
+					Predicate: "has_complexity",
+					Object:    complexity,
+				})
+			}
+			normalized := normalizeBody(sym.Content)
+			if len(normalized) > 20 {
+				bundle.Facts = append(bundle.Facts, meb.Fact{
+					Subject:   string(sym.ID),
+					Predicate: "has_body_hash",
+					Object:    hashNormalizedBody(normalized),
+				})
+			}
+		}
+
 		if sym.DocComment != "" {
 			bundle.Facts = append(bundle.Facts, meb.Fact{
 				Subject:   string(sym.ID),

@@ -131,6 +131,12 @@ func (a *Analyzer) RunPostIngestAnalysis(ctx context.Context, projectID string) 
 		logger.Warn("Dead-code detection failed", "error", err)
 	}
 
+	// Duplicate detection groups functions by body hash and flags
+	// files containing identical function bodies.
+	if err := a.detectDuplicates(ctx, projectID); err != nil {
+		logger.Warn("Duplicate detection failed", "error", err)
+	}
+
 	// Write okf_age_days facts so the stale smell policy (stale.mg) can fire.
 	sourceStore, srcErr := a.storeManager.GetSourceStore(projectID)
 	if srcErr == nil {

@@ -155,6 +155,8 @@ const (
 // Hub and analysis thresholds
 const (
 	HubClassificationThreshold     = 5  // Min callers to classify as hub
+	ComplexityHigh           = 15 // Cyclomatic complexity threshold for high
+	ComplexityVeryHigh       = 25 // Cyclomatic complexity threshold for very high
 	CentralityHighConnectThreshold = 10 // Min calls to flag high-connectivity symbol
 )
 
