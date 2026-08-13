@@ -235,6 +235,28 @@ func (s *Server) registerTools(ms *mcpserver.MCPServer) {
 			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID"))),
 		s.handleListSmells,
 	)
+	// Analysis tools (F1+ data)
+	ms.AddTool(
+		mcp.NewTool("list_high_complexity",
+			mcp.WithDescription("List functions/methods with cyclomatic complexity above a threshold. Reads has_complexity facts from the Source Store."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithNumber("threshold", mcp.Description("Minimum complexity (default 15)")),
+			mcp.WithNumber("limit", mcp.Description("Max results (default 50)"))),
+		s.handleListHighComplexity,
+	)
+	ms.AddTool(
+		mcp.NewTool("list_duplicate_groups",
+			mcp.WithDescription("List groups of functions with identical normalized bodies (same has_body_hash). Reads from Source Store."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithNumber("limit", mcp.Description("Max groups (default 50)"))),
+		s.handleListDuplicateGroups,
+	)
+	ms.AddTool(
+		mcp.NewTool("project_health_overview",
+			mcp.WithDescription("Comprehensive health overview: dead code, high complexity, duplicates, hubs, entry points, and overall score."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID"))),
+		s.handleProjectHealthOverview,
+	)
 
 	// Semantic search + agent (require AI service)
 	if s.aiSvc != nil {

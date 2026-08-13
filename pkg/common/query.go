@@ -54,6 +54,11 @@ var NamedQueries = map[string]string{
 	"okf_concept_links":   `triples(Concept, "okf_link", Target)`,
 	"okf_concept_bridges": `triples(Concept, "bridges_to", Symbol)`,
 	"bridges_to":          `triples(Concept, "bridges_to", Symbol)`,
+
+	// Complexity + duplication (F1)
+	"complexity":    `triples(Subject, "has_complexity", Complexity)`,
+	"body_hash":     `triples(Subject, "has_body_hash", Hash)`,
+	"duplicate_of":  `triples(Subject, "has_duplicate_of", Target)`,
 }
 
 // GetNamedQuery returns the Datalog string for a named query.
