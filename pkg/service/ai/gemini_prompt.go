@@ -68,19 +68,15 @@ func (s *AIService) BuildDiagnosticContext(ctx context.Context, projectID string
 	}
 
 	// Query for smells
-	smellQuery := common.GetNamedQuery("smell")
+	smellQuery := common.GetNamedQuery("smell_type")
 	smellResults, err := gcamdb.Query(ctx, analyticalStore, smellQuery)
 	if err == nil && len(smellResults) > 0 {
 		sb.WriteString("Architectural Issues:\n")
 		count := 0
 		for _, r := range smellResults {
 			subject, _ := r["Subject"].(string)
-			object, _ := r["Object"].(string)
-			if subject != "" && object != "" && count < 10 {
-				smellType := object
-				if idx := strings.Index(object, ":"); idx > 0 {
-					smellType = object[:idx]
-				}
+			smellType, _ := r["Type"].(string)
+			if subject != "" && smellType != "" && count < 10 {
 				sb.WriteString(fmt.Sprintf("- %s (%s)\n", subject, smellType))
 				count++
 			}

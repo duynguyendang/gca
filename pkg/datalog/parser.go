@@ -54,7 +54,7 @@ func Parse(query string) ([]Atom, error) {
 			rhs := strings.TrimSpace(parts[1])
 			parsedAtoms = append(parsedAtoms, Atom{
 				Predicate: "neq",
-				Args:      []string{lhs, rhs},
+				Args:      []string{lhs, cleanSugarArg(rhs)},
 			})
 			continue
 		}
@@ -76,7 +76,7 @@ func Parse(query string) ([]Atom, error) {
 					rhs := strings.TrimSpace(parts[1])
 					parsedAtoms = append(parsedAtoms, Atom{
 						Predicate: comp.predicate,
-						Args:      []string{lhs, rhs},
+						Args:      []string{lhs, cleanSugarArg(rhs)},
 					})
 					break
 				}
@@ -102,6 +102,16 @@ func Parse(query string) ([]Atom, error) {
 	}
 
 	return parsedAtoms, nil
+}
+
+// cleanSugarArg strips surrounding quotes from a comparison literal
+// (e.g. `"a.go"` → `a.go`) so constraint checkers compare raw values.
+func cleanSugarArg(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 && ((s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'')) {
+		return s[1 : len(s)-1]
+	}
+	return s
 }
 
 // parseAtomString parses "predicate(arg1, arg2, ...)"

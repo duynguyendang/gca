@@ -1,4 +1,16 @@
-% Composite Severity Scoring — Health Debt Calculation
+% Health scoring weights.
+%
+% The smell_weight/2 facts below are the SINGLE SOURCE OF TRUTH for health
+% scoring weights. They are read by:
+%   • pkg/common.LoadSmellWeights → analyzer_scoring.go:computeHealthScores
+%     (Go-side pass that writes has_health_debt / has_health_score).
+%   • pkg/registry/smell_registry.go (SmellRegistry policy fallback).
+%
+% The old Datalog rules below used derived predicates (file_has_smell,
+% smell_weight, hub_high, health_debt_with_hub) plus `not <derived>` atoms.
+% mebpkg.Query is a triple-store evaluator: derived predicates are NOT stored as
+% facts, so those rule bodies would error loudly (docs/designs/contract.md §5).
+% The Go scorer implements the same semantics — see analyzer_scoring.go.
 
 query_metadata("scoring_health_debt", "category", "scoring").
 query_metadata("scoring_health_debt", "severity", "high").
@@ -18,34 +30,6 @@ smell_weight("high_complexity", 8).
 smell_weight("duplicate_code", 4).
 smell_weight("unsanitized_db_access", 50).
 smell_weight("security_risk", 50).
-
-hub_high(File) :- triples(File, "has_hub_score", "high").
-
-file_has_smell(File, SmellType) :- triples(File, "has_smell", SmellType).
-
-file_smell_weight(File, Weight) :-
-  file_has_smell(File, SmellType),
-  smell_weight(SmellType, Weight).
-
-file_smell_weight(File, 0) :-
-  file_has_smell(File, SmellType),
-  not smell_weight(SmellType, _).
-
-health_debt_with_hub(File, Total) :-
-  file_smell_weight(File, Weight),
-  Weight > 0,
-  Total #= Weight + (hub_high(File) ? 5 : 0).
-
-health_debt_with_hub(File, Total) :-
-  file_smell_weight(File, Weight),
-  Weight > 0,
-  not hub_high(File),
-  Total #= Weight.
-
-health_score(File, Score) :-
-  health_debt_with_hub(File, Debt),
-  Score #= 100 - Debt.
-
-health_score(File, 100) :-
-  not file_has_smell(File, _),
-  not hub_high(File).
+smell_weight("hardcoded_secret", 50).
+smell_weight("insecure_crypto", 40).
+smell_weight("missing_error_check", 30).

@@ -165,10 +165,16 @@ query_metadata("smell_weight", "template", "triples(Name, \"smell_weight\", Weig
 % ---- Analyzer queries ----
 
 query_metadata("hub_candidates", "Find files that call other symbols (hub detection)").
-query_metadata("hub_candidates", "template", "triples(File, \"calls\", _), not contains(File, \":\")").
+query_metadata("hub_candidates", "template", "triples(File, \"calls\", _)").
+% NOTE: The `_` object is a true wildcard in the meb query layer. Original template had
+% `not contains(File, ":")` — now supported too, but caller-filtering is done in Go-side
+% computeCentrality() so the wildcard form is sufficient.
 
 query_metadata("entry_candidates", "Find files that define main/init (entry point detection)").
-query_metadata("entry_candidates", "template", "triples(File, \"defines\", Symbol), or(contains(Symbol, \"main\"), contains(Symbol, \"init\"))").
+% NOTE: Original had `or(contains(Symbol, "main"), contains(Symbol, "init"))`.
+% `or()` is NOT supported by the meb query layer and errors loudly. Entry-point detection
+% is done in Go via analyzer.computeCentrality() which writes has_is_main/has_is_init facts.
+% This template is kept for reference but not used by centrality computation.
 
 query_metadata("symbol_calls", "Find call edges through file-defined symbols (centrality)").
 query_metadata("symbol_calls", "template", "triples(File, \"defines\", Symbol), triples(Symbol, \"calls\", Target)").

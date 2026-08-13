@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -171,7 +173,10 @@ func QueryWithLimit(ctx context.Context, store *meb.MEBStore, q string, limit in
 		}
 	}
 
-	results = applyConstraints(results, constraintAtoms)
+	results, err = applyConstraints(ctx, store, results, constraintAtoms)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(results) > limit {
 		results = results[:limit]
@@ -394,6 +399,10 @@ func buildLFTJRelations(store *meb.MEBStore, atoms []datalog.Atom) ([]query.Rela
 				resultVarsSet[varName] = true
 			} else {
 				strVal := resolveArg(arg)
+				if strVal == "" {
+					// Wildcard ('_' or empty) — neither bound nor a result variable.
+					continue
+				}
 				dictID, found := store.LookupID(strVal)
 				if !found {
 					logger.Warn("Dictionary lookup failed for atom, skipping", "value", strVal, "atom", atom)
@@ -424,20 +433,34 @@ func buildLFTJRelations(store *meb.MEBStore, atoms []datalog.Atom) ([]query.Rela
 	return relations, resultVars, nil
 }
 
-func applyConstraints(results []map[string]any, constraintAtoms []datalog.Atom) []map[string]any {
+// applyConstraints filters result rows by the query's constraint atoms
+// (eq/neq/gt/gte/lt/lte/contains/regex/not). Unsupported constraint atoms
+// fail loudly instead of being silently dropped — a silent drop silently
+// produces wrong results (see docs/designs/contract.md §5).
+func applyConstraints(ctx context.Context, store *meb.MEBStore, results []map[string]any, constraintAtoms []datalog.Atom) ([]map[string]any, error) {
 	if len(constraintAtoms) == 0 {
-		return results
+		return results, nil
+	}
+
+	for _, atom := range constraintAtoms {
+		if err := checkConstraintAtom(atom); err != nil {
+			return nil, err
+		}
 	}
 
 	filtered := make([]map[string]any, 0, len(results))
 
 	for _, result := range results {
-		if matchesConstraints(result, constraintAtoms) {
+		ok, err := matchesConstraints(ctx, store, result, constraintAtoms)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			filtered = append(filtered, result)
 		}
 	}
 
-	return filtered
+	return filtered, nil
 }
 
 type constraintChecker func(val any, constraint string) bool
@@ -482,24 +505,202 @@ func compareNumeric(val any, constraintStr string, op string) bool {
 	return false
 }
 
-func matchesConstraints(result map[string]any, constraints []datalog.Atom) bool {
-	for _, atom := range constraints {
+// checkConstraintAtom validates that a constraint atom can be evaluated.
+// Unknown or structurally unsupported atoms return an error so the caller
+// can fail loudly rather than silently dropping the constraint.
+func checkConstraintAtom(atom datalog.Atom) error {
+	pred := atom.Predicate
+
+	if _, ok := constraintCheckers[pred]; ok {
+		return nil
+	}
+
+	switch {
+	case pred == "contains" || pred == "regex":
 		if len(atom.Args) < 2 {
-			continue
+			return fmt.Errorf("constraint %s(...) requires 2 arguments", pred)
 		}
-		checker, ok := constraintCheckers[atom.Predicate]
+		return nil
+	case pred == "not":
+		inner, err := notInnerAtom(atom)
+		if err != nil {
+			return err
+		}
+		return checkNotInner(inner)
+	case strings.HasPrefix(pred, "not "):
+		return checkNotInner(datalog.Atom{
+			Predicate: strings.TrimSpace(strings.TrimPrefix(pred, "not ")),
+			Args:      atom.Args,
+		})
+	case pred == "or":
+		return fmt.Errorf("constraint or(...) is not supported by the meb query layer: disjunction must be moved to a Go-side pass (see docs/designs/contract.md §5)")
+	default:
+		return fmt.Errorf("unsupported constraint atom %s(%v): the meb query layer supports triples + eq/neq/gt/gte/lt/lte/contains/regex/not only (see docs/designs/contract.md §5)", pred, atom.Args)
+	}
+}
+
+// checkNotInner validates the atom wrapped by a not(...) constraint.
+func checkNotInner(inner datalog.Atom) error {
+	if inner.Predicate == "triples" {
+		return nil
+	}
+	if _, ok := constraintCheckers[inner.Predicate]; ok {
+		return nil
+	}
+	switch inner.Predicate {
+	case "contains", "regex":
+		return checkConstraintAtom(inner)
+	case "not", "or":
+		return checkConstraintAtom(inner)
+	default:
+		return fmt.Errorf("cannot evaluate not(%s(...)): %q is a derived predicate that is not stored as facts; move negation to a Go-side pass (see docs/designs/contract.md §5)", inner.Predicate, inner.Predicate)
+	}
+}
+
+// notInnerAtom extracts the wrapped atom from a not(...) constraint.
+// Parse yields either Predicate=="not" with the inner atom string as the
+// first argument (`not(triples(...))`), or Predicate=="not triples" for the
+// `not triples(...)` sugar form.
+func notInnerAtom(atom datalog.Atom) (datalog.Atom, error) {
+	pred := atom.Predicate
+	if strings.HasPrefix(pred, "not ") {
+		inner := strings.TrimSpace(strings.TrimPrefix(pred, "not "))
+		if inner == "" {
+			return datalog.Atom{}, fmt.Errorf("malformed not constraint %s(...)", pred)
+		}
+		return datalog.Atom{Predicate: inner, Args: atom.Args}, nil
+	}
+	if len(atom.Args) == 0 {
+		return datalog.Atom{}, fmt.Errorf("malformed not() constraint with no arguments")
+	}
+	innerAtoms, err := datalog.Parse(atom.Args[0])
+	if err != nil {
+		return datalog.Atom{}, fmt.Errorf("failed to parse inner atom of not(): %w", err)
+	}
+	if len(innerAtoms) != 1 {
+		return datalog.Atom{}, fmt.Errorf("not() must wrap exactly one atom, got %d", len(innerAtoms))
+	}
+	return innerAtoms[0], nil
+}
+
+// matchesConstraints returns true if the result row satisfies all constraint atoms.
+func matchesConstraints(ctx context.Context, store *meb.MEBStore, result map[string]any, constraints []datalog.Atom) (bool, error) {
+	for _, atom := range constraints {
+		ok, err := evalConstraint(ctx, store, result, atom)
+		if err != nil {
+			return false, err
+		}
 		if !ok {
-			continue
-		}
-		varName := atom.Args[0]
-		constraintVal := atom.Args[1]
-		if val, ok := result[varName]; ok {
-			if !checker(val, constraintVal) {
-				return false
-			}
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
+}
+
+// evalConstraint evaluates a single constraint atom against a result row.
+// Variables not bound in the row evaluate to no-match (a conjunction atom
+// over an unbound variable cannot be satisfied for this row).
+func evalConstraint(ctx context.Context, store *meb.MEBStore, result map[string]any, atom datalog.Atom) (bool, error) {
+	pred := atom.Predicate
+
+	if checker, ok := constraintCheckers[pred]; ok {
+		if len(atom.Args) < 2 {
+			return false, fmt.Errorf("constraint %s(...) requires 2 arguments", pred)
+		}
+		val, ok := result[atom.Args[0]]
+		if !ok {
+			return false, nil
+		}
+		return checker(val, atom.Args[1]), nil
+	}
+
+	switch {
+	case pred == "contains" || pred == "regex":
+		return evalStringConstraint(result, atom)
+	case pred == "not":
+		inner, err := notInnerAtom(atom)
+		if err != nil {
+			return false, err
+		}
+		return evalNegation(ctx, store, result, inner)
+	case strings.HasPrefix(pred, "not "):
+		return evalNegation(ctx, store, result, datalog.Atom{
+			Predicate: strings.TrimSpace(strings.TrimPrefix(pred, "not ")),
+			Args:      atom.Args,
+		})
+	case pred == "or":
+		return false, fmt.Errorf("constraint or(...) is not supported by the meb query layer: disjunction must be moved to a Go-side pass (see docs/designs/contract.md §5)")
+	default:
+		return false, fmt.Errorf("unsupported constraint atom %s(%v): the meb query layer supports triples + eq/neq/gt/gte/lt/lte/contains/regex/not only (see docs/designs/contract.md §5)", pred, atom.Args)
+	}
+}
+
+// evalNegation evaluates a not(...) constraint. A triples inner atom is
+// checked store-aware (no matching fact exists for the row's bindings);
+// any other supported constraint is evaluated against the row and negated.
+func evalNegation(ctx context.Context, store *meb.MEBStore, result map[string]any, inner datalog.Atom) (bool, error) {
+	if inner.Predicate == "triples" {
+		subj, pred, obj := scanPattern(result, inner.Args)
+		return !factExists(ctx, store, subj, pred, obj), nil
+	}
+	matched, err := evalConstraint(ctx, store, result, inner)
+	if err != nil {
+		return false, err
+	}
+	return !matched, nil
+}
+
+// evalStringConstraint evaluates contains(var, substr) and regex(var, pattern).
+func evalStringConstraint(result map[string]any, atom datalog.Atom) (bool, error) {
+	if len(atom.Args) < 2 {
+		return false, fmt.Errorf("constraint %s(...) requires 2 arguments", atom.Predicate)
+	}
+	val, ok := result[atom.Args[0]]
+	if !ok {
+		return false, nil
+	}
+	s := fmt.Sprintf("%v", val)
+
+	switch atom.Predicate {
+	case "contains":
+		return strings.Contains(s, atom.Args[1]), nil
+	case "regex":
+		re, err := regexp.Compile(atom.Args[1])
+		if err != nil {
+			return false, fmt.Errorf("invalid regex %q in regex(%s, ...): %w", atom.Args[1], atom.Args[0], err)
+		}
+		return re.MatchString(s), nil
+	}
+	return false, fmt.Errorf("unknown string constraint %s", atom.Predicate)
+}
+
+// scanPattern builds a ScanContext pattern from a triples atom's args,
+// substituting row-bound variables and treating unbound variables and '_'
+// as wildcards.
+func scanPattern(result map[string]any, args []string) (string, string, string) {
+	pat := make([]string, 3)
+	for i := 0; i < 3 && i < len(args); i++ {
+		arg := args[i]
+		if isVariable(arg) {
+			if val, ok := result[arg]; ok {
+				pat[i] = fmt.Sprintf("%v", val)
+			}
+		} else if arg != "_" {
+			pat[i] = resolveArg(arg)
+		}
+	}
+	return pat[0], pat[1], pat[2]
+}
+
+// factExists reports whether any fact matches the given (possibly partial)
+// scan pattern. Empty strings and unbound positions act as wildcards.
+func factExists(ctx context.Context, store *meb.MEBStore, subj, pred, obj string) bool {
+	for item := range scanFacts(ctx, store, subj, pred, obj) {
+		if item.Err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func isVariable(arg string) bool {
@@ -507,6 +708,9 @@ func isVariable(arg string) bool {
 }
 
 func resolveArg(arg string) string {
+	if arg == "_" {
+		return ""
+	}
 	if len(arg) >= 2 && arg[0] == '"' && arg[len(arg)-1] == '"' {
 		return arg[1 : len(arg)-1]
 	}

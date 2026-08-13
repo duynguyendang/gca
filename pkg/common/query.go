@@ -10,9 +10,8 @@ import (
 // queries. To add a new query, add it to policies/queries.mg first, then
 // add a corresponding entry here.
 var NamedQueries = map[string]string{
-	"smell_type":       `triples(Subject, "has_smell_type", Type)`,
-	"smell_severity":   `triples(Subject, "has_smell_severity", Severity)`,
-	"smell":            `triples(Subject, "has_smell", Object)`,
+	"smell_type":     `triples(Subject, "has_smell_type", Type)`,
+	"smell_severity": `triples(Subject, "has_smell_severity", Severity)`,
 	"hub_score":        `triples(Subject, "has_hub_score", Score)`,
 	"entry_point":      `triples(Subject, "is_entry_point", "true")`,
 	"centrality":       `triples(Subject, "has_centrality", Score)`,

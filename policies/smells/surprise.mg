@@ -49,34 +49,17 @@ query("surprise_cross_language", Source, Target) :-
 
 query("surprise_cross_test_boundary", Source, Target) :-
     triples(Source, "calls", Target),
-    triples(Source, "is_test_symbol", TestMark),
-    TestMark != "true",
+    not triples(Source, "is_test_symbol", "true"),
     triples(Target, "is_test_symbol", "true").
 
 query("surprise_peripheral_hub", Source, Target) :-
     triples(Source, "calls", Target),
-    triples(Source, "has_out_degree", "zero"),
+    triples(Source, "has_out_degree", "0"),
     triples(Target, "has_out_degree", High),
-    High != "zero".
+    High != "0".
 
-query("surprise_score", Source, Target, Score) :-
-    triples(Source, "calls", Target),
-    triples(Source, "belongs_to_cluster", SrcCluster),
-    triples(Target, "belongs_to_cluster", TgtCluster),
-    Score = 1,
-    SrcCluster != TgtCluster.
-
-query("surprise_top", Source, Target, Score) :-
-    triples(Source, "calls", Target),
-    triples(Source, "belongs_to_cluster", SrcCluster),
-    triples(Target, "belongs_to_cluster", TgtCluster),
-    SrcCluster != TgtCluster,
-    Score = 1.
-
-query("surprise_hotspot", File, Count) :-
-    triples(Source, "calls", Target),
-    triples(Source, "in_file", File),
-    triples(Source, "belongs_to_cluster", SrcCluster),
-    triples(Target, "belongs_to_cluster", TgtCluster),
-    SrcCluster != TgtCluster,
-    Count > 0.
+% Aggregation/ranking (surprise_score, surprise_top, surprise_hotspot) is computed
+% Go-side by Analyzer.computeSurpriseScores: it scores each call edge and emits
+% has_surprise_score per edge and has_surprise="hotspot_N" per file. The previous
+% rule bodies used `Score = 1` / `Count > 0`, which are aggregation atoms the meb
+% query layer cannot express (see docs/designs/contract.md §5).

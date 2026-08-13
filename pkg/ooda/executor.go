@@ -57,7 +57,7 @@ func attentionSinkQuery(name string) string {
 	case "hub_scores":
 		return common.GetNamedQuery("hub_score")
 	case "smells":
-		return common.GetNamedQuery("smell")
+		return common.GetNamedQuery("smell_type")
 	}
 	return ""
 }

@@ -1,6 +1,8 @@
 % OKF bridges — read-only consumer of bridges_to facts.
 % The Go ingestor (pkg/okf) is the SOLE writer of bridges_to.
 % This file contains smell rules that flag stale or suspicious bridges.
+% Engine note: bridges_to/defines are stored as triples; the rule body uses their
+% triples forms (derived predicates are not stored facts under mebpkg.Query).
 
 % --- Bridge-break smell ---
 % A bridges_to fact pointing to a symbol that no longer exists in the Source Store.
@@ -15,8 +17,8 @@ query_metadata("okf_bridge_break", "smell_type", "okf_bridge_break").
 query_metadata("okf_bridge_break", "Predicate", "has_smell_type").
 
 query("okf_bridge_break", Concept, Symbol) :-
-    bridges_to(Concept, Symbol),
-    not defines(_, Symbol).
+    triples(Concept, "bridges_to", Symbol),
+    not triples(_, "defines", Symbol).
 
 % --- Visible bridge predicate ---
 % Mark bridges worth showing in the UI: symbol must exist and have non-trivial centrality.

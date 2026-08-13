@@ -677,15 +677,15 @@ func queryDebtMap(ctx context.Context, store *meb.MEBStore) map[string]int {
 
 func querySmellMap(ctx context.Context, store *meb.MEBStore) map[string][]string {
 	result := make(map[string][]string)
-	rows, err := gcamdb.Query(ctx, store, common.GetNamedQuery("smell"))
+	rows, err := gcamdb.Query(ctx, store, common.GetNamedQuery("smell_type"))
 	if err != nil {
 		return result
 	}
 	for _, r := range rows {
 		subject, _ := r["Subject"].(string)
-		object, _ := r["Object"].(string)
-		if subject != "" && object != "" {
-			result[subject] = append(result[subject], object)
+		smellType, _ := r["Type"].(string)
+		if subject != "" && smellType != "" {
+			result[subject] = append(result[subject], smellType)
 		}
 	}
 	return result

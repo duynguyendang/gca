@@ -54,6 +54,22 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
+			name:  "Quoted Inequality RHS",
+			query: `triples(A, "calls", B), A != "b.go"`,
+			want: []Atom{
+				{Predicate: "triples", Args: []string{"A", "calls", "B"}},
+				{Predicate: "neq", Args: []string{"A", "b.go"}},
+			},
+		},
+		{
+			name:  "Quoted Comparison RHS",
+			query: `triples(A, "calls", B), gt(A, "5")`,
+			want: []Atom{
+				{Predicate: "triples", Args: []string{"A", "calls", "B"}},
+				{Predicate: "gt", Args: []string{"A", "5"}},
+			},
+		},
+		{
 			name:  "Quoted Args Handling",
 			query: `triples(A, 'calls', "B")`,
 			want: []Atom{

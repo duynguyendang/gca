@@ -19,11 +19,11 @@ type SmellRegistry struct {
 	storeManager interface {
 		GetAnalyticalStore(projectID string) (*externmeb.MEBStore, error)
 	}
-	mu              sync.RWMutex
-	weights         map[string]int    // smell_name -> weight
-	securityPrefixes map[string]bool  // prefixes that indicate security smells
-	loadedAt        time.Time
-	ttl             time.Duration
+	mu               sync.RWMutex
+	weights          map[string]int  // smell_name -> weight
+	securityPrefixes map[string]bool // prefixes that indicate security smells
+	loadedAt         time.Time
+	ttl              time.Duration
 }
 
 // NewSmellRegistry creates a new SmellRegistry.
@@ -31,10 +31,10 @@ func NewSmellRegistry(storeManager interface {
 	GetAnalyticalStore(projectID string) (*externmeb.MEBStore, error)
 }) *SmellRegistry {
 	return &SmellRegistry{
-		storeManager:    storeManager,
-		weights:         make(map[string]int),
+		storeManager:     storeManager,
+		weights:          make(map[string]int),
 		securityPrefixes: make(map[string]bool),
-		ttl:             5 * time.Minute,
+		ttl:              5 * time.Minute,
 	}
 }
 
@@ -74,6 +74,15 @@ func (sr *SmellRegistry) LoadFromPolicies(ctx context.Context, projectID string)
 		weights[name] = weight
 	}
 
+	// Fallback: if no smell_weight facts are materialized in the store, load
+	// them directly from the scoring policy files (the source of truth). Keeps
+	// the registry functional without requiring a store-write pass.
+	if len(weights) == 0 {
+		for name, w := range common.LoadSmellWeights() {
+			weights[name] = w
+		}
+	}
+
 	// Query smell category facts to identify security smells
 	catQuery := `triples(Name, "category", "security")`
 	catResults, err := mebpkg.Query(ctx, store, catQuery)
@@ -84,6 +93,12 @@ func (sr *SmellRegistry) LoadFromPolicies(ctx context.Context, projectID string)
 				securityPrefixes[name] = true
 			}
 		}
+	}
+
+	// Fallback: classify security smells from the policy declarations when the
+	// store has no category facts.
+	for name := range common.LoadSecuritySmellTypes() {
+		securityPrefixes[name] = true
 	}
 
 	sr.weights = weights
