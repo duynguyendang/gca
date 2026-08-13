@@ -38,6 +38,13 @@ data
 build
 gca
 gca-test-build
+# Compiled devtools binaries accidentally built into the repo root
+/dbgclear
+/dbgscope
+/dbgstore
+/dbgtemplates
+/dbgtopic
+/check_contracts
 vendor
 exports
 bundles
