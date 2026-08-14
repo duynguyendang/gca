@@ -122,7 +122,7 @@ func TestDatalogQueryMissingProject(t *testing.T) {
 func TestHealthSummary(t *testing.T) {
 	srv, _ := newTestServer(t)
 	srv.seedAnalytical(t, "testproj", []mebpkg.Fact{
-		{Subject: "file:a.go", Predicate: "has_smell", Object: "god_file"},
+		{Subject: "file:a.go", Predicate: "has_smell_type", Object: "god_file"},
 		{Subject: "file:a.go", Predicate: "has_hub_score", Object: "5"},
 	})
 	res := callTool(t, srv.handleHealthSummary, "testproj", nil)
