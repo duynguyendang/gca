@@ -112,9 +112,9 @@ func (m *testMockAIService) HandleAsk(ctx context.Context, req ai.AskRequest) (*
 		return m.askResponse, nil
 	}
 	return &ai.AskResponse{
-		Answer:   "mock answer for: " + req.Query,
-		Query:    "triples(?S, ?P, ?O)",
-		Intent:   "task_insight",
+		Answer:     "mock answer for: " + req.Query,
+		Query:      "triples(?S, ?P, ?O)",
+		Intent:     "task_insight",
 		Confidence: 0.9,
 	}, nil
 }
@@ -420,5 +420,3 @@ func requireJSON(t *testing.T, w *httptest.ResponseRecorder, dst interface{}) {
 		t.Fatalf("failed to unmarshal response: %v\nBody: %s", err, w.Body.String())
 	}
 }
-
-

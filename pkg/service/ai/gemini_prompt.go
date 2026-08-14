@@ -15,6 +15,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/promptbuilder"
 	"github.com/duynguyendang/meb"
 )
+
 // BuildDiagnosticContext builds a diagnostic context string from the Analytical Store.
 // This provides O(1) lookup of pre-computed architectural insights.
 func (s *AIService) BuildDiagnosticContext(ctx context.Context, projectID string) (string, error) {

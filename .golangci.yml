@@ -19,7 +19,6 @@ linters:
   disable:
     - gocyclo
     - funlen
-    - var-naming
 
 issues:
   exclude-rules:

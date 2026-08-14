@@ -428,7 +428,7 @@ func BuildRefactorPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet
 		}
 
 		templateData := map[string]interface{}{
-			"Query":   m["Query"],
+			"Query":    m["Query"],
 			"SymbolID": m["SymbolID"],
 			"Context":  contextBuilder.String(),
 		}
@@ -466,7 +466,7 @@ func BuildTestGenPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet,
 		}
 
 		templateData := map[string]interface{}{
-			"Query":   m["Query"],
+			"Query":    m["Query"],
 			"SymbolID": m["SymbolID"],
 			"Context":  contextBuilder.String(),
 		}
@@ -504,7 +504,7 @@ func BuildSecurityPrompt(ctx context.Context, store *meb.MEBStore, ps *PromptSet
 		}
 
 		templateData := map[string]interface{}{
-			"Query":   m["Query"],
+			"Query":    m["Query"],
 			"SymbolID": m["SymbolID"],
 			"Context":  contextBuilder.String(),
 		}
@@ -542,7 +542,7 @@ func BuildPerformancePrompt(ctx context.Context, store *meb.MEBStore, ps *Prompt
 		}
 
 		templateData := map[string]interface{}{
-			"Query":   m["Query"],
+			"Query":    m["Query"],
 			"SymbolID": m["SymbolID"],
 			"Context":  contextBuilder.String(),
 		}
