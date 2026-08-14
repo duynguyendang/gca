@@ -56,16 +56,16 @@ func (s *Server) handleQuery(c *gin.Context) {
 		return
 	}
 
-	// Validate and sanitize query
-	sanitizedQuery, err := ValidateAndSanitizeQuery(req.Query)
-	if err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "query is invalid", err))
+	// If query is empty, return empty graph to prevent frontend crashes.
+	// This must be checked before validation, which rejects empty queries.
+	if strings.TrimSpace(req.Query) == "" {
+		c.JSON(http.StatusOK, gin.H{"nodes": []interface{}{}, "links": []interface{}{}})
 		return
 	}
 
-	// If query is empty, return empty graph to prevent frontend crashes
-	if sanitizedQuery == "" {
-		c.JSON(http.StatusOK, gin.H{"nodes": []interface{}{}, "links": []interface{}{}})
+	// Validate and sanitize query
+	if _, err := ValidateAndSanitizeQuery(req.Query); err != nil {
+		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "query is invalid", err))
 		return
 	}
 
