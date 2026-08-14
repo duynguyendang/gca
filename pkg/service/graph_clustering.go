@@ -35,7 +35,7 @@ type HybridCluster struct {
 
 // DetectCommunityHierarchy runs the Leiden algorithm on the graph and returns a hierarchical structure.
 func (s *GraphService) DetectCommunityHierarchy(ctx context.Context, projectID string) (*CommunityHierarchy, error) {
-	graph, err := s.ExportGraph(ctx, projectID, "", false, false, 0, 0)
+	graph, err := s.GetProjectMap(ctx, projectID)
 	if err != nil {
 		return nil, err
 	}

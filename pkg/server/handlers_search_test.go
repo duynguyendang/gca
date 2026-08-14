@@ -108,7 +108,7 @@ func TestHandleHybridCluster(t *testing.T) {
 	defer cleanup()
 
 	t.Run("valid hybrid cluster request", func(t *testing.T) {
-		w := doJSONRequest(srv, "POST", "/api/v1/graph/hybrid-cluster?project="+testProjectID, `{"query": "triples(?S, ?P, ?O)", "clusters": 3}`)
+		w := doJSONRequest(srv, "POST", "/api/v1/graph/hybrid-cluster?project="+testProjectID, `{"embedding": [0.1, 0.2, 0.3], "clusters": 3}`)
 		if w.Code != http.StatusOK && w.Code != http.StatusInternalServerError {
 			t.Errorf("expected 200 or 500, got %d", w.Code)
 		}

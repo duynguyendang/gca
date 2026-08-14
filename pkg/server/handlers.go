@@ -636,10 +636,13 @@ func (s *Server) handleGraphSubgraph(c *gin.Context) {
 		return
 	}
 
-	// Validate IDs list
-	if err := ValidateIDs(req.Ids); err != nil {
-		handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
-		return
+	// Empty IDs list yields an empty graph (matches GetSubgraph behavior);
+	// only reject lists that are too long or contain invalid symbol IDs.
+	if len(req.Ids) > 0 {
+		if err := ValidateIDs(req.Ids); err != nil {
+			handleError(c, apperrors.NewAppError(http.StatusBadRequest, "symbol ID is required or invalid", err))
+			return
+		}
 	}
 
 	graph, err := s.graphService.GetSubgraph(c.Request.Context(), projectID, req.Ids)

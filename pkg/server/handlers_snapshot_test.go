@@ -11,12 +11,12 @@ func TestHandleCreateSnapshot(t *testing.T) {
 
 	t.Run("creates snapshot successfully", func(t *testing.T) {
 		w := doJSONRequest(srv, "POST", "/api/v1/graph/snapshots", `{"project_id": "`+testProjectID+`", "label": "test"}`)
-		requireStatus(t, w, http.StatusOK)
+		requireStatus(t, w, http.StatusCreated)
 
 		var resp map[string]interface{}
 		requireJSON(t, w, &resp)
-		if _, ok := resp["snapshot_id"]; !ok {
-			t.Error("expected 'snapshot_id' key in response")
+		if _, ok := resp["id"]; !ok {
+			t.Error("expected 'id' key in response")
 		}
 	})
 
