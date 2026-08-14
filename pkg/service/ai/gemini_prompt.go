@@ -99,11 +99,23 @@ func (s *AIService) buildTaskPrompt(ctx context.Context, store *meb.MEBStore, re
 			"content": m.Content,
 		}
 	}
+	// For explicit-symbol requests, surface the symbol's content/context so the
+	// LLM analyzes the intended target rather than only the query text.
+	var symbolContext string
+	if req.SymbolID != "" {
+		var sb strings.Builder
+		if err := s.appendSymbolContext(ctx, store, req.SymbolID, &sb); err != nil {
+			logger.Warn("Failed to fetch symbol context", "symbolID", req.SymbolID, "error", err)
+		} else {
+			symbolContext = sb.String()
+		}
+	}
 	data := map[string]interface{}{
-		"Query":   req.Query,
-		"SymbolID": req.SymbolID,
-		"Data":    req.Data,
-		"Messages": messages,
+		"Query":         req.Query,
+		"SymbolID":      req.SymbolID,
+		"Data":          req.Data,
+		"Messages":      messages,
+		"SymbolContext": symbolContext,
 	}
 	return promptbuilder.BuildPrompt(req.Task, ctx, store, s.prompts, data)
 }

@@ -599,8 +599,13 @@ func BuildPrompt(task string, ctx context.Context, store *meb.MEBStore, ps *Prom
 
 func buildFallbackPrompt(task string, ctx context.Context, store *meb.MEBStore, data interface{}) (string, error) {
 	var query string
+	var symbolContext string
 	if m, ok := data.(map[string]interface{}); ok {
 		query, _ = m["Query"].(string)
+		symbolContext, _ = m["SymbolContext"].(string)
+	}
+	if symbolContext != "" {
+		return fmt.Sprintf("Context:\n%s\n\nUser Question: %s\n\nProvide a clear, helpful answer based on the available code context.", symbolContext, query), nil
 	}
 	return fmt.Sprintf("User Question: %s\n\nProvide a clear, helpful answer based on the available code context.", query), nil
 }
