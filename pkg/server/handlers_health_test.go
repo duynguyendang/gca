@@ -15,8 +15,8 @@ func TestHandleHealthSummary(t *testing.T) {
 
 		var resp map[string]interface{}
 		requireJSON(t, w, &resp)
-		if _, ok := resp["project_id"]; !ok {
-			t.Error("expected 'project_id' key in response")
+		if _, ok := resp["overall_score"]; !ok {
+			t.Error("expected 'overall_score' key in response")
 		}
 	})
 
@@ -35,9 +35,9 @@ func TestHandleHealthSummaryV2(t *testing.T) {
 		requireStatus(t, w, http.StatusOK)
 	})
 
-	t.Run("missing project returns 400", func(t *testing.T) {
+	t.Run("auto-detects project when none specified", func(t *testing.T) {
 		w := doRequest(srv, "GET", "/api/v1/health/summary/v2", "")
-		requireStatus(t, w, http.StatusBadRequest)
+		requireStatus(t, w, http.StatusOK)
 	})
 }
 
@@ -56,9 +56,9 @@ func TestHandleSurpriseAnalysis(t *testing.T) {
 		}
 	})
 
-	t.Run("missing project returns 400", func(t *testing.T) {
+	t.Run("auto-detects project when none specified", func(t *testing.T) {
 		w := doRequest(srv, "GET", "/api/v1/analysis/surprise", "")
-		requireStatus(t, w, http.StatusBadRequest)
+		requireStatus(t, w, http.StatusOK)
 	})
 }
 
@@ -72,13 +72,13 @@ func TestHandleKnowledgeGaps(t *testing.T) {
 
 		var resp map[string]interface{}
 		requireJSON(t, w, &resp)
-		if _, ok := resp["gaps"]; !ok {
-			t.Error("expected 'gaps' key in response")
+		if _, ok := resp["isolated_nodes"]; !ok {
+			t.Error("expected 'isolated_nodes' key in response")
 		}
 	})
 
-	t.Run("missing project returns 400", func(t *testing.T) {
+	t.Run("auto-detects project when none specified", func(t *testing.T) {
 		w := doRequest(srv, "GET", "/api/v1/analysis/knowledge-gaps", "")
-		requireStatus(t, w, http.StatusBadRequest)
+		requireStatus(t, w, http.StatusOK)
 	})
 }

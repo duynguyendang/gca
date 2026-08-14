@@ -18,7 +18,6 @@ import (
 	"github.com/duynguyendang/gca/pkg/prompts"
 	"github.com/duynguyendang/gca/pkg/service/ai"
 	"github.com/duynguyendang/meb"
-	"github.com/duynguyendang/meb/store"
 )
 
 const testProjectID = "testproj"
@@ -251,8 +250,12 @@ func populateKnowledgeGapTestData(s *meb.MEBStore) {
 
 // testServerConfig holds options for creating a test server.
 type testServerConfig struct {
-	// AIService override (if nil, a default mock is created)
+	// AIService override (if nil, a default mock is created unless
+	// NoAIService is set).
 	AIService AIService
+	// NoAIService forces a nil AI service on the server so handlers exercise
+	// their "AI service not available" path.
+	NoAIService bool
 	// LLMClient override
 	LLMClient common.LLMClient
 	// LLMResponse is the canned response for the mock LLM
@@ -303,18 +306,24 @@ func setupTestServer(t *testing.T, cfg ...testServerConfig) (*Server, *meb.MEBSt
 		t.Fatalf("Failed to write metadata: %v", err)
 	}
 
-	// Create MEB store
-	storeCfg := store.DefaultConfig(projDir)
-	s, err := meb.NewMEBStore(storeCfg)
-	if err != nil {
-		os.RemoveAll(dataDir)
-		t.Fatalf("Failed to create store: %v", err)
-	}
-
 	// Apply config
 	var c testServerConfig
 	if len(cfg) > 0 {
 		c = cfg[0]
+	}
+
+	// Create store manager FIRST, then seed via ITS store handle. Handlers read
+	// through the manager's cached *meb.MEBStore; a separately-created store
+	// instance opens a second Badger handle on the same directory and cannot
+	// see writes made through the first one, so queries would return empty.
+	mgr := manager.NewStoreManager(dataDir, manager.MemoryProfileDefault, false)
+
+	// Open the source store handle for the test project so seeding shares the
+	// same underlying MEB store the handlers will read.
+	s, err := mgr.GetSourceStore(testProjectID)
+	if err != nil {
+		os.RemoveAll(dataDir)
+		t.Fatalf("Failed to open test project store: %v", err)
 	}
 
 	// Populate test data
@@ -341,31 +350,30 @@ func setupTestServer(t *testing.T, cfg ...testServerConfig) (*Server, *meb.MEBSt
 
 	// Create mock AI service
 	var aiSvc AIService
-	if c.AIService != nil {
-		aiSvc = c.AIService
-	} else {
-		mockStoreMgr := &testMockStoreManager{store: s}
-		aiSvc = &testMockAIService{
-			store:        s,
-			promptsDir:   promptsDir,
-			llm:          llm,
-			storeManager: mockStoreMgr,
-			oodaResponse: c.OODAResponse,
-			oodaErr:      c.OODAError,
-			askResponse:  c.AskResponse,
-			askErr:       c.AskError,
+	if !c.NoAIService {
+		if c.AIService != nil {
+			aiSvc = c.AIService
+		} else {
+			mockStoreMgr := &testMockStoreManager{store: s}
+			aiSvc = &testMockAIService{
+				store:        s,
+				promptsDir:   promptsDir,
+				llm:          llm,
+				storeManager: mockStoreMgr,
+				oodaResponse: c.OODAResponse,
+				oodaErr:      c.OODAError,
+				askResponse:  c.AskResponse,
+				askErr:       c.AskError,
+			}
 		}
 	}
-
-	// Create store manager
-	mgr := manager.NewStoreManager(dataDir, manager.MemoryProfileDefault, false)
 
 	// Create server
 	srv := NewServerWithAIService(mgr, dataDir, aiSvc)
 
 	cleanup := func() {
 		srv.Close()
-		s.Close()
+		mgr.CloseAll()
 		os.RemoveAll(dataDir)
 	}
 

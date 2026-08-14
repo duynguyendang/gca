@@ -9,6 +9,7 @@ import (
 
 func TestHandleAIAsk(t *testing.T) {
 	t.Run("returns AI response with OODA", func(t *testing.T) {
+		t.Setenv("USE_OODA_LOOP", "true")
 		srv, _, cleanup := setupTestServer(t, testServerConfig{
 			OODAResponse: "mock AI analysis result",
 		})
@@ -43,7 +44,7 @@ func TestHandleAIAsk(t *testing.T) {
 
 	t.Run("nil AI service returns 503", func(t *testing.T) {
 		srv, _, cleanup := setupTestServer(t, testServerConfig{
-			AIService: nil,
+			NoAIService: true,
 		})
 		defer cleanup()
 
@@ -134,7 +135,7 @@ func TestHandleAsk(t *testing.T) {
 func TestHandleAgentExecute(t *testing.T) {
 	t.Run("nil AI service returns 503", func(t *testing.T) {
 		srv, _, cleanup := setupTestServer(t, testServerConfig{
-			AIService: nil,
+			NoAIService: true,
 		})
 		defer cleanup()
 

@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"net/url"
 	"testing"
 )
 
@@ -38,18 +39,20 @@ func TestHandleGraphPaginated(t *testing.T) {
 	srv, _, cleanup := setupTestServer(t)
 	defer cleanup()
 
+	q := url.QueryEscape("triples(?S, ?P, ?O)")
+
 	t.Run("valid pagination request", func(t *testing.T) {
-		w := doRequest(srv, "GET", "/api/v1/graph/paginated?project="+testProjectID+"&query=triples(?S, ?P, ?O)&limit=10", "")
+		w := doRequest(srv, "GET", "/api/v1/graph/paginated?project="+testProjectID+"&query="+q+"&limit=10", "")
 		requireStatus(t, w, http.StatusOK)
 	})
 
 	t.Run("with cursor", func(t *testing.T) {
-		w := doRequest(srv, "GET", "/api/v1/graph/paginated?project="+testProjectID+"&query=triples(?S, ?P, ?O)&limit=5&offset=0", "")
+		w := doRequest(srv, "GET", "/api/v1/graph/paginated?project="+testProjectID+"&query="+q+"&limit=5&offset=0", "")
 		requireStatus(t, w, http.StatusOK)
 	})
 
 	t.Run("missing project returns 400", func(t *testing.T) {
-		w := doRequest(srv, "GET", "/api/v1/graph/paginated?query=triples(?S, ?P, ?O)", "")
+		w := doRequest(srv, "GET", "/api/v1/graph/paginated?query="+q, "")
 		requireStatus(t, w, http.StatusBadRequest)
 	})
 }
@@ -103,14 +106,14 @@ func TestHandleFileCalls(t *testing.T) {
 	defer cleanup()
 
 	t.Run("valid file returns call graph", func(t *testing.T) {
-		w := doRequest(srv, "GET", "/api/v1/graph/file-calls?project="+testProjectID+"&file=handlers/user_handler.go", "")
+		w := doRequest(srv, "GET", "/api/v1/graph/file-calls?project="+testProjectID+"&id=handlers/user_handler.go", "")
 		if w.Code != http.StatusOK && w.Code != http.StatusNotFound {
 			t.Errorf("expected 200 or 404, got %d", w.Code)
 		}
 	})
 
 	t.Run("with depth parameter", func(t *testing.T) {
-		w := doRequest(srv, "GET", "/api/v1/graph/file-calls?project="+testProjectID+"&file=handlers/user_handler.go&depth=2", "")
+		w := doRequest(srv, "GET", "/api/v1/graph/file-calls?project="+testProjectID+"&id=handlers/user_handler.go&depth=2", "")
 		if w.Code != http.StatusOK && w.Code != http.StatusNotFound {
 			t.Errorf("expected 200 or 404, got %d", w.Code)
 		}
@@ -132,7 +135,7 @@ func TestHandleFileBackbone(t *testing.T) {
 	defer cleanup()
 
 	t.Run("returns file backbone", func(t *testing.T) {
-		w := doRequest(srv, "GET", "/api/v1/graph/file-backbone?project="+testProjectID+"&file=handlers/user_handler.go", "")
+		w := doRequest(srv, "GET", "/api/v1/graph/file-backbone?project="+testProjectID+"&id=handlers/user_handler.go", "")
 		if w.Code != http.StatusOK && w.Code != http.StatusNotFound {
 			t.Errorf("expected 200 or 404, got %d", w.Code)
 		}

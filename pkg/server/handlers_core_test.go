@@ -126,9 +126,9 @@ func TestHandleSymbols(t *testing.T) {
 		requireStatus(t, w, http.StatusOK)
 	})
 
-	t.Run("missing project returns 400", func(t *testing.T) {
+	t.Run("auto-detects project when none specified", func(t *testing.T) {
 		w := doRequest(srv, "GET", "/api/v1/symbols?q=handle", "")
-		requireStatus(t, w, http.StatusBadRequest)
+		requireStatus(t, w, http.StatusOK)
 	})
 }
 

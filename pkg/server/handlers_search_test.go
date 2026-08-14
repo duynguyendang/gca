@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"net/url"
 	"testing"
 )
 
@@ -32,7 +33,7 @@ func TestHandleGraphPath(t *testing.T) {
 	defer cleanup()
 
 	t.Run("valid path request", func(t *testing.T) {
-		w := doRequest(srv, "GET", "/api/v1/graph/path?project="+testProjectID+"&start=handleUser&end=UserRepo", "")
+		w := doRequest(srv, "GET", "/api/v1/graph/path?project="+testProjectID+"&source=handleUser&target=UserRepo", "")
 		if w.Code != http.StatusOK && w.Code != http.StatusNotFound {
 			t.Errorf("expected 200 or 404, got %d", w.Code)
 		}
@@ -71,7 +72,8 @@ func TestHandleGraphCluster(t *testing.T) {
 	defer cleanup()
 
 	t.Run("returns clustered graph", func(t *testing.T) {
-		w := doRequest(srv, "GET", "/api/v1/graph/cluster?project="+testProjectID+"&query=triples(?S, ?P, ?O)", "")
+		q := url.QueryEscape("triples(?S, ?P, ?O)")
+		w := doRequest(srv, "GET", "/api/v1/graph/cluster?project="+testProjectID+"&query="+q, "")
 		requireStatus(t, w, http.StatusOK)
 	})
 }
