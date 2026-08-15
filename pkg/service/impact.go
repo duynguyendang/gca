@@ -153,8 +153,19 @@ func (s *ImpactReportService) Generate(ctx context.Context, projectID, diff stri
 	// New smells: a diff_added line whose symbol carries a smell fact. We
 	// approximate by counting smell facts whose subject is a touched symbol
 	// (introduced in the diff) rather than a pre-existing file-level smell.
+	// Re-fetch the analytical store: source and analytical share one cached
+	// store whose topic is set by whichever Get* call ran last, so a
+	// subject-bound scan here would otherwise miss analytical-topic facts.
+	analytical, err = s.manager.GetAnalyticalStore(projectID)
+	if err != nil {
+		return nil, fmt.Errorf("analytical store: %w", err)
+	}
 	for sym := range touchedSymbols {
-		for fact := range analytical.ScanContext(ctx, sym, "has_smell_type", "") {
+		for fact, err := range analytical.ScanContext(ctx, sym, "has_smell_type", "") {
+			if err != nil {
+				logger.Warn("impact symbol smell scan failed", "sym", sym, "error", err)
+				continue
+			}
 			if smellType, ok := fact.Object.(string); ok && smellType != "" {
 				smellsNew[smellType]++
 			}

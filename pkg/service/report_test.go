@@ -104,6 +104,21 @@ func TestReportService_GenerateMarkdown_AllSections(t *testing.T) {
 	if !strings.Contains(md, "88") {
 		t.Errorf("report missing health score")
 	}
+	// Top-smell tally must reflect the per-type count in the analytical store,
+	// not the snapshot's total SmellCount.
+	if !strings.Contains(md, "god_file (1)") {
+		t.Errorf("report top-smell tally = %q, want 'god_file (1)'", topSmellRow(md))
+	}
+}
+
+// topSmellRow extracts the Overview "Top smell" line for diagnostics.
+func topSmellRow(md string) string {
+	for _, line := range strings.Split(md, "\n") {
+		if strings.Contains(line, "Top smell") {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
 }
 
 func TestReportService_GenerateMarkdown_SectionFilter(t *testing.T) {

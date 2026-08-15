@@ -74,10 +74,10 @@ func New(opts Options) *mcpserver.MCPServer {
 		graph:      service.NewGraphService(opts.Manager),
 		clustering: service.NewClusteringService(),
 		trends:     service.NewTrendService(opts.Manager),
-		reports:    service.NewReportService(opts.Manager, nilNarrative(opts.AIService)),
+		reports:    service.NewReportService(opts.Manager, service.NilNarrative(opts.AIService)),
 		readOnly:   opts.Manager.ReadOnly(),
 	}
-	s.impact = service.NewImpactReportService(es, opts.Manager, nilNarrative(opts.AIService))
+	s.impact = service.NewImpactReportService(es, opts.Manager, service.NilNarrative(opts.AIService))
 
 	ms := mcpserver.NewMCPServer(
 		"GCA-Backend",
@@ -92,17 +92,6 @@ func New(opts Options) *mcpserver.MCPServer {
 }
 
 // --- Argument helpers ---
-
-// nilNarrative returns the AI service as a NarrativeService, or nil when the
-// AI service is not configured. Passing a typed-nil *ai.AIService into an
-// interface field would create a non-nil interface wrapping a nil pointer and
-// panic on call, so we must convert to a plain nil here.
-func nilNarrative(as *ai.AIService) service.NarrativeService {
-	if as == nil {
-		return nil
-	}
-	return as
-}
 
 func requireProject(args map[string]any) (string, error) {
 	p, ok := args["project"].(string)

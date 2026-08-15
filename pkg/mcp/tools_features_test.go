@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -60,11 +62,16 @@ func newFeatureSeededManager(t *testing.T) *manager.StoreManager {
 		{Subject: "GHSA-vvpx-go8f-jh44", Predicate: compliance.PredicateVulnSummary, Object: "HTTP/2 rapid reset can cause excessive resource consumption"},
 		{Subject: "GHSA-4374-p667-p6c8", Predicate: compliance.PredicateVulnSeverity, Object: "medium"},
 		{Subject: "GHSA-4374-p667-p6c8", Predicate: compliance.PredicateVulnSummary, Object: "HTTP/2 stream cancellation"},
+		// Symbol-level smells let the impact tool classify diff-introduced smells.
+		{Subject: "funcA", Predicate: "has_smell_type", Object: "dead_code"},
+		{Subject: "funcB", Predicate: "has_smell_type", Object: "high_complexity"},
 	}))
 
 	src, err := mgr.GetSourceStore("testproj")
 	require.NoError(t, err)
 	require.NoError(t, src.AddFactBatch([]mebpkg.Fact{
+		{Subject: "file:a.go", Predicate: config.PredicateDefines, Object: "funcA"},
+		{Subject: "file:a.go", Predicate: config.PredicateDefines, Object: "funcB"},
 		{Subject: "file:a.go", Predicate: config.PredicateImports, Object: "\"golang.org/x/net/http2\""},
 		{Subject: "file:a.go", Predicate: config.PredicateImports, Object: "\"fmt\""},
 		{Subject: "file:b.go", Predicate: config.PredicateImports, Object: "\"golang.org/x/net/http2\""},
@@ -238,6 +245,111 @@ func TestMCPGetSBOM(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, res2)), &body2))
 	require.Equal(t, "CycloneDX", body2.BOMFormat)
 	require.Len(t, body2.Components, 2)
+}
+
+func TestMCPGetImpactReport_BlockedGate(t *testing.T) {
+	client, closeFn := newFeatureClient(t)
+	defer closeFn()
+
+	diff := "diff --git a/file:a.go b/file:a.go\n--- a/file:a.go\n+++ b/file:a.go\n@@ -1,1 +1,1 @@\n-funcA()\n+funcA2()\n"
+
+	// Threshold below the new-smell count must flip blocked=true.
+	res := callFeature(t, client, "get_impact_report", map[string]any{
+		"project":            "testproj",
+		"diff":               diff,
+		"fail_if_new_smells": float64(1),
+	})
+	require.False(t, res.IsError)
+	var body struct {
+		SmellsNew         map[string]int `json:"smells_new"`
+		NewSmellThreshold int            `json:"new_smell_threshold"`
+		Blocked           bool           `json:"blocked"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &body))
+	t.Logf("blocked gate result: %s", resultText(t, res))
+	require.Greater(t, len(body.SmellsNew), 0)
+	require.Equal(t, 1, body.NewSmellThreshold)
+	require.True(t, body.Blocked)
+
+	// Threshold above the count must stay blocked=false.
+	res2 := callFeature(t, client, "get_impact_report", map[string]any{
+		"project":            "testproj",
+		"diff":               diff,
+		"fail_if_new_smells": float64(100),
+	})
+	require.False(t, res2.IsError)
+	var body2 struct {
+		NewSmellThreshold int  `json:"new_smell_threshold"`
+		Blocked           bool `json:"blocked"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res2)), &body2))
+	require.False(t, body2.Blocked)
+}
+
+func TestMCPFeatureTools_ReadOnlyMode(t *testing.T) {
+	// Read-only manager: the feature tools are read-only and must stay
+	// available and callable. Seed data with a writable manager first, then
+	// reopen the same data dir in read-only mode.
+	dataDir := t.TempDir()
+	projDir := filepath.Join(dataDir, "testproj")
+	require.NoError(t, os.MkdirAll(projDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(projDir, "metadata.json"), []byte(`{"name":"Test"}`), 0o644))
+
+	writable := manager.NewStoreManager(dataDir, manager.MemoryProfileDefault, false)
+	src, err := writable.GetSourceStore("testproj")
+	require.NoError(t, err)
+	require.NoError(t, src.AddFactBatch([]mebpkg.Fact{
+		{Subject: "file:a.go", Predicate: config.PredicateDefines, Object: "funcA"},
+	}))
+	an, err := writable.GetAnalyticalStore("testproj")
+	require.NoError(t, err)
+	snap, _ := json.Marshal(ingest.KPISnapshot{
+		ID:          "kpi:testproj:aaa",
+		CommitSHA:   "aaa",
+		Timestamp:   time.Now().UTC(),
+		HealthScore: 90,
+	})
+	require.NoError(t, an.AddFact(mebpkg.Fact{
+		Subject: "kpi:testproj:aaa", Predicate: config.PredicateKPISnapshot, Object: string(snap),
+	}))
+	writable.CloseAll()
+
+	mgr := manager.NewStoreManager(dataDir, manager.MemoryProfileDefault, true)
+
+	ms := New(Options{Manager: mgr})
+	client, err := mcpclient.NewInProcessClient(ms)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer client.Close()
+	_, err = client.Initialize(ctx, mcp.InitializeRequest{
+		Params: mcp.InitializeParams{
+			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
+			ClientInfo:      mcp.Implementation{Name: "gca-ro-test", Version: "1.0.0"},
+			Capabilities:    mcp.ClientCapabilities{},
+		},
+	})
+	require.NoError(t, err)
+
+	res, err := client.ListTools(ctx, mcp.ListToolsRequest{})
+	require.NoError(t, err)
+	names := map[string]bool{}
+	for _, tool := range res.Tools {
+		names[tool.Name] = true
+	}
+	for _, want := range []string{"get_trends", "get_impact_report", "list_vulnerabilities", "get_sbom", "get_architecture_report"} {
+		require.True(t, names[want], "missing read-only tool %s", want)
+	}
+	// Writes stay gated in read-only mode.
+	require.False(t, names["okf_ingest"])
+
+	// A feature tool must be callable under read-only.
+	trendRes, err := client.CallTool(ctx, mcp.CallToolRequest{
+		Params: mcp.CallToolParams{Name: "get_trends", Arguments: map[string]any{"project": "testproj"}},
+	})
+	require.NoError(t, err)
+	require.False(t, trendRes.IsError)
+	require.Contains(t, resultText(t, trendRes), "testproj")
 }
 
 func TestMCPGetArchitectureReport(t *testing.T) {

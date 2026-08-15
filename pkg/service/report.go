@@ -158,7 +158,8 @@ func (s *ReportService) overviewSection(ctx context.Context, analytical, store *
 	if latest != nil {
 		sb.WriteString(fmt.Sprintf("| Health score | %d/100 |\n", latest.HealthScore))
 		sb.WriteString(fmt.Sprintf("| Health debt | %d |\n", latest.HealthDebt))
-		sb.WriteString(fmt.Sprintf("| Top smell | %s (%d) |\n", latest.TopSmell, latest.SmellCount))
+		topTally := byType[latest.TopSmell]
+		sb.WriteString(fmt.Sprintf("| Top smell | %s (%d) |\n", latest.TopSmell, topTally))
 	}
 	sb.WriteString("\n")
 	return sb.String()
