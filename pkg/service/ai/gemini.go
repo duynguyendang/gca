@@ -454,25 +454,22 @@ func (a *analyticalTemplateStore) ListTemplates(ctx context.Context, projectID, 
 	}
 
 	var templates []*ingest.TemplateStoreQuery
-	seen := make(map[string]int)
+	seen := make(map[string]bool)
 
 	for _, r := range results {
 		id, _ := r["ID"].(string)
 		if id == "" {
 			continue
 		}
-		if existingIdx, ok := seen[id]; ok {
-			if b, ok := r["Body"].(string); ok && b != "" && templates[existingIdx].Body == "" {
-				templates[existingIdx].Body = b
-			}
+		body, _ := r["Body"].(string)
+		// Distinct rules may share an ID; key by id+body so each survives.
+		key := id + "\x00" + body
+		if seen[key] {
 			continue
 		}
-		seen[id] = len(templates)
+		seen[key] = true
 
-		tmpl := &ingest.TemplateStoreQuery{ID: id}
-		if b, ok := r["Body"].(string); ok {
-			tmpl.Body = b
-		}
+		tmpl := &ingest.TemplateStoreQuery{ID: id, Body: body}
 
 		// Fetch metadata per template
 		catQ := fmt.Sprintf(`triples("%s", "category", Cat)`, id)

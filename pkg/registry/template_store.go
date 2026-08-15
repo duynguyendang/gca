@@ -18,8 +18,10 @@ import (
 // It parses .mg policy files and stores their templates and metadata as triples.
 type TemplateStore struct {
 	storeManager *manager.StoreManager
-	// in-memory cache so LoadPolicyFiles doesn't need to open BadgerDB
-	templates map[string]*QueryTemplate
+	// in-memory cache so LoadPolicyFiles doesn't need to open BadgerDB.
+	// Multiple rules may share a query name (e.g. two query("smell_god_file", ...)
+	// rules with different bodies), so each ID maps to a slice of bodies.
+	templates map[string][]*QueryTemplate
 }
 
 // QueryTemplate is an alias for ingest.TemplateStoreQuery for API compatibility.
@@ -29,7 +31,7 @@ type QueryTemplate = ingest.TemplateStoreQuery
 func NewTemplateStore(storeManager *manager.StoreManager) *TemplateStore {
 	return &TemplateStore{
 		storeManager: storeManager,
-		templates:    make(map[string]*QueryTemplate),
+		templates:    make(map[string][]*QueryTemplate),
 	}
 }
 
@@ -54,7 +56,7 @@ func (ts *TemplateStore) LoadPolicyFiles(ctx context.Context, initPath string) e
 		}
 
 		for _, tmpl := range templates {
-			ts.templates[tmpl.ID] = tmpl
+			ts.templates[tmpl.ID] = append(ts.templates[tmpl.ID], tmpl)
 		}
 		templatesLoaded += len(templates)
 	}
@@ -290,8 +292,8 @@ func (ts *TemplateStore) storeTemplate(ctx context.Context, store *externmeb.MEB
 // GetTemplate returns a query template by ID.
 // Uses in-memory cache if available, falls back to Analytical Store.
 func (ts *TemplateStore) GetTemplate(ctx context.Context, projectID, templateID string) (*QueryTemplate, error) {
-	if tmpl, ok := ts.templates[templateID]; ok {
-		return tmpl, nil
+	if tmpls, ok := ts.templates[templateID]; ok && len(tmpls) > 0 {
+		return tmpls[0], nil
 	}
 
 	store, err := ts.storeManager.GetAnalyticalStore(projectID)
@@ -356,9 +358,11 @@ func (ts *TemplateStore) GetTemplate(ctx context.Context, projectID, templateID 
 func (ts *TemplateStore) ListTemplates(ctx context.Context, projectID, category string) ([]*QueryTemplate, error) {
 	if len(ts.templates) > 0 {
 		var templates []*QueryTemplate
-		for _, tmpl := range ts.templates {
-			if category == "" || tmpl.Category == category {
-				templates = append(templates, tmpl)
+		for _, tmpls := range ts.templates {
+			for _, tmpl := range tmpls {
+				if category == "" || tmpl.Category == category {
+					templates = append(templates, tmpl)
+				}
 			}
 		}
 		return templates, nil
@@ -382,24 +386,23 @@ func (ts *TemplateStore) ListTemplates(ctx context.Context, projectID, category 
 	}
 
 	var templates []*QueryTemplate
-	seen := make(map[string]int)
+	seen := make(map[string]bool)
 
 	for _, r := range results {
 		id := r["ID"]
+		body := r["Body"]
 
-		// Keep entry with non-empty body if we already saw this id
-		if existingIdx, ok := seen[id]; ok {
-			if r["Body"] != "" && templates[existingIdx].Body == "" {
-				// Update existing template with non-empty body
-				templates[existingIdx].Body = r["Body"]
-			}
+		// Distinct rules may share an ID (e.g. two query("smell_god_file", ...)
+		// bodies). Key by id+body so each body survives instead of collapsing.
+		key := id + "\x00" + body
+		if seen[key] {
 			continue
 		}
-		seen[id] = len(templates)
+		seen[key] = true
 
 		tmpl := &QueryTemplate{
 			ID:   id,
-			Body: r["Body"],
+			Body: body,
 		}
 
 		// Get additional metadata
