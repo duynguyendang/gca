@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -50,7 +51,28 @@ func TestResolveDiff_MissingSource(t *testing.T) {
 }
 
 func TestResolveDiff_Git(t *testing.T) {
-	// Point the command at the real repo so git diff resolves.
+	// Isolate the git resolution in a throwaway repo so the test doesn't depend
+	// on the outer repository's working-tree state.
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput()
+		require.NoError(t, err, "git %v failed: %s", args, out)
+	}
+	runGit("init", "-q", "-b", "main")
+	runGit("config", "user.email", "test@example.com")
+	runGit("config", "user.name", "test")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("funcA()\n"), 0o644))
+	runGit("add", "a.go")
+	runGit("commit", "-q", "-m", "initial")
+	// Introduce an uncommitted change so `git diff HEAD` is non-empty.
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("funcA2()\n"), 0o644))
+
+	oldWd, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	defer func() { require.NoError(t, os.Chdir(oldWd)) }()
+
 	cmd := &cobra.Command{}
 	cmd.Flags().String("diff", "", "")
 	cmd.Flags().String("diff-file", "", "")
@@ -60,6 +82,7 @@ func TestResolveDiff_Git(t *testing.T) {
 	got, err := resolveDiff(cmd)
 	require.NoError(t, err)
 	require.NotEmpty(t, got)
+	require.Contains(t, got, "funcA2")
 }
 
 func TestFetchWithTimeout_OK(t *testing.T) {
