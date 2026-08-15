@@ -12,6 +12,7 @@ import (
 	apperrors "github.com/duynguyendang/gca/pkg/common/errors"
 	"github.com/duynguyendang/gca/pkg/logger"
 	mebpkg "github.com/duynguyendang/gca/pkg/meb"
+	"github.com/duynguyendang/gca/pkg/service"
 	"github.com/duynguyendang/meb"
 	"github.com/gin-gonic/gin"
 )
@@ -738,4 +739,71 @@ func (s *Server) computeKnowledgeGaps(ctx context.Context, analyticalStore *meb.
 
 	resp.TotalCount = len(resp.IsolatedNodes) + len(resp.UntestedHotspots) + len(resp.ThinCommunities) + len(resp.SingleFileClusters)
 	return resp, nil
+}
+
+// handleTrends returns health-over-time series for a project (F2).
+//
+//	GET /api/v1/trends?project=X&metric=health|debt|smell_count|dead_code|complexity|duplicate&from=2026-07-01T00:00:00Z&to=2026-08-01T00:00:00Z
+func (s *Server) handleTrends(c *gin.Context) {
+	projectID := c.Query("project")
+	if projectID == "" {
+		projects, err := s.graphService.ListProjects()
+		if err == nil && len(projects) > 0 {
+			projectID = projects[0].ID
+		}
+	}
+	if projectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing project parameter"})
+		return
+	}
+
+	metric := c.DefaultQuery("metric", "health")
+	from := c.Query("from")
+	to := c.Query("to")
+
+	resp, err := s.trendService.ListTrends(c.Request.Context(), projectID, metric, from, to)
+	if err != nil {
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to load trends", err))
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// handleArchitectureReport renders a project's architecture report (F5).
+//
+//	POST /api/v1/report/architecture
+//	{"project_id":"proj","sections":["overview","smells"],"include_ai":true,"output":"markdown"}
+func (s *Server) handleArchitectureReport(c *gin.Context) {
+	var req struct {
+		ProjectID string   `json:"project_id"`
+		Sections  []string `json:"sections"`
+		IncludeAI bool     `json:"include_ai"`
+		Output    string   `json:"output"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	if req.ProjectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "project_id is required"})
+		return
+	}
+
+	md, err := s.reportService.GenerateMarkdown(c.Request.Context(), service.ReportOptions{
+		ProjectID: req.ProjectID,
+		Sections:  req.Sections,
+		IncludeAI: req.IncludeAI,
+	})
+	if err != nil {
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to generate architecture report", err))
+		return
+	}
+
+	switch req.Output {
+	case "okf":
+		c.JSON(http.StatusOK, gin.H{"project_id": req.ProjectID, "format": "okf", "note": "OKF bundle export is available via gca report --format okf"})
+	default:
+		c.Header("Content-Type", "text/markdown; charset=utf-8")
+		c.String(http.StatusOK, md)
+	}
 }

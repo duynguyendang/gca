@@ -1569,3 +1569,48 @@ func (s *Server) handleRoutes(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"routes": result})
 }
+
+// handleImpactReport returns a PR blast-radius report for a unified diff (F3).
+//
+//	POST /api/v1/impact/report
+//	{"project_id":"proj","diff":"<unified diff>","base_commit":"...","head_commit":"..."}
+func (s *Server) handleImpactReport(c *gin.Context) {
+	var req struct {
+		ProjectID  string `json:"project_id"`
+		Diff       string `json:"diff"`
+		BaseCommit string `json:"base_commit,omitempty"`
+		HeadCommit string `json:"head_commit,omitempty"`
+		FailIfNewSmells int `json:"fail_if_new_smells,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request", "details": err.Error()})
+		return
+	}
+	if req.ProjectID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "project_id is required"})
+		return
+	}
+	if req.Diff == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "diff is required"})
+		return
+	}
+
+	report, err := s.impactService.Generate(c.Request.Context(), req.ProjectID, req.Diff)
+	if err != nil {
+		handleError(c, apperrors.NewAppError(http.StatusInternalServerError, "failed to generate impact report", err))
+		return
+	}
+	report.BaseCommit = req.BaseCommit
+	report.HeadCommit = req.HeadCommit
+	if req.FailIfNewSmells > 0 {
+		report.NewSmellThreshold = req.FailIfNewSmells
+		report.Blocked = report.SmellsNewCount() > req.FailIfNewSmells
+	}
+
+	logger.Info("Impact report generated",
+		"project", req.ProjectID,
+		"touched_files", report.TouchedFileCount,
+		"hubs", len(report.HubFilesHit))
+
+	c.JSON(http.StatusOK, report)
+}

@@ -86,6 +86,9 @@ type AskResponse = ai.AskResponse
 type Server struct {
 	manager        *manager.StoreManager
 	graphService   *service.GraphService
+	trendService   *service.TrendService
+	reportService  *service.ReportService
+	impactService  *service.ImpactReportService
 	aiService      AIService
 	mangleClient   *manglesdk.Client
 	queryService   *registry.QueryService
@@ -174,14 +177,19 @@ func NewServer(mgr *manager.StoreManager, sourceDir string) *Server {
 		logger.Warn("Failed to load smell registry from policies", "error", err)
 	}
 
+	ephemeralStore := ephemeral.NewEphemeralStore(0)
+
 	s := &Server{
 		manager:        mgr,
 		graphService:   svc,
+		trendService:   service.NewTrendService(mgr),
+		reportService:  service.NewReportService(mgr, aiSvc),
+		impactService:  service.NewImpactReportService(ephemeralStore, mgr, aiSvc),
 		aiService:      aiSvc,
 		mangleClient:   mangleClient,
 		queryService:   queryService,
 		smellRegistry:  smellRegistry,
-		ephemeralStore: ephemeral.NewEphemeralStore(0),
+		ephemeralStore: ephemeralStore,
 		rateLimiter:    rateLimiter,
 		sourceDir:      sourceDir,
 		router:         r,
@@ -219,14 +227,19 @@ func NewServerWithAIService(mgr *manager.StoreManager, sourceDir string, aiSvc A
 
 	smellRegistry := registry.NewSmellRegistry(mgr)
 
+	ephemeralStore := ephemeral.NewEphemeralStore(0)
+
 	s := &Server{
 		manager:        mgr,
 		graphService:   svc,
+		trendService:   service.NewTrendService(mgr),
+		reportService:  service.NewReportService(mgr, aiSvc),
+		impactService:  service.NewImpactReportService(ephemeralStore, mgr, aiSvc),
 		aiService:      aiSvc,
 		mangleClient:   nil,
 		queryService:   nil,
 		smellRegistry:  smellRegistry,
-		ephemeralStore: ephemeral.NewEphemeralStore(0),
+		ephemeralStore: ephemeralStore,
 		rateLimiter:    rateLimiter,
 		sourceDir:      sourceDir,
 		router:         r,
@@ -309,6 +322,12 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/api/v1/health/summary", s.handleHealthSummary)
 	s.router.GET("/api/v1/health/summary/v2", s.handleHealthSummaryV2)
 
+	// Health-over-time trends (F2)
+	s.router.GET("/api/v1/trends", s.handleTrends)
+
+	// Architecture report export (F5)
+	s.router.POST("/api/v1/report/architecture", s.handleArchitectureReport)
+
 	// Store health (meb v0.6 DebugInfo)
 	s.router.GET("/api/v1/store/health", s.handleStoreHealth)
 
@@ -324,6 +343,13 @@ func (s *Server) setupRoutes() {
 	// Review Session Endpoints (Ephemeral Federation)
 	s.router.POST("/api/v1/review/session", s.handleCreateReviewSession)
 	s.router.POST("/api/v1/review/session/:id/query", s.handleReviewSessionQuery)
+
+	// PR blast-radius report (F3)
+	s.router.POST("/api/v1/impact/report", s.handleImpactReport)
+
+	// Compliance: vulnerabilities + SBOM (F4)
+	s.router.GET("/api/v1/compliance/vulnerabilities", s.handleComplianceVulnerabilities)
+	s.router.GET("/api/v1/compliance/sbom", s.handleComplianceSBOM)
 
 	// Ingest Endpoints
 	s.router.POST("/api/v1/ingest/incremental", s.handleIncrementalIngest)

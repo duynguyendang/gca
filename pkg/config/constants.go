@@ -133,6 +133,8 @@ const (
 	PredicateHasHealthDebt   = "has_health_debt"
 	PredicateLastCommitSHA   = "last_commit_sha"
 	PredicateSchemaVersion   = "schema_version"
+	PredicateKPISnapshot     = "kpi_snapshot"
+	PredicateKPISnapshotKey  = "kpi_snapshot_key" // id → timestamp ordering key
 )
 
 // SchemaVersion is the current version of the knowledge schema. It is written
@@ -167,6 +169,14 @@ const (
 	VirtualAttentionThreshold = 0.05  // Minimum centrality score (0-1) to include symbol
 	MaxAttentionSymbols       = 8     // Maximum symbols to include in prompt context
 	StickyOnlyMode            = false // If true, query only GlobalTopicID (skip Window)
+)
+
+// KPI snapshot configuration (F2 health-over-time trends)
+const (
+	// KPISnapshotRetention is the number of recent KPI snapshots to keep per
+	// project. Older snapshots are pruned on each analysis cycle so the
+	// Analytical Store stays bounded.
+	KPISnapshotRetention = 52
 )
 
 // SkippedDirectories lists directory names excluded from filesystem walks during ingestion.

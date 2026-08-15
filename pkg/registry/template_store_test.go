@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -122,5 +123,51 @@ load_policy("smell.mg").
 	}
 	if len(tmpls) != 2 {
 		t.Fatalf("expected 2 templates from cache, got %d", len(tmpls))
+	}
+}
+
+// TestLoadPolicyFiles_ComplianceSmellLoads verifies the F4 compliance smell
+// template from the real policies directory is parsed into a query template.
+func TestLoadPolicyFiles_ComplianceSmellLoads(t *testing.T) {
+	dir := t.TempDir()
+	manifest := `
+load_policy("smells/compliance.mg").
+`
+	if err := os.WriteFile(dir+"/init.mg", []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Copy the real compliance policy into the temp policies tree.
+	content, err := os.ReadFile("../../policies/smells/compliance.mg")
+	if err != nil {
+		t.Skipf("compliance.mg not found: %v", err)
+	}
+	if err := os.MkdirAll(dir+"/smells", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/smells/compliance.mg", content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := NewTemplateStore(nil)
+	if err := ts.LoadPolicyFiles(context.Background(), dir+"/init.mg"); err != nil {
+		t.Fatalf("LoadPolicyFiles failed: %v", err)
+	}
+
+	tmpls, err := ts.ListTemplates(context.Background(), "", "compliance")
+	if err != nil {
+		t.Fatalf("ListTemplates failed: %v", err)
+	}
+	if len(tmpls) != 1 {
+		t.Fatalf("expected 1 compliance template, got %d", len(tmpls))
+	}
+	tmpl := tmpls[0]
+	if tmpl.ID != "smell_vulnerable_dependency" {
+		t.Errorf("template ID = %q", tmpl.ID)
+	}
+	if tmpl.SmellType != "vulnerable_dependency" {
+		t.Errorf("smell type = %q", tmpl.SmellType)
+	}
+	if !strings.Contains(tmpl.Body, "has_vulnerability") || !strings.Contains(tmpl.Body, "vuln_severity") {
+		t.Errorf("template body missing compliance predicates:\n%s", tmpl.Body)
 	}
 }

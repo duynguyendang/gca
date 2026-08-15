@@ -14,6 +14,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/agent"
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
+	"github.com/duynguyendang/gca/pkg/ephemeral"
 	"github.com/duynguyendang/gca/pkg/ingest"
 	gcamdb "github.com/duynguyendang/gca/pkg/meb"
 	"github.com/duynguyendang/gca/pkg/okf"
@@ -49,6 +50,9 @@ type Server struct {
 	smellReg   *registry.SmellRegistry
 	graph      *service.GraphService
 	clustering *service.ClusteringService
+	trends     *service.TrendService
+	impact     *service.ImpactReportService
+	reports    *service.ReportService
 	readOnly   bool
 	mu         sync.Mutex
 }
@@ -60,14 +64,20 @@ func New(opts Options) *mcpserver.MCPServer {
 		smellReg = registry.NewSmellRegistry(opts.Manager)
 	}
 
+	// NewImpactReportService needs an ephemeral store; create a shared one.
+	es := ephemeral.NewEphemeralStore(0)
+
 	s := &Server{
 		mgr:        opts.Manager,
 		aiSvc:      opts.AIService,
 		smellReg:   smellReg,
 		graph:      service.NewGraphService(opts.Manager),
 		clustering: service.NewClusteringService(),
+		trends:     service.NewTrendService(opts.Manager),
+		reports:    service.NewReportService(opts.Manager, nilNarrative(opts.AIService)),
 		readOnly:   opts.Manager.ReadOnly(),
 	}
+	s.impact = service.NewImpactReportService(es, opts.Manager, nilNarrative(opts.AIService))
 
 	ms := mcpserver.NewMCPServer(
 		"GCA-Backend",
@@ -82,6 +92,17 @@ func New(opts Options) *mcpserver.MCPServer {
 }
 
 // --- Argument helpers ---
+
+// nilNarrative returns the AI service as a NarrativeService, or nil when the
+// AI service is not configured. Passing a typed-nil *ai.AIService into an
+// interface field would create a non-nil interface wrapping a nil pointer and
+// panic on call, so we must convert to a plain nil here.
+func nilNarrative(as *ai.AIService) service.NarrativeService {
+	if as == nil {
+		return nil
+	}
+	return as
+}
 
 func requireProject(args map[string]any) (string, error) {
 	p, ok := args["project"].(string)
@@ -285,6 +306,49 @@ func (s *Server) registerTools(ms *mcpserver.MCPServer) {
 			mcp.WithDescription("Comprehensive health overview: dead code, high complexity, duplicates, hubs, entry points, and overall score."),
 			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID"))),
 		s.handleProjectHealthOverview,
+	)
+
+	// Feature Wave F2-F5 tools
+	ms.AddTool(
+		mcp.NewTool("get_trends",
+			mcp.WithDescription("Get a health-over-time series for a project. Metrics: health, debt, smell_count, dead_code, complexity, duplicate. Optional RFC3339 from/to filters."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithString("metric", mcp.Description("Metric (default health): health, debt, smell_count, dead_code, complexity, duplicate")),
+			mcp.WithString("from", mcp.Description("RFC3339 start time filter")),
+			mcp.WithString("to", mcp.Description("RFC3339 end time filter"))),
+		s.handleGetTrends,
+	)
+	ms.AddTool(
+		mcp.NewTool("get_impact_report",
+			mcp.WithDescription("Produce a PR blast-radius report for a unified diff: touched files, hubs hit, entry points affected, smells, reachable callers."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithString("diff", mcp.Required(), mcp.Description("Unified git diff")),
+			mcp.WithString("base_commit", mcp.Description("Optional base commit SHA")),
+			mcp.WithString("head_commit", mcp.Description("Optional head commit SHA")),
+			mcp.WithNumber("fail_if_new_smells", mcp.Description("Optional gate: flag blocked when new smells exceed N"))),
+		s.handleGetImpactReport,
+	)
+	ms.AddTool(
+		mcp.NewTool("list_vulnerabilities",
+			mcp.WithDescription("List known-vulnerable dependencies from the offline advisory snapshot (F4). Optional severity filter (comma-separated)."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithString("severity", mcp.Description("Comma-separated severities to filter, e.g. high,medium"))),
+		s.handleListVulnerabilities,
+	)
+	ms.AddTool(
+		mcp.NewTool("get_sbom",
+			mcp.WithDescription("Return the project's software bill of materials: deduplicated dependency inventory from imports facts (F4)."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithString("format", mcp.Description("Output format (default json; cyclonedx supported)"))),
+		s.handleGetSBOM,
+	)
+	ms.AddTool(
+		mcp.NewTool("get_architecture_report",
+			mcp.WithDescription("Generate a markdown architecture report for a project: overview, entry points, hubs, smells, clusters, call flows, OKF (F5)."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithString("sections", mcp.Description("Comma-separated sections (overview,entry_points,hubs,smells,clusters,call_flows,okf); empty = all")),
+			mcp.WithBoolean("include_ai", mcp.Description("Append an AI narrative summary (requires AI service)"))),
+		s.handleGetArchitectureReport,
 	)
 
 	// Semantic search + agent (require AI service)

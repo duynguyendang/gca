@@ -14,6 +14,7 @@ load_policy("smells/security.mg").
 load_policy("smells/surprise.mg").
 load_policy("smells/knowledge_gaps.mg").
 load_policy("smells/complexity.mg").
+load_policy("smells/compliance.mg").
 load_policy("smells/scoring.mg").
 
 load_policy("okf/_decl.mg").

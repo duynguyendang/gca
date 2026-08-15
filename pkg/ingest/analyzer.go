@@ -113,6 +113,11 @@ func (a *Analyzer) RunStaticAnalysis(ctx context.Context, projectID string) erro
 		logger.Warn("Security smell detection failed", "error", err)
 	}
 
+	// F4 offline dependency vulnerability scan. Must run BEFORE
+	// executeRulesFromTemplates so the vulnerable_dependency smell template can
+	// join against the has_vulnerability facts.
+	a.runComplianceMatch(ctx, projectID)
+
 	// Precompute facts that smell templates read. These must be written to the
 	// Source Store because executeRulesFromTemplates runs template bodies
 	// against the Source Store (see analyzer_analysis.go).
@@ -139,6 +144,10 @@ func (a *Analyzer) RunStaticAnalysis(ctx context.Context, projectID string) erro
 
 	if err := a.computeHealthScores(ctx, projectID); err != nil {
 		logger.Warn("Health score computation failed", "error", err)
+	}
+
+	if err := a.recordKPISnapshot(ctx, projectID); err != nil {
+		logger.Warn("KPI snapshot recording failed", "error", err)
 	}
 
 	logger.Info("Static analysis completed", "project", projectID)

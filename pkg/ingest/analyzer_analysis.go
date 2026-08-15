@@ -36,6 +36,10 @@ func (a *Analyzer) clearAnalyticalData(ctx context.Context, projectID string) er
 		"has_severity":       true,
 		"has_health_score":   true,
 		"has_health_debt":    true,
+		// F4 compliance facts — recomputed each cycle.
+		"has_vulnerability": true,
+		"vuln_severity":     true,
+		"vuln_summary":      true,
 	}
 
 	subjectsToDelete := make(map[string]bool)
@@ -151,6 +155,11 @@ func (a *Analyzer) RunPostIngestAnalysis(ctx context.Context, projectID string) 
 		logger.Warn("Security smell detection failed", "error", err)
 	}
 
+	// F4 offline dependency vulnerability scan. Must run BEFORE
+	// executeRulesFromTemplates so the vulnerable_dependency smell template can
+	// join against the has_vulnerability facts.
+	a.runComplianceMatch(ctx, projectID)
+
 	// Write okf_age_days facts so the stale smell policy (stale.mg) can fire.
 	sourceStore, srcErr := a.storeManager.GetSourceStore(projectID)
 	if srcErr == nil {
@@ -165,6 +174,10 @@ func (a *Analyzer) RunPostIngestAnalysis(ctx context.Context, projectID string) 
 
 	if err := a.computeHealthScores(ctx, projectID); err != nil {
 		logger.Warn("Health score computation failed", "error", err)
+	}
+
+	if err := a.recordKPISnapshot(ctx, projectID); err != nil {
+		logger.Warn("KPI snapshot recording failed", "error", err)
 	}
 
 	if err := a.setAnalyticsVersion(analyticalStore); err != nil {

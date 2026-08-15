@@ -33,3 +33,4 @@ smell_weight("security_risk", 50).
 smell_weight("hardcoded_secret", 50).
 smell_weight("insecure_crypto", 40).
 smell_weight("missing_error_check", 30).
+smell_weight("vulnerable_dependency", 50).
