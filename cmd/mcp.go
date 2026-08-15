@@ -20,6 +20,8 @@ Claude Desktop and other MCP clients.
 
 Resources exposed:
   - gca://projects/{project}/summary: Graph statistics per project
+  - gca://projects/{project}/smells: Detected code smells
+  - gca://projects/{project}/health: Health overview
   - gca://projects/{project}/files/{path}: Source code content
   - gca://schema/conventions: Architectural schema docs
 
@@ -29,7 +31,8 @@ Tools exposed:
   - get_node_metadata, trace_impact_path, get_clusters, datalog_query
   - get_health_summary, list_smells
   - semantic_search, agent_execute (when an LLM key is configured)
-  - okf_ingest, okf_export
+  - okf_export, ingest_status
+  - okf_ingest, ingest_incremental (only in --writable mode)
 
 Arguments:
   data-folder  Path to the data directory (default: ./data)`,

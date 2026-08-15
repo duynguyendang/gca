@@ -49,6 +49,7 @@ type Server struct {
 	smellReg   *registry.SmellRegistry
 	graph      *service.GraphService
 	clustering *service.ClusteringService
+	readOnly   bool
 	mu         sync.Mutex
 }
 
@@ -65,6 +66,7 @@ func New(opts Options) *mcpserver.MCPServer {
 		smellReg:   smellReg,
 		graph:      service.NewGraphService(opts.Manager),
 		clustering: service.NewClusteringService(),
+		readOnly:   opts.Manager.ReadOnly(),
 	}
 
 	ms := mcpserver.NewMCPServer(
@@ -114,8 +116,12 @@ func jsonResult(v any) *mcp.CallToolResult {
 	return mcp.NewToolResultText(string(b))
 }
 
+// errorResult builds a JSON error envelope with a code inferred from msg.
+// It is the single construction point for all tool error paths so clients
+// always receive a consistent {error, code, details} shape (UC15).
 func errorResult(format string, args ...any) *mcp.CallToolResult {
-	return mcp.NewToolResultError(fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return toolError(classifyError(msg), msg)
 }
 
 // --- Resource registration ---
@@ -138,6 +144,24 @@ func (s *Server) registerResources(ms *mcpserver.MCPServer) {
 			mcp.WithTemplateMIMEType("text/plain"),
 		),
 		s.handleFileContent,
+	)
+	ms.AddResourceTemplate(
+		mcp.NewResourceTemplate(
+			"gca://projects/{project}/smells",
+			"Project Smells",
+			mcp.WithTemplateDescription("Detected code smells for a project from the Analytical Store"),
+			mcp.WithTemplateMIMEType("application/json"),
+		),
+		s.handleSmellsResource,
+	)
+	ms.AddResourceTemplate(
+		mcp.NewResourceTemplate(
+			"gca://projects/{project}/health",
+			"Project Health",
+			mcp.WithTemplateDescription("Health overview: debt score, smell counts, security issues for a project"),
+			mcp.WithTemplateMIMEType("application/json"),
+		),
+		s.handleHealthResource,
 	)
 	ms.AddResource(
 		mcp.NewResource(
@@ -185,11 +209,13 @@ func (s *Server) registerTools(ms *mcpserver.MCPServer) {
 	)
 	ms.AddTool(
 		mcp.NewTool("scan_facts",
-			mcp.WithDescription("Scan raw source-store facts (Subject, Predicate, Object). Empty fields act as wildcards."),
+			mcp.WithDescription("Scan raw source-store facts (Subject, Predicate, Object). Empty fields act as wildcards. Paginated via limit/cursor."),
 			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
 			mcp.WithString("subject", mcp.Description("Subject filter")),
 			mcp.WithString("predicate", mcp.Description("Predicate filter")),
-			mcp.WithString("object", mcp.Description("Object filter"))),
+			mcp.WithString("object", mcp.Description("Object filter")),
+			mcp.WithNumber("limit", mcp.Description("Max facts per page (default 50)")),
+			mcp.WithString("cursor", mcp.Description("Opaque pagination token from a previous scan_facts response"))),
 		s.handleScanFacts,
 	)
 	ms.AddTool(
@@ -215,10 +241,11 @@ func (s *Server) registerTools(ms *mcpserver.MCPServer) {
 	)
 	ms.AddTool(
 		mcp.NewTool("datalog_query",
-			mcp.WithDescription("Execute a raw Datalog query (triples(...) atoms) against a project's Source Store."),
+			mcp.WithDescription("Execute a raw Datalog query (triples(...) atoms) against a project's Source Store. Paginated via limit/cursor."),
 			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
 			mcp.WithString("query", mcp.Required(), mcp.Description("Datalog query, e.g. triples(Subject, \"calls\", \"target\")")),
-			mcp.WithNumber("limit", mcp.Description("Max results (default 50)"))),
+			mcp.WithNumber("limit", mcp.Description("Max results (default 50)")),
+			mcp.WithString("cursor", mcp.Description("Opaque pagination token from a previous datalog_query response"))),
 		s.handleDatalogQuery,
 	)
 
@@ -231,8 +258,10 @@ func (s *Server) registerTools(ms *mcpserver.MCPServer) {
 	)
 	ms.AddTool(
 		mcp.NewTool("list_smells",
-			mcp.WithDescription("List detected code smells for a project from the Analytical Store."),
-			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID"))),
+			mcp.WithDescription("List detected code smells for a project from the Analytical Store. Optional severity/type filters."),
+			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+			mcp.WithString("severity", mcp.Description("Filter by severity (low/medium/high)")),
+			mcp.WithString("type", mcp.Description("Filter by smell type (e.g. god_file, missing_error_check, okf_orphan)"))),
 		s.handleListSmells,
 	)
 	// Analysis tools (F1+ data)
@@ -279,19 +308,22 @@ func (s *Server) registerTools(ms *mcpserver.MCPServer) {
 
 	// OKF ingest/export
 	ms.AddTool(
-		mcp.NewTool("okf_ingest",
-			mcp.WithDescription("Ingest an OKF v0.1 bundle directory (markdown + YAML frontmatter) as knowledge concepts. Requires a writable server."),
-			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
-			mcp.WithString("bundle_dir", mcp.Required(), mcp.Description("Absolute path to the OKF bundle directory"))),
-		s.handleOKFIngest,
-	)
-	ms.AddTool(
 		mcp.NewTool("okf_export",
 			mcp.WithDescription("Export a project's OKF concepts to a bundle directory as markdown files with YAML frontmatter."),
 			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
 			mcp.WithString("output_dir", mcp.Required(), mcp.Description("Absolute path to write the bundle"))),
 		s.handleOKFExport,
 	)
+	// okf_ingest mutates the store; only exposed in writable mode.
+	if !s.readOnly {
+		ms.AddTool(
+			mcp.NewTool("okf_ingest",
+				mcp.WithDescription("Ingest an OKF v0.1 bundle directory (markdown + YAML frontmatter) as knowledge concepts. Requires a writable server."),
+				mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+				mcp.WithString("bundle_dir", mcp.Required(), mcp.Description("Absolute path to the OKF bundle directory"))),
+			s.handleOKFIngest,
+		)
+	}
 
 	// Incremental ingestion
 	ms.AddTool(
@@ -301,16 +333,19 @@ func (s *Server) registerTools(ms *mcpserver.MCPServer) {
 			mcp.WithString("source_dir", mcp.Description("Absolute path to the project source for git comparison"))),
 		s.handleIngestStatus,
 	)
-	ms.AddTool(
-		mcp.NewTool("ingest_incremental",
-			mcp.WithDescription("Re-ingest only files changed since the last ingest. Requires a writable server and an absolute source_dir."),
-			mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
-			mcp.WithString("source_dir", mcp.Required(), mcp.Description("Absolute path to the project source directory")),
-			mcp.WithString("from_commit", mcp.Description("Start commit for git-based incremental (default: last ingested commit)")),
-			mcp.WithString("to_commit", mcp.Description("End commit for git-based incremental (default: working tree)")),
-			mcp.WithBoolean("skip_embed", mcp.Description("Skip embedding generation"))),
-		s.handleIngestIncremental,
-	)
+	// ingest_incremental mutates the store; only exposed in writable mode.
+	if !s.readOnly {
+		ms.AddTool(
+			mcp.NewTool("ingest_incremental",
+				mcp.WithDescription("Re-ingest only files changed since the last ingest. Requires a writable server and an absolute source_dir."),
+				mcp.WithString("project", mcp.Required(), mcp.Description("Project ID")),
+				mcp.WithString("source_dir", mcp.Required(), mcp.Description("Absolute path to the project source directory")),
+				mcp.WithString("from_commit", mcp.Description("Start commit for git-based incremental (default: last ingested commit)")),
+				mcp.WithString("to_commit", mcp.Description("End commit for git-based incremental (default: working tree)")),
+				mcp.WithBoolean("skip_embed", mcp.Description("Skip embedding generation"))),
+			s.handleIngestIncremental,
+		)
+	}
 }
 
 // --- Resource Handlers ---
@@ -370,6 +405,90 @@ func (s *Server) handleSchemaConventions(_ context.Context, request mcp.ReadReso
 			URI:      request.Params.URI,
 			MIMEType: "text/markdown",
 			Text:     schemaConventionsMarkdown,
+		},
+	}, nil
+}
+
+func (s *Server) handleSmellsResource(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	project := templateParam(request, "project")
+	if project == "" {
+		return nil, fmt.Errorf("invalid resource URI")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	analytical, err := s.mgr.GetAnalyticalStore(project)
+	if err != nil {
+		return nil, fmt.Errorf("project not found: %s", project)
+	}
+
+	typeBySubject := queryMultiMap(ctx, analytical, common.GetNamedQuery("smell_type"), "Subject", "Type")
+	sevBySubject := queryMultiMap(ctx, analytical, common.GetNamedQuery("smell_severity"), "Subject", "Severity")
+
+	var entries []smellEntry
+	for subject, types := range typeBySubject {
+		sevs := sevBySubject[subject]
+		for i, typ := range types {
+			sev := ""
+			if i < len(sevs) {
+				sev = sevs[i]
+			}
+			entries = append(entries, smellEntry{Subject: subject, Type: typ, Severity: sev})
+		}
+	}
+
+	b, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal smells: %v", err)
+	}
+	return []mcp.ResourceContents{
+		mcp.TextResourceContents{
+			URI:      request.Params.URI,
+			MIMEType: "application/json",
+			Text:     string(b),
+		},
+	}, nil
+}
+
+func (s *Server) handleHealthResource(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	project := templateParam(request, "project")
+	if project == "" {
+		return nil, fmt.Errorf("invalid resource URI")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	analytical, err := s.mgr.GetAnalyticalStore(project)
+	if err != nil {
+		return nil, fmt.Errorf("project not found: %s", project)
+	}
+
+	fileDebt := queryDebtMap(ctx, analytical)
+	fileSmells := querySmellMap(ctx, analytical)
+	fileHubScore := queryHubScoreMap(ctx, analytical)
+
+	files, totalArchDebt, totalSecurity := s.computeFileHealth(fileDebt, fileSmells, fileHubScore)
+	overallScore := 100 - totalArchDebt/10
+	if overallScore < 0 {
+		overallScore = 0
+	}
+
+	b, err := json.MarshalIndent(map[string]any{
+		"overall_score":         overallScore,
+		"total_security_alerts": totalSecurity,
+		"total_arch_debt":       totalArchDebt,
+		"files":                 files,
+	}, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal health: %v", err)
+	}
+	return []mcp.ResourceContents{
+		mcp.TextResourceContents{
+			URI:      request.Params.URI,
+			MIMEType: "application/json",
+			Text:     string(b),
 		},
 	}, nil
 }
@@ -486,6 +605,9 @@ func (s *Server) handleScanFacts(ctx context.Context, request mcp.CallToolReques
 	subj, _ := args["subject"].(string)
 	pred, _ := args["predicate"].(string)
 	obj, _ := args["object"].(string)
+	limit := optionalInt(args, "limit", defaultScanLimit)
+	cursor, _ := args["cursor"].(string)
+	start := decodeCursor(cursor)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -498,15 +620,13 @@ func (s *Server) handleScanFacts(ctx context.Context, request mcp.CallToolReques
 	var lines []string
 	for fact := range store.Scan(subj, pred, obj) {
 		lines = append(lines, fmt.Sprintf("%s --[%s]--> %s", fact.Subject, fact.Predicate, fact.Object))
-		if len(lines) >= defaultScanLimit {
-			lines = append(lines, "... (truncated)")
-			break
-		}
 	}
-	if len(lines) == 0 {
-		return mcp.NewToolResultText("No facts found."), nil
-	}
-	return mcp.NewToolResultText(strings.Join(lines, "\n")), nil
+	page, next := slicePage(lines, start, limit)
+	return jsonResult(map[string]any{
+		"facts":       page,
+		"count":       len(page),
+		"next_cursor": next,
+	}), nil
 }
 
 func (s *Server) handleGetNodeMetadata(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -600,6 +720,8 @@ func (s *Server) handleDatalogQuery(ctx context.Context, request mcp.CallToolReq
 		return errorResult("%v", err), nil
 	}
 	limit := optionalInt(args, "limit", defaultQueryLimit)
+	cursor, _ := args["cursor"].(string)
+	start := decodeCursor(cursor)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -608,10 +730,22 @@ func (s *Server) handleDatalogQuery(ctx context.Context, request mcp.CallToolReq
 	if err != nil {
 		return errorResult("query failed: %v", err), nil
 	}
-	if len(results) > limit {
-		results = results[:limit]
+	end := len(results)
+	next := ""
+	if start >= end {
+		results = results[:0]
+	} else {
+		if limit > 0 && start+limit < end {
+			end = start + limit
+			next = encodeCursor(end)
+		}
+		results = results[start:end]
 	}
-	return jsonResult(results), nil
+	return jsonResult(map[string]any{
+		"results":     results,
+		"count":       len(results),
+		"next_cursor": next,
+	}), nil
 }
 
 // --- Health summary ---
@@ -782,6 +916,8 @@ func (s *Server) handleListSmells(ctx context.Context, request mcp.CallToolReque
 	if err != nil {
 		return errorResult("%v", err), nil
 	}
+	filterSev, _ := args["severity"].(string)
+	filterType, _ := args["type"].(string)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -801,6 +937,12 @@ func (s *Server) handleListSmells(ctx context.Context, request mcp.CallToolReque
 			sev := ""
 			if i < len(sevs) {
 				sev = sevs[i]
+			}
+			if filterSev != "" && sev != filterSev {
+				continue
+			}
+			if filterType != "" && typ != filterType {
+				continue
 			}
 			entries = append(entries, smellEntry{Subject: subject, Type: typ, Severity: sev})
 		}
