@@ -82,7 +82,7 @@ func New(opts Options) *mcpserver.MCPServer {
 
 	ms := mcpserver.NewMCPServer(
 		"GCA-Backend",
-		"0.2.0",
+		"0.5.0",
 		mcpserver.WithResourceCapabilities(true, true),
 		mcpserver.WithLogging(),
 	)
