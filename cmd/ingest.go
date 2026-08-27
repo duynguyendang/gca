@@ -67,9 +67,9 @@ Arguments:
 		go func() {
 			state := ingest.NewIngestState()
 			if incremental {
-				errChan <- ingest.RunIncrementalWithOptions(s, projectName, sourcePath, state, opts)
+				errChan <- ingest.RunIncrementalWithContext(ctx, s, projectName, sourcePath, state, opts)
 			} else {
-				errChan <- ingest.RunWithOptions(s, projectName, sourcePath, state, opts)
+				errChan <- ingest.RunWithContext(ctx, s, projectName, sourcePath, state, opts)
 			}
 		}()
 

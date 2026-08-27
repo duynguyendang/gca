@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"expvar"
 	"fmt"
 	"net/http"
 	"os"
@@ -574,10 +575,7 @@ func (s *Server) readyCheck(c *gin.Context) {
 
 // Simple metrics endpoint - tracks request counts and latency
 func (s *Server) metricsHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"endpoint": "/api/metrics",
-		"status":   "operational",
-	})
+	expvar.Handler().ServeHTTP(c.Writer, c.Request)
 }
 
 // CORSMiddleware handles CORS headers with a secure policy.

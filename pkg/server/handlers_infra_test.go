@@ -48,10 +48,11 @@ func TestMetricsHandler(t *testing.T) {
 		w := doRequest(srv, "GET", "/api/metrics", "")
 		requireStatus(t, w, http.StatusOK)
 
+		// expvar payload: a JSON object keyed by metric name (e.g. "gca_query_total").
 		var resp map[string]interface{}
 		requireJSON(t, w, &resp)
-		if resp["endpoint"] != "/api/metrics" {
-			t.Errorf("expected endpoint '/api/metrics', got %v", resp["endpoint"])
+		if _, ok := resp["gca_query_total"]; !ok {
+			t.Errorf("expected gca_query_total key in expvar metrics, got %v", resp)
 		}
 	})
 }

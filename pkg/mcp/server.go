@@ -21,6 +21,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/registry"
 	"github.com/duynguyendang/gca/pkg/service"
 	"github.com/duynguyendang/gca/pkg/service/ai"
+	"github.com/duynguyendang/gca/pkg/telemetry"
 	"github.com/duynguyendang/meb"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -119,8 +120,10 @@ func optionalInt(args map[string]any, name string, defaultVal int) int {
 // --- Result helpers ---
 
 func jsonResult(v any) *mcp.CallToolResult {
+	telemetry.MCPQuery()
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
+		telemetry.MCPQueryError()
 		return mcp.NewToolResultError(fmt.Sprintf("json marshal failed: %v", err))
 	}
 	return mcp.NewToolResultText(string(b))
@@ -130,6 +133,7 @@ func jsonResult(v any) *mcp.CallToolResult {
 // It is the single construction point for all tool error paths so clients
 // always receive a consistent {error, code, details} shape (UC15).
 func errorResult(format string, args ...any) *mcp.CallToolResult {
+	telemetry.MCPQuery()
 	msg := fmt.Sprintf(format, args...)
 	return toolError(classifyError(msg), msg)
 }
@@ -568,6 +572,8 @@ func (s *Server) handleSearchNodes(ctx context.Context, request mcp.CallToolRequ
 	}
 	limit := optionalInt(args, "limit", defaultSearchLimit)
 
+	telemetry.MCPQuery()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -614,6 +620,7 @@ func (s *Server) handleGetOutgoingEdges(ctx context.Context, request mcp.CallToo
 	for fact := range store.Scan(nodeID, "", "") {
 		lines = append(lines, fmt.Sprintf("%s -> %s", fact.Predicate, fact.Object))
 	}
+	telemetry.MCPQuery()
 	if len(lines) == 0 {
 		return mcp.NewToolResultText("No outgoing edges found."), nil
 	}
@@ -643,6 +650,7 @@ func (s *Server) handleGetIncomingEdges(ctx context.Context, request mcp.CallToo
 	for fact := range store.Scan("", "", nodeID) {
 		lines = append(lines, fmt.Sprintf("%s -> %s", fact.Subject, fact.Predicate))
 	}
+	telemetry.MCPQuery()
 	if len(lines) == 0 {
 		return mcp.NewToolResultText("No incoming edges found."), nil
 	}
@@ -706,6 +714,7 @@ func (s *Server) handleGetNodeMetadata(ctx context.Context, request mcp.CallTool
 		return errorResult("hydration failed: %v", err), nil
 	}
 	if len(hydrated) == 0 {
+		telemetry.MCPQuery()
 		return mcp.NewToolResultText("{}"), nil
 	}
 	h := hydrated[0]

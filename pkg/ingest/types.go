@@ -23,18 +23,16 @@ type AnalysisBundle struct {
 
 // IngestState holds shared state across the ingestion pipeline.
 type IngestState struct {
-	ProjectName      string
-	SymbolTable      map[string]string
-	FileIndex        map[string]bool
-	FileContentCache map[string][]byte
+	ProjectName string
+	SymbolTable map[string]string
+	FileIndex   map[string]bool
 }
 
 // NewIngestState creates a new IngestState with initialized maps.
 func NewIngestState() *IngestState {
 	return &IngestState{
-		SymbolTable:      make(map[string]string),
-		FileIndex:        make(map[string]bool),
-		FileContentCache: make(map[string][]byte),
+		SymbolTable: make(map[string]string),
+		FileIndex:   make(map[string]bool),
 	}
 }
 

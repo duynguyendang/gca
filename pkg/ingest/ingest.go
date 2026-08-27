@@ -15,6 +15,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/common"
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/logger"
+	"github.com/duynguyendang/gca/pkg/telemetry"
 	"github.com/duynguyendang/meb"
 )
 
@@ -41,9 +42,15 @@ func RunWithState(s *meb.MEBStore, projectName string, sourceDir string, state *
 
 // RunWithOptions executes the ingestion process with explicit state and embedding options.
 func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state *IngestState, opts *IngestOptions) error {
+	return RunWithContext(context.Background(), s, projectName, sourceDir, state, opts)
+}
+
+// RunWithContext executes the ingestion process with explicit state, embedding
+// options, and a cancellable context. The context is honored across Pass 1
+// (symbol collection) and Pass 2 (worker pool) so Ctrl+C aborts cleanly.
+func RunWithContext(ctx context.Context, s *meb.MEBStore, projectName string, sourceDir string, state *IngestState, opts *IngestOptions) error {
 	SetIngestState(state)
 	state.ProjectName = projectName
-	ctx := context.Background()
 	ext := NewTreeSitterExtractor()
 
 	// Set topic ID for project-scoped ingestion
@@ -71,7 +78,6 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 	logger.Info("Pass 1: Collecting symbols and index", "project", projectName)
 	state.SymbolTable = make(map[string]string)
 	state.FileIndex = make(map[string]bool)
-	state.FileContentCache = make(map[string][]byte)
 
 	// Check for project metadata
 	var projectMeta *ProjectMetadata
@@ -108,6 +114,11 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 		if err != nil {
 			return err
 		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		if d.IsDir() {
 			if config.IsSkippedDir(d.Name()) {
 				return filepath.SkipDir
@@ -130,7 +141,6 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 				logger.Error("Failed to read file", "path", path, "error", readErr)
 				return readErr
 			}
-			state.FileContentCache[relPath] = content
 			symbols, extractErr := ext.ExtractSymbols(path, content, relPath)
 			if extractErr != nil {
 				logger.Error("Failed to extract symbols", "path", path, "error", extractErr)
@@ -157,12 +167,14 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 	var pass2Err atomic.Uint64
 
 	workerCount := runtime.NumCPU()
-	if workerCount > config.MaxWorkers {
-		workerCount = config.MaxWorkers
+	if workerCount > config.IngestWorkers() {
+		workerCount = config.IngestWorkers()
 	}
 
 	// Shared semaphore for embeddings limit (max 10 concurrent)
 	sem := make(chan struct{}, 10)
+
+	writer := newBatchedFactWriter(s)
 
 	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
@@ -183,6 +195,7 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 				rel, relErr := filepath.Rel(sourceDir, path)
 				if relErr != nil {
 					logger.Error("Failed to get relative path", "path", path, "error", relErr)
+					telemetry.IngestFileFailed()
 					pass2Err.Add(1)
 					continue
 				}
@@ -190,10 +203,13 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 				if err := processFile(ctx, path, &ProcessFileConfig{
 					Store: s, Extractor: localExt, Embedder: embeddingService,
 					ProjectName: projectName, SourceRoot: sourceDir, Meta: projectMeta,
-					EmbeddingWg: &embeddingWg, Sem: sem, State: state, Options: opts,
+					EmbeddingWg: &embeddingWg, Sem: sem, State: state, Options: opts, Writer: writer,
 				}); err != nil {
 					logger.Error("Failed to process file", "error", err)
+					telemetry.IngestFileFailed()
 					pass2Err.Add(1)
+				} else {
+					telemetry.IngestFileProcessed()
 				}
 			}
 		}()
@@ -212,7 +228,11 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 			return nil
 		}
 		if isSupportedFile(path) {
-			jobs <- path
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case jobs <- path:
+			}
 		}
 		return nil
 	}); err != nil {
@@ -220,6 +240,10 @@ func RunWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state
 	}
 	close(jobs)
 	wg.Wait()
+	if err := writer.Flush(); err != nil {
+		logger.Error("Failed to flush pending fact batch", "error", err)
+		return fmt.Errorf("failed to flush ingested fact batch: %w", err)
+	}
 
 	// Final Passes
 	EnhanceVirtualTriples(s)
@@ -267,6 +291,7 @@ type ProcessFileConfig struct {
 	Sem         chan struct{}
 	State       *IngestState
 	Options     *IngestOptions
+	Writer      *batchedFactWriter // optional cross-file fact batcher
 }
 
 func processFile(ctx context.Context, path string, cfg *ProcessFileConfig) error {
@@ -304,13 +329,9 @@ func processFile(ctx context.Context, path string, cfg *ProcessFileConfig) error
 		relPath = filepath.Join(projectName, relPath)
 	}
 
-	content, ok := state.FileContentCache[relPath]
-	if !ok {
-		var readErr error
-		content, readErr = os.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
+	content, readErr := os.ReadFile(path)
+	if readErr != nil {
+		return readErr
 	}
 
 	// Basic Ingestion (Simplified for this task, ensuring prefix is used)
@@ -505,23 +526,108 @@ func processFile(ctx context.Context, path string, cfg *ProcessFileConfig) error
 
 	logger.Debug("Total facts being added", "total", len(finalFacts), "has_name_count", hasNameCount)
 
-	// Cross-subsystem transaction: symbol metadata + bundle facts in one atomic batch.
-	// Reduces N separate AddDocumentWithTopic calls + AddFactBatch to a single Update().
+	// Collect symbol-metadata facts alongside the bundle facts. These are the
+	// only per-file writes that must touch Badger transactions; raw content and
+	// embedding vectors are handled separately above. They are sent to the
+	// batched writer (cfg.Writer) so many files share a single commit, or
+	// committed per-file when no writer is configured.
+	symFacts := make([]meb.Fact, 0, len(bundle.Documents))
+	for _, doc := range bundle.Documents {
+		for k, v := range doc.Metadata {
+			symFacts = append(symFacts, meb.Fact{Subject: doc.ID, Predicate: k, Object: v})
+		}
+	}
+
+	if cfg.Writer != nil {
+		return cfg.Writer.Add(symFacts, finalFacts)
+	}
+
+	// Fallback: per-file commit (used when no batched writer is attached).
 	return s.Update(func(txn *meb.StoreTxn) error {
-		var allSymFacts []meb.Fact
-		for _, doc := range bundle.Documents {
-			for k, v := range doc.Metadata {
-				allSymFacts = append(allSymFacts, meb.Fact{Subject: doc.ID, Predicate: k, Object: v})
+		if len(symFacts) > 0 {
+			if err := txn.AddFactBatchWithTopic(symFacts, s.TopicID()); err != nil {
+				logger.Warn("Failed to store symbol metadata batch", "count", len(symFacts), "error", err)
 			}
 		}
-		if len(allSymFacts) > 0 {
-			if err := txn.AddFactBatchWithTopic(allSymFacts, s.TopicID()); err != nil {
-				logger.Warn("Failed to store symbol metadata batch", "count", len(allSymFacts), "error", err)
-			}
-		}
-		// All bundle facts
 		return txn.AddFactBatchWithTopic(finalFacts, s.TopicID())
 	})
+}
+
+// batchedFactWriter accumulates facts across multiple files and flushes them
+// through a single meb.BatchWriter (BadgerDB WriteBatch), amortizing fsync and
+// commit overhead across many facts. The batch is Flushed every IngestBatchFacts
+// facts and at final Flush. A BatchWriter is single-goroutine, so access is
+// serialized through the mutex; after Flush/Cancel the batch is recreated.
+type batchedFactWriter struct {
+	store    *meb.MEBStore
+	mu       sync.Mutex
+	batch    *meb.BatchWriter
+	count    int
+	maxCount int
+	closed   bool
+}
+
+func newBatchedFactWriter(store *meb.MEBStore) *batchedFactWriter {
+	return &batchedFactWriter{
+		store:    store,
+		maxCount: config.IngestBatchFacts,
+	}
+}
+
+// Add queues facts for one file, flushing when the accumulated size is reached.
+func (w *batchedFactWriter) Add(symFacts, fileFacts []meb.Fact) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return nil
+	}
+	if err := w.addLocked(symFacts, fileFacts); err != nil {
+		return err
+	}
+	if w.count >= w.maxCount {
+		return w.flushLocked()
+	}
+	return nil
+}
+
+// Flush commits any remaining facts. Call after the worker pool drains.
+func (w *batchedFactWriter) Flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return nil
+	}
+	w.closed = true
+	return w.flushLocked()
+}
+
+// addLocked appends facts into the current batch (creating one on demand).
+func (w *batchedFactWriter) addLocked(symFacts, fileFacts []meb.Fact) error {
+	if w.batch == nil {
+		w.batch = w.store.NewBatchWriter()
+	}
+	all := make([]meb.Fact, 0, len(symFacts)+len(fileFacts))
+	all = append(all, symFacts...)
+	all = append(all, fileFacts...)
+	if err := w.batch.AddFacts(all); err != nil {
+		return fmt.Errorf("failed to queue batched facts: %w", err)
+	}
+	w.count += len(all)
+	return nil
+}
+
+// flushLocked commits the current batch and resets for the next one.
+func (w *batchedFactWriter) flushLocked() error {
+	if w.batch == nil {
+		return nil
+	}
+	err := w.batch.Flush()
+	w.batch = nil
+	w.count = 0
+	if err != nil {
+		return fmt.Errorf("failed to flush batched facts: %w", err)
+	}
+	return nil
 }
 
 func isSupportedFile(path string) bool {

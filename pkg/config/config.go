@@ -1,6 +1,11 @@
 package config
 
-import "time"
+import (
+	"os"
+	"runtime"
+	"strconv"
+	"time"
+)
 
 const (
 	DefaultPort = "8080"
@@ -10,18 +15,17 @@ const (
 const (
 	DefaultModel          = "gemini-1.5-flash"
 	DefaultEmbeddingModel = "gemini-embedding-001"
-	DefaultTemperature   = 0.2
+	DefaultTemperature    = 0.2
 	DefaultMaxTokens      = 8192
 )
 
 const (
 	QueryTimeout     = 30 * time.Second
-	AIRequestTimeout = 30 * time.Second  // Must be < frontend timeout (35s) and < Cloud Run proxy disconnect (~49s)
+	AIRequestTimeout = 30 * time.Second // Must be < frontend timeout (35s) and < Cloud Run proxy disconnect (~49s)
 	EmbeddingTimeout = 10 * time.Second
 )
 
 const (
-	MaxWorkers           = 2
 	AutoClusterThreshold = 500
 	ResultCapLimit       = 50
 	MaxPathDepth         = 10
@@ -31,7 +35,38 @@ const (
 	TopResultsLimit      = 10
 	DisplayLimitSmall    = 10
 	DisplayLimitMedium   = 15
+	// IngestBatchFacts is the number of facts to accumulate before flushing a
+	// cross-file batched MEB transaction during ingestion.
+	IngestBatchFacts = 20000
 )
+
+// ingestWorkersOverride lets a --ingest-workers flag force the ingest worker
+// count ahead of the GCA_INGEST_WORKERS env var. 0 = no override.
+var ingestWorkersOverride int
+
+// SetIngestWorkers hard-sets the ingest worker count (e.g. from a CLI flag).
+// A value <= 0 restores automatic resolution.
+func SetIngestWorkers(n int) {
+	ingestWorkersOverride = n
+}
+
+// IngestWorkers returns the number of concurrent ingest worker goroutines:
+// CLI flag override -> GCA_INGEST_WORKERS env var -> default min(4, NumCPU).
+func IngestWorkers() int {
+	if ingestWorkersOverride > 0 {
+		return ingestWorkersOverride
+	}
+	if s := os.Getenv("GCA_INGEST_WORKERS"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			return n
+		}
+	}
+	n := runtime.NumCPU()
+	if n > 4 {
+		return 4
+	}
+	return n
+}
 
 // Query result cache settings
 const (

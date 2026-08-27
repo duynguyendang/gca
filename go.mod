@@ -6,7 +6,7 @@ require (
 	github.com/agext/levenshtein v1.2.3
 	github.com/dgraph-io/badger/v4 v4.9.1
 	github.com/duynguyendang/manglekit v0.0.0-20260330150740-81e7572ffb31
-	github.com/duynguyendang/meb v0.6.1
+	github.com/duynguyendang/meb v0.7.0
 	github.com/firebase/genkit/go v1.4.0
 	github.com/gin-gonic/gin v1.11.0
 	github.com/go-git/go-git/v5 v5.18.0

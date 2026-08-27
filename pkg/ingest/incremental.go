@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/logger"
+	"github.com/duynguyendang/gca/pkg/telemetry"
 	"github.com/duynguyendang/meb"
 )
 
@@ -207,8 +209,13 @@ func RunIncrementalWithState(s *meb.MEBStore, projectName string, sourceDir stri
 }
 
 func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir string, state *IngestState, opts *IngestOptions) error {
+	return RunIncrementalWithContext(context.Background(), s, projectName, sourceDir, state, opts)
+}
+
+// RunIncrementalWithContext runs incremental ingestion with a cancellable
+// context so Ctrl+C aborts the diff/parse loop cleanly.
+func RunIncrementalWithContext(ctx context.Context, s *meb.MEBStore, projectName string, sourceDir string, state *IngestState, opts *IngestOptions) error {
 	SetIngestState(state)
-	ctx := context.Background()
 	ext := NewTreeSitterExtractor()
 
 	// Set topic ID for project-scoped ingestion
@@ -332,9 +339,11 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 		var passErr atomic.Uint64
 
 		workerCount := runtime.NumCPU()
-		if workerCount > config.MaxWorkers {
-			workerCount = config.MaxWorkers
+		if workerCount > config.IngestWorkers() {
+			workerCount = config.IngestWorkers()
 		}
+
+		writer := newBatchedFactWriter(s)
 
 		for i := 0; i < workerCount; i++ {
 			wg.Add(1)
@@ -358,10 +367,13 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 					if err := processFile(ctx, path, &ProcessFileConfig{
 						Store: s, Extractor: localExt, Embedder: embeddingService,
 						ProjectName: projectName, SourceRoot: sourceDir, Meta: projectMeta,
-						EmbeddingWg: &embeddingWg, Sem: sem, State: state, Options: opts,
+						EmbeddingWg: &embeddingWg, Sem: sem, State: state, Options: opts, Writer: writer,
 					}); err != nil {
 						logger.Error("Error processing file", "error", err)
+						telemetry.IngestFileFailed()
 						passErr.Add(1)
+					} else {
+						telemetry.IngestFileProcessed()
 					}
 				}
 			}()
@@ -372,6 +384,10 @@ func RunIncrementalWithOptions(s *meb.MEBStore, projectName string, sourceDir st
 		}
 		close(jobs)
 		wg.Wait()
+		if err := writer.Flush(); err != nil {
+			logger.Error("Failed to flush incremental fact batch", "error", err)
+			return fmt.Errorf("failed to flush incremental fact batch: %w", err)
+		}
 
 		if embeddingService != nil {
 			logger.Info("Waiting for embeddings to complete")

@@ -13,6 +13,7 @@ import (
 	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/datalog"
 	"github.com/duynguyendang/gca/pkg/logger"
+	"github.com/duynguyendang/gca/pkg/telemetry"
 	"github.com/duynguyendang/meb"
 	"github.com/duynguyendang/meb/keys"
 	"github.com/duynguyendang/meb/query"
@@ -128,7 +129,15 @@ func Query(ctx context.Context, store *meb.MEBStore, q string) ([]map[string]any
 	return QueryWithLimit(ctx, store, q, config.QueryResultLimit)
 }
 
-func QueryWithLimit(ctx context.Context, store *meb.MEBStore, q string, limit int) ([]map[string]any, error) {
+func QueryWithLimit(ctx context.Context, store *meb.MEBStore, q string, limit int) (results []map[string]any, err error) {
+	start := time.Now()
+	defer func() {
+		telemetry.QueryStarted()
+		if err != nil {
+			telemetry.QueryError()
+		}
+		telemetry.RecordQueryLatency(time.Since(start))
+	}()
 	cacheKey := globalQueryCache.hashKey(q)
 	if cached, ok := globalQueryCache.get(cacheKey); ok {
 		if len(cached) > limit {
@@ -160,8 +169,6 @@ func QueryWithLimit(ctx context.Context, store *meb.MEBStore, q string, limit in
 	if len(triplesAtoms) == 0 {
 		return nil, fmt.Errorf("query must contain at least one triples atom")
 	}
-
-	var results []map[string]any
 
 	if len(triplesAtoms) == 1 {
 		results = executeSingleAtomQuery(ctx, store, triplesAtoms[0], limit)

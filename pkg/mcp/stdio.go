@@ -10,9 +10,22 @@ import (
 )
 
 // RunStdio starts an MCP server on stdio for local MCP clients (Claude Desktop,
-// Cursor, etc.). It blocks until the server exits.
+// Cursor, etc.). It blocks until the server exits or ctx is cancelled. On
+// cancellation it returns so the caller can flush/close stores and exit.
 func RunStdio(ctx context.Context, mgr *manager.StoreManager, aiSvc *ai.AIService) error {
 	ms := New(Options{Manager: mgr, AIService: aiSvc})
 	slog.Info("Starting MCP server on Stdio")
-	return server.ServeStdio(ms)
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- server.ServeStdio(ms)
+	}()
+
+	select {
+	case <-ctx.Done():
+		slog.Info("Shutting down MCP server on Stdio")
+		return nil
+	case err := <-errChan:
+		return err
+	}
 }

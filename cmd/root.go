@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/duynguyendang/gca/internal/manager"
+	"github.com/duynguyendang/gca/pkg/config"
 	"github.com/duynguyendang/gca/pkg/llmconfig"
 	"github.com/duynguyendang/gca/pkg/logger"
 	"github.com/duynguyendang/meb"
@@ -19,15 +20,16 @@ import (
 )
 
 var (
-	cfgFile    string
-	dataDir    string
-	sourceDir  string
-	lowMem     bool
-	port       string
-	mebIndex   string
-	mebProfile string
-	writable   bool
-	noMCP      bool
+	cfgFile       string
+	dataDir       string
+	sourceDir     string
+	lowMem        bool
+	port          string
+	mebIndex      string
+	mebProfile    string
+	writable      bool
+	noMCP         bool
+	ingestWorkers int
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -65,6 +67,7 @@ Datalog, natural language, and semantic search.`,
 		if w := os.Getenv("GCA_WRITABLE"); w != "" && !cmd.Flags().Changed("writable") {
 			writable = strings.ToLower(w) == "true"
 		}
+		config.SetIngestWorkers(ingestWorkers)
 
 		return nil
 	},
@@ -81,6 +84,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&sourceDir, "source", "s", "", "path to source code (for source view)")
 	rootCmd.PersistentFlags().BoolVarP(&lowMem, "low-mem", "l", false, "enable low memory mode")
 	rootCmd.PersistentFlags().StringVarP(&port, "port", "p", "8080", "port for the server (or set PORT env var)")
+	rootCmd.PersistentFlags().IntVar(&ingestWorkers, "ingest-workers", 0, "concurrent ingest workers (default: GCA_INGEST_WORKERS env or min(4, NumCPU))")
 }
 
 // getMemoryProfile returns the appropriate memory profile based on flags
